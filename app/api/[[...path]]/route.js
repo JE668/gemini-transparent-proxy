@@ -1,47 +1,38 @@
-import { NextResponse } from 'next/server';
-
-async function handleRequest(req) {
-  try {
-    const url = new URL(req.url);
-    
-    // 1. 提取路径：去掉 /api 前缀
-    // 例如: /api/v1beta/models... -> /v1beta/models...
-    const path = url.pathname.replace(/^\/api/, ''); 
-    const searchParams = url.search;
-
-    // 2. 构造目标 Google API 地址
-    const targetUrl = `https://generativelanguage.googleapis.com${path}${searchParams}`;
-
-    // 3. 关键修复：克隆所有请求头
-    // 我们需要把客户端传来的 API Key (无论是在 Header 还是 URL 中) 全部转发给 Google
-    const requestHeaders = new Headers(req.headers);
-    requestHeaders.delete('host'); // 必须删除 host 头，否则 Google 会拒绝请求
-
-    // 4. 获取请求体
-    const body = await req.text();
-
-    // 5. 转发请求
-    const response = await fetch(targetUrl, {
-      method: req.method,
-      headers: requestHeaders, 
-      body: req.method !== 'GET' && req.method !== 'HEAD' ? body : undefined,
-    });
-
-    // 6. 将 Google 的响应原封不动返回给客户端
-    const responseData = await response.text();
-    
-    return new NextResponse(responseData, {
-      status: response.status,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*', 
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
-      },
-    });
-  } catch (error) {
-    return NextResponse.json({ error: 'Proxy Error', details: error.message }, { status: 500 });
-  }
+export async function GET(request) {
+    return handleRequest(request);
 }
 
-export { handleRequest as GET, handleRequest as POST, handleRequest as PUT, handleRequest as DELETE, handleRequest as OPTIONS };
+export async function POST(request) {
+    return handleRequest(request);
+}
+
+async function handleRequest(request) {
+    const url = new URL(request.url);
+    
+    // --- 核心修改：路径重写逻辑 ---
+    let pathname = url.pathname;
+
+    if (pathname.startsWith('/api/v1/')) {
+        // 如果是 OpenAI 格式请求 (/api/v1/...) -> 转换为 Gemini 的 OpenAI 兼容路径 (/v1beta/openai/...)
+        pathname = pathname.replace('/api/v1/', '/v1beta/openai/');
+    } else if (pathname.startsWith('/api/')) {
+        // 如果是普通 Gemini 请求 (/api/v1beta/...) -> 转换为 (/v1beta/...)
+        pathname = pathname.replace('/api/', '/');
+    }
+    // ----------------------------
+
+    const targetUrl = `https://generativelanguage.googleapis.com${pathname}${url.search}`;
+
+    const headers = new Headers(request.headers);
+    headers.set('host', 'generativelanguage.googleapis.com');
+
+    try {
+        const response = await fetch(targetUrl, {
+            method: request.method,
+            headers: headers,
+            body: request.method !== 'GET' ? await request.text() : undefined,
+        });
+
+        return response;
+    } catch (error) {
+        return new Response(JSON.stringify({ error: 'Proxy error: '
