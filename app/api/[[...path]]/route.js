@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 
 /**
- * 统一的请求处理器
+ * 统一的请求处理器 - 支持流式转发
  */
 async function handleRequest(req) {
   try {
@@ -23,7 +23,7 @@ async function handleRequest(req) {
     const headers = new Headers(req.headers);
     headers.delete('host');
 
-    // 读取请求体
+    // 读取请求体 (对于 LLM 请求，body 通常不大，使用 text() 即可)
     const body = req.method !== 'GET' && req.method !== 'HEAD' ? await req.text() : undefined;
 
     // 转发到 Google API
@@ -32,9 +32,6 @@ async function handleRequest(req) {
       headers,
       body,
     });
-
-    // 读取响应文本（会缓冲）
-    const responseData = await response.text();
 
     // 构造响应头
     const responseHeaders = new Headers();
@@ -49,7 +46,10 @@ async function handleRequest(req) {
     responseHeaders.set('Access-Control-Allow-Headers', '*');
     responseHeaders.set('Access-Control-Expose-Headers', '*');
 
-    return new NextResponse(responseData, {
+    // 【关键修改】：不再使用 await response.text() 缓冲整个响应
+    // 直接将 Google API 的 response.body (ReadableStream) 传递给 NextResponse
+    // 这样 Vercel/Next.js 会将数据流式转发给客户端，避免超时并支持流式输出 (SSE)
+    return new NextResponse(response.body, {
       status: response.status,
       headers: responseHeaders,
     });
