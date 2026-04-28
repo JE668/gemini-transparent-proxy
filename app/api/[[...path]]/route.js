@@ -1,8 +1,6 @@
 // app/api/[[...path]]/route.js
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
-
 /**
  * 统一的请求处理器
  */
@@ -27,7 +25,7 @@ async function handleRequest(req) {
     const headers = new Headers(req.headers);
     headers.delete('host');
 
-    // 读取请求体（非 GET/HEAD 时）
+    // 获取请求体（非 GET/HEAD 时）
     const body = req.method !== 'GET' && req.method !== 'HEAD' ? await req.text() : undefined;
 
     // 转发到 Google API
@@ -37,21 +35,26 @@ async function handleRequest(req) {
       body,
     });
 
-    // 构造返回给客户端的响应
+    // 构造返回给客户端的响应，保留原始状态和内容类型，同时添加 CORS 头
+    const responseData = await response.text();
     const responseHeaders = new Headers();
     
-    // 透传 Google 返回的 Content-Type
+    // 透传 Google 返回的 Content-Type（通常是 application/json）
     const contentType = response.headers.get('content-type');
-    responseHeaders.set('Content-Type', contentType || 'application/json');
+    if (contentType) {
+      responseHeaders.set('Content-Type', contentType);
+    } else {
+      responseHeaders.set('Content-Type', 'application/json');
+    }
 
-    // 设置 CORS 头
+    // 设置 CORS 头，允许任意来源访问（生产环境可根据需要收紧）
     responseHeaders.set('Access-Control-Allow-Origin', '*');
     responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     responseHeaders.set('Access-Control-Allow-Headers', '*');
+    // 允许浏览器读取自定义响应头（如流式响应的 text/event-stream）
     responseHeaders.set('Access-Control-Expose-Headers', '*');
 
-    // 流式返回 Google 的响应体（不缓冲，直接转发 ReadableStream）
-    return new NextResponse(response.body, {
+    return new NextResponse(responseData, {
       status: response.status,
       headers: responseHeaders,
     });
