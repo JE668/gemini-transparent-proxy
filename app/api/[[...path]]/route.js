@@ -27,11 +27,14 @@ async function handleRequest(req) {
     const headers = new Headers(req.headers);
     headers.delete('host');
 
+    // 读取请求体（非 GET/HEAD 时）
+    const body = req.method !== 'GET' && req.method !== 'HEAD' ? await req.text() : undefined;
+
     // 转发到 Google API
     const response = await fetch(targetUrl, {
       method: req.method,
       headers,
-      body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+      body,
     });
 
     // 构造返回给客户端的响应
@@ -47,6 +50,7 @@ async function handleRequest(req) {
     responseHeaders.set('Access-Control-Allow-Headers', '*');
     responseHeaders.set('Access-Control-Expose-Headers', '*');
 
+    // 流式返回 Google 的响应体（不缓冲，直接转发 ReadableStream）
     return new NextResponse(response.body, {
       status: response.status,
       headers: responseHeaders,
