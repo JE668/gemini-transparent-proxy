@@ -1,24 +1,69 @@
 /**
  * Cloudflare Workers Gemini Proxy
  * 
- * 部署方式:
- * 1. npm install -g wrangler
- * 2. cd cloudflare-worker
- * 3. wrangler deploy
+ * 支持两种路径格式：
+ * 1. OpenAI 格式: /v1/chat/completions -> 转发到 /v1beta/openai/chat/completions
+ * 2. 原生 Gemini 格式: /v1/models/xxx:generateContent -> 直接转发
  */
 
 export default {
   async fetch(request, env, ctx) {
-    try {
-      const url = new URL(request.url);
-      let pathname = url.pathname;
+    const url = new URL(request.url);
+    let pathname = url.pathname;
 
+    // ---------- /v1/models 端点（用于Hermes验证） ----------
+    if (pathname === '/v1/models') {
+      const models = {
+        object: "list",
+        data: [
+          {
+            id: "gemini-2.0-flash",
+            object: "model",
+            created: 1700000000,
+            owned_by: "google",
+          },
+          {
+            id: "gemini-2.0-flash-exp",
+            object: "model",
+            created: 1700000000,
+            owned_by: "google",
+          },
+          {
+            id: "gemini-1.5-flash",
+            object: "model",
+            created: 1700000000,
+            owned_by: "google",
+          },
+          {
+            id: "gemini-1.5-pro",
+            object: "model",
+            created: 1700000000,
+            owned_by: "google",
+          },
+          {
+            id: "gemini-pro",
+            object: "model",
+            created: 1700000000,
+            owned_by: "google",
+          },
+        ]
+      };
+      return new Response(JSON.stringify(models), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        }
+      });
+    }
+    // -----------------------------------------------------
+
+    try {
       // ---------- 路径重写 ----------
-      if (pathname.startsWith('/api/v1/')) {
-        pathname = pathname.replace('/api/v1/', '/v1beta/openai/');
-      } else if (pathname.startsWith('/api/')) {
-        pathname = pathname.replace('/api/', '/');
+      // OpenAI 兼容格式: /v1/chat/completions -> /v1beta/openai/chat/completions
+      if (pathname.startsWith('/v1/')) {
+        pathname = pathname.replace('/v1/', '/v1beta/openai/');
       }
+      // 原生 Gemini 格式保持不变: /v1/models/xxx:generateContent
       // -----------------------------
 
       const targetUrl = `https://generativelanguage.googleapis.com${pathname}${url.search}`;
