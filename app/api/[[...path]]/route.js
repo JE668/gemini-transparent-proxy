@@ -1,8 +1,6 @@
 // app/api/[[...path]]/route.js
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
-
 /**
  * 统一的请求处理器
  */
@@ -35,17 +33,23 @@ async function handleRequest(req) {
       body,
     });
 
+    // 读取响应文本（会缓冲）
+    const responseData = await response.text();
+
     // 构造响应头
     const responseHeaders = new Headers();
     const contentType = response.headers.get('content-type');
-    responseHeaders.set('Content-Type', contentType || 'application/json');
+    if (contentType) {
+      responseHeaders.set('Content-Type', contentType);
+    } else {
+      responseHeaders.set('Content-Type', 'application/json');
+    }
     responseHeaders.set('Access-Control-Allow-Origin', '*');
     responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     responseHeaders.set('Access-Control-Allow-Headers', '*');
     responseHeaders.set('Access-Control-Expose-Headers', '*');
 
-    // 直接返回 Google 的流式响应体，不缓冲
-    return new NextResponse(response.body, {
+    return new NextResponse(responseData, {
       status: response.status,
       headers: responseHeaders,
     });
