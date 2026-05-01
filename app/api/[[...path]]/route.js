@@ -113,7 +113,8 @@ async function handleRequest(req) {
         // === 处理 /v1/models 请求 ===
         // OpenAI 客户端在连接时会先请求 /v1/models
         // 我们需要返回一个可用的模型列表
-        if (pathname.endsWith('/v1/models') || pathname.endsWith('/models')) {
+        // 匹配各种可能的路径：/v1/models, /api/v1/models, /api/v1beta/openai/models, /models
+        if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
             const models = [
                 {
                     id: 'gemini-2.0-flash',
