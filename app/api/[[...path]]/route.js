@@ -72,7 +72,22 @@ function buildTargetUrl(pathname, search) {
         targetPath = '/' + targetPath.slice(5);
     }
 
-    return `${GOOGLE_API_BASE}${targetPath}${search}`;
+    // 过滤掉 Vercel [[...path]] 路由可能添加的内部 query 参数（如 ?path=...）
+    // Google Gemini API 不接受 query 参数中带有不认识的字段
+    if (search) {
+        const params = new URLSearchParams(search);
+        const allowed = ['key', 'alt', 'prettyPrint', 'fields', 'quotaUser', 'userIp'];
+        const filtered = new URLSearchParams();
+        for (const [k, v] of params) {
+            if (allowed.includes(k)) {
+                filtered.set(k, v);
+            }
+        }
+        const filteredStr = filtered.toString();
+        return `${GOOGLE_API_BASE}${targetPath}${filteredStr ? '?' + filteredStr : ''}`;
+    }
+
+    return `${GOOGLE_API_BASE}${targetPath}`;
 }
 
 /**
