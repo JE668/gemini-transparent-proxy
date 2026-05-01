@@ -1,13 +1,24 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
-    // 在构建过程中忽略 ESLint 错误
     ignoreDuringBuilds: true,
   },
   typescript: {
-    // 如果你有 tsconfig.json，也建议忽略类型检查
     ignoreBuildErrors: true,
   },
-}
+  // 确保路由正确
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: '*' },
+        ],
+      },
+    ];
+  },
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;

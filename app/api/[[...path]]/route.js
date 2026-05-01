@@ -1,87 +1,229 @@
 // app/api/[[...path]]/route.js
-import { NextResponse } from 'next/server';
+// Gemini 透明代理 - Next.js App Router Edge Function
+// 将 OpenAI 兼容格式的请求转发到 Google Gemini API
+// 支持流式输出 (SSE) 和非流式输出
+
+const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
 /**
- * 统一的流式代理请求处理器
+ * 获取客户端请求的真实路径
+ * Next.js App Router 的 [[...path]] catch-all 路由中，
+ * 路径参数可以从 `req.nextUrl.pathname` 或 `req.url` 中获取
  */
-async function handleStreamRequest(req) {
+function getRequestPath(req) {
+    const url = new URL(req.url);
+    let pathname = url.pathname;
+
+    // Vercel 部署时，如果路径包含 /api/v1/，保留它
+    // 如果 pathname 已经被 Vercel 裁剪过（比如只有 /chat/completions），
+    // 我们需要从完整的 req.url 中提取
+    // 但更可靠的方式是使用 req.nextUrl.pathname
+
+    return pathname;
+}
+
+/**
+ * 获取请求体内容（支持文本和二进制）
+ */
+async function getRequestBody(req) {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+        return undefined;
+    }
+    return await req.text();
+}
+
+/**
+ * 清理请求头中的 Hop-by-hop headers
+ */
+function cleanHeaders(headers) {
+    const clean = new Headers(headers);
+    const hopByHop = [
+        'host', 'connection', 'keep-alive', 'proxy-authorization',
+        'proxy-authenticate', 'te', 'trailers', 'transfer-encoding',
+        'upgrade', 'content-length'
+    ];
+    hopByHop.forEach(h => clean.delete(h));
+    return clean;
+}
+
+/**
+ * 构建目标 URL
+ * 将 OpenAI 兼容路径映射到 Google Gemini v1beta/openai 路径
+ * 保留所有查询参数
+ *
+ * 路径映射规则（按优先级）：
+ *   /api/v1/* -> /v1beta/openai/*
+ *   /v1/*      -> /v1beta/openai/*
+ *   /api/*     -> /* （其他 API 路径，保持兼容）
+ *
+ * 注意：Vercel [[...path]] 路由的 pathname 是完整的 URL 路径
+ * 例如请求 https://xxx.vercel.app/api/v1/chat/completions
+ * pathname = /api/v1/chat/completions
+ */
+function buildTargetUrl(pathname, search) {
+    let targetPath = pathname;
+
+    // 优先匹配长前缀，避免误替换
+    if (targetPath.startsWith('/api/v1/')) {
+        targetPath = '/v1beta/openai/' + targetPath.slice(8);
+    } else if (targetPath.startsWith('/v1/')) {
+        targetPath = '/v1beta/openai/' + targetPath.slice(3);
+    } else if (targetPath.startsWith('/api/')) {
+        targetPath = '/' + targetPath.slice(5);
+    }
+
+    return `${GOOGLE_API_BASE}${targetPath}${search}`;
+}
+
+/**
+ * 构建响应头，过滤掉不应转发的头部
+ */
+function buildResponseHeaders(response) {
+    const headers = new Headers();
+    const blocked = [
+        'content-encoding', 'transfer-encoding', 'connection',
+        'keep-alive', 'strict-transport-security'
+    ];
+
+    for (const [key, value] of response.headers.entries()) {
+        if (!blocked.includes(key.toLowerCase())) {
+            headers.set(key, value);
+        }
+    }
+
+    // CORS 头
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    headers.set('Access-Control-Allow-Headers', '*');
+
+    return headers;
+}
+
+/**
+ * 处理所有请求（GET, POST, PUT, DELETE）
+ */
+async function handleRequest(req) {
     try {
         const url = new URL(req.url);
-        let pathname = url.pathname;
+        const pathname = url.pathname;
+        const search = url.search;
 
-        // ---------- 路径重写 ----------
-        if (pathname.startsWith('/api/v1/')) {
-            pathname = pathname.replace('/api/v1/', '/v1beta/openai/');
-        } else if (pathname.startsWith('/api/')) {
-            pathname = pathname.replace('/api/', '/');
+        console.log(`[Proxy] ${req.method} ${pathname}`);
+
+        // === 处理 /v1/models 请求 ===
+        // OpenAI 客户端在连接时会先请求 /v1/models
+        // 我们需要返回一个可用的模型列表
+        if (pathname.endsWith('/v1/models') || pathname.endsWith('/models')) {
+            const models = [
+                {
+                    id: 'gemini-2.0-flash',
+                    object: 'model',
+                    created: 1700000000,
+                    owned_by: 'google'
+                },
+                {
+                    id: 'gemini-2.0-flash-lite',
+                    object: 'model',
+                    created: 1700000000,
+                    owned_by: 'google'
+                },
+                {
+                    id: 'gemini-2.5-pro',
+                    object: 'model',
+                    created: 1700000000,
+                    owned_by: 'google'
+                },
+                {
+                    id: 'gemini-2.5-flash',
+                    object: 'model',
+                    created: 1700000000,
+                    owned_by: 'google'
+                },
+                {
+                    id: 'gemma-4-31b-it',
+                    object: 'model',
+                    created: 1700000000,
+                    owned_by: 'google'
+                }
+            ];
+            return new Response(JSON.stringify({
+                object: 'list',
+                data: models
+            }), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                    'Access-Control-Allow-Headers': '*',
+                }
+            });
         }
-        // -----------------------------
 
-        const targetUrl = `https://generativelanguage.googleapis.com${pathname}${url.search}`;
+        // === 构建目标 URL ===
+        const targetUrl = buildTargetUrl(pathname, search);
 
-        // 克隆请求头，并清理会导致问题的 Hop-by-hop headers
-        const headers = new Headers(req.headers);
-        headers.delete('host');
-        // 清理更多可能干扰代理的头部
-        ['connection', 'keep-alive', 'proxy-authorization', 'proxy-authenticate', 'te', 'trailers', 'transfer-encoding', 'upgrade'].forEach(h => headers.delete(h));
+        console.log(`[Proxy] Forwarding to: ${targetUrl}`);
 
-        // 读取请求体（仅对非 GET/HEAD 请求）
-        const body = req.method !== 'GET' && req.method !== 'HEAD' ? await req.text() : undefined;
+        // === 清理请求头 ===
+        const headers = cleanHeaders(req.headers);
 
-        // 转发到 Google API，注意此处不等待完整响应，而是获取可读流
+        // === 读取请求体 ===
+        const body = await getRequestBody(req);
+
+        // === 转发请求到 Google API ===
         const response = await fetch(targetUrl, {
             method: req.method,
-            headers,
-            body,
+            headers: headers,
+            body: body,
+            // 不缓存，保持实时性
+            cache: 'no-store',
         });
 
-        // 构造响应头，过滤掉不应直接转发的头部
-        const responseHeaders = new Headers();
-        for (const [key, value] of response.headers.entries()) {
-            const lowerKey = key.toLowerCase();
-            if (['content-encoding', 'transfer-encoding', 'connection', 'keep-alive', 'strict-transport-security'].includes(lowerKey)) {
-                continue;
-            }
-            responseHeaders.set(key, value);
-        }
-        responseHeaders.set('Access-Control-Allow-Origin', '*');
-        responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        responseHeaders.set('Access-Control-Allow-Headers', '*');
+        console.log(`[Proxy] Response status: ${response.status}`);
 
-        // 关键步骤：返回流式响应，而非缓冲后的一次性响应
-        return new NextResponse(response.body, {
+        // === 构建响应头 ===
+        const responseHeaders = buildResponseHeaders(response);
+
+        // === 返回流式响应 ===
+        // response.body 是 ReadableStream，Vercel Edge Runtime 原生支持
+        // 这就是真正的流式传输 —— 不会等 Google 返回全部内容才开始发回客户端
+        return new Response(response.body, {
             status: response.status,
+            statusText: response.statusText,
             headers: responseHeaders,
         });
 
     } catch (error) {
-        console.error('Proxy error:', error);
-        return NextResponse.json(
-            { error: 'Proxy Error', details: error.message },
-            { status: 502 }
-        );
+        console.error('[Proxy] Error:', error);
+        return new Response(JSON.stringify({
+            error: {
+                message: `Proxy Error: ${error.message}`,
+                type: 'proxy_error',
+                code: 502
+            }
+        }), {
+            status: 502,
+            headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': '*',
+            }
+        });
     }
 }
 
-export async function GET(req) {
-    return handleStreamRequest(req);
-}
+// 导出的处理函数
+export const runtime = 'edge';
 
-export async function POST(req) {
-    return handleStreamRequest(req);
-}
-
-export async function PUT(req) {
-    return handleStreamRequest(req);
-}
-
-export async function DELETE(req) {
-    return handleStreamRequest(req);
-}
-
+export async function GET(req) { return handleRequest(req); }
+export async function POST(req) { return handleRequest(req); }
+export async function PUT(req) { return handleRequest(req); }
+export async function DELETE(req) { return handleRequest(req); }
 export async function OPTIONS(req) {
-    return new NextResponse(null, {
-        status: 200,
+    return new Response(null, {
+        status: 204,
         headers: {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
