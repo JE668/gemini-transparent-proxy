@@ -177,12 +177,34 @@ async function handleRequest(req) {
         }
 
         // === 构建目标 URL ===
-        const targetUrl = buildTargetUrl(pathname, search);
+        let targetUrl = buildTargetUrl(pathname, search);
 
         console.log(`[Proxy] Forwarding to: ${targetUrl}`);
 
-        // === 清理请求头 ===
+        // === 提取 API Key（从 Authorization Bearer 或 query string） ===
+        // Google Gemini API 使用 ?key= 参数，不支持 Authorization header
+        let apiKey = '';
+        const authHeader = req.headers.get('authorization') || '';
+        if (authHeader.startsWith('Bearer ')) {
+            apiKey = authHeader.slice(7).trim();
+        }
+        // 如果 query 中已有 key 参数，优先使用（兼容直接传 key 的方式）
+        const existingKey = url.searchParams.get('key');
+        if (existingKey) {
+            apiKey = existingKey;
+        }
+
+        // === 清理请求头（移除 Authorization，Google 不需要） ===
         const headers = cleanHeaders(req.headers);
+        headers.delete('authorization');
+
+        // === 在目标 URL 中添加 API Key ===
+        const urlWithKey = new URL(targetUrl);
+        if (apiKey) {
+            urlWithKey.searchParams.set('key', apiKey);
+        }
+        // 使用带 key 的 URL 替换 targetUrl
+        targetUrl = urlWithKey.toString();
 
         // === 读取请求体 ===
         const body = await getRequestBody(req);
