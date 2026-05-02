@@ -183,16 +183,23 @@ async function handleRequest(req) {
 
         const headers = cleanHeaders(req.headers);
         
-        // === 转发 API Key ===
-        // 无论是 OpenAI 兼容端点还是原生端点，将 Authorization Bearer 统一转换为 ?key= 参数
-        // 这是 Google API 最稳定、兼容性最好的认证方式
+        // === 转发 API Key（双保险策略） ===
+        // Google 的 v1beta/openai 端点文档支持 Authorization: Bearer，
+        // 但实际部署中存在不稳定的情况。因此采用双保险：
+        // 1. 追加 ?key= 到 URL（Google 原生认证，最稳定）
+        // 2. 保留 Authorization: Bearer 头不变（OpenAI 兼容端点可能需要）
+        const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
         const authHeader = req.headers.get('authorization') || '';
         if (authHeader.startsWith('Bearer ')) {
             const apiKey = authHeader.slice(7).trim();
             const urlWithKey = new URL(targetUrl);
             urlWithKey.searchParams.set('key', apiKey);
             targetUrl = urlWithKey.toString();
-            headers.delete('authorization');
+            // OpenAI 兼容端点：保留 Bearer + 追加 ?key= 双保险
+            // 原生端点：只使用 ?key=
+            if (!isOpenAICompat) {
+                headers.delete('authorization');
+            }
         }
 
 
