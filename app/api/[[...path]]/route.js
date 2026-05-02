@@ -181,28 +181,21 @@ async function handleRequest(req) {
 
         console.log(`[Proxy] Forwarding to: ${targetUrl}`);
 
-        // === 转发 Authorization header 中的 API Key 到 Google API 的 ?key= 参数 ===
-        // Google Gemini 原生 API (?key=xxx) 不接受 Authorization 头
-        // 而 OpenAI 兼容端点 /v1beta/openai/* 接受 Authorization: Bearer <API_KEY>
-        // 我们根据目标 URL 判断：
-        const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
-        
         const headers = cleanHeaders(req.headers);
         
-        if (isOpenAICompat) {
-            // OpenAI 兼容端点：保留 Authorization: Bearer <key> 不变
-            // Google 的 /v1beta/openai/ 端点接受 Bearer token 格式的 API key
-        } else {
-            // 原生 Gemini API：提取 Authorization Bearer 转为 ?key=
-            const authHeader = req.headers.get('authorization') || '';
-            if (authHeader.startsWith('Bearer ')) {
-                headers.delete('authorization');
-                const apiKey = authHeader.slice(7).trim();
-                const urlWithKey = new URL(targetUrl);
-                urlWithKey.searchParams.set('key', apiKey);
-                targetUrl = urlWithKey.toString();
-            }
+        // === 转发 API Key ===
+        // 无论是 OpenAI 兼容端点还是原生端点，将 Authorization Bearer 统一转换为 ?key= 参数
+        // 这是 Google API 最稳定、兼容性最好的认证方式
+        const authHeader = req.headers.get('authorization') || '';
+        if (authHeader.startsWith('Bearer ')) {
+            const apiKey = authHeader.slice(7).trim();
+            const urlWithKey = new URL(targetUrl);
+            urlWithKey.searchParams.set('key', apiKey);
+            targetUrl = urlWithKey.toString();
+            headers.delete('authorization');
         }
+
+
 
         // === 读取请求体 ===
         const body = await getRequestBody(req);
