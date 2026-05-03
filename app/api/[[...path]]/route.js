@@ -127,39 +127,84 @@ async function handleRequest(req) {
 
         // === 处理 /v1/models 请求 ===
         // OpenAI 客户端在连接时会先请求 /v1/models
-        // 我们需要返回一个可用的模型列表
+        // 返回 Google AI Studio Free Tier 中实际可用的模型，并附带配额提示
         // 匹配各种可能的路径：/v1/models, /api/v1/models, /api/v1beta/openai/models, /models
         if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
             const models = [
+                // ⭐ Gemma 4 系列 — 无配额限制（Unlimited TPM），当前主力模型
                 {
-                    id: 'gemini-2.0-flash',
+                    id: 'gemma-4-31b-it',
                     object: 'model',
-                    created: 1700000000,
-                    owned_by: 'google'
+                    created: 1743561600,
+                    owned_by: 'google',
+                    description: 'Gemma 4 31B Instruct — Unlimited TPM on Free Tier ⭐ 主力'
+                },
+                // ========== Gemini 2.5 系列 (Latest) ==========
+                {
+                    id: 'gemini-2.5-flash',
+                    object: 'model',
+                    created: 1740960000,
+                    owned_by: 'google',
+                    description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
                 },
                 {
-                    id: 'gemini-2.0-flash-lite',
+                    id: 'gemini-2.5-flash-lite',
                     object: 'model',
-                    created: 1700000000,
-                    owned_by: 'google'
+                    created: 1740960000,
+                    owned_by: 'google',
+                    description: 'Free Tier: 30 RPM / 1,500 RPD / 1M TPM'
                 },
                 {
                     id: 'gemini-2.5-pro',
                     object: 'model',
-                    created: 1700000000,
-                    owned_by: 'google'
+                    created: 1740960000,
+                    owned_by: 'google',
+                    description: 'Free Tier: 5 RPM / 50 RPD / 1M TPM ⚠️ 严重受限'
+                },
+                // ========== Gemini 2.0 系列 ==========
+                {
+                    id: 'gemini-2.0-flash',
+                    object: 'model',
+                    created: 1735689600,
+                    owned_by: 'google',
+                    description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
+                },
+                // ========== Gemma 3 系列 ==========
+                {
+                    id: 'gemma-3-27b-it',
+                    object: 'model',
+                    created: 1741996800,
+                    owned_by: 'google',
+                    description: 'Gemma 3 27B — Free Tier: 30 RPM / 1,500 RPD'
                 },
                 {
-                    id: 'gemini-2.5-flash',
+                    id: 'gemma-3-12b-it',
                     object: 'model',
-                    created: 1700000000,
-                    owned_by: 'google'
+                    created: 1741996800,
+                    owned_by: 'google',
+                    description: 'Gemma 3 12B — Free Tier: 30 RPM / 1,500 RPD'
                 },
                 {
-                    id: 'gemma-4-31b-it',
+                    id: 'gemma-3-4b-it',
                     object: 'model',
-                    created: 1700000000,
-                    owned_by: 'google'
+                    created: 1741996800,
+                    owned_by: 'google',
+                    description: 'Gemma 3 4B — Free Tier: 30 RPM / 1,500 RPD'
+                },
+                // ========== 旧版 Gemini 1.5 (仍可用) ==========
+                {
+                    id: 'gemini-1.5-flash',
+                    object: 'model',
+                    created: 1714521600,
+                    owned_by: 'google',
+                    description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
+                },
+                {
+                    id: 'gemini-1.5-pro',
+                    object: 'model',
+                    created: 1714521600,
+                    owned_by: 'google',
+                    description: 'Free Tier: 2 RPM / 50 RPD / 32K TPM ⚠️ 严重受限'
                 }
             ];
             return new Response(JSON.stringify({
