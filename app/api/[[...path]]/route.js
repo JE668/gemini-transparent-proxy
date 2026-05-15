@@ -5,75 +5,60 @@
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
-/**
- * 获取客户端请求的真实路径
- * Next.js App Router 的 [[...path]] catch-all 路由中，
- * 路径参数可以从 `req.nextUrl.pathname` 或 `req.url` 中获取
- */
-function getRequestPath(req) {
-    const url = new URL(req.url);
-    let pathname = url.pathname;
+// 常量定义：清理请求头中的 Hop-by-hop headers
+const HOP_BY_HOP_HEADERS = [
+    'host', 'connection', 'keep-alive', 'proxy-authorization',
+    'proxy-authenticate', 'te', 'trailers', 'transfer-encoding',
+    'upgrade', 'content-length'
+];
 
-    // Vercel 部署时，如果路径包含 /api/v1/，保留它
-    // 如果 pathname 已经被 Vercel 裁剪过（比如只有 /chat/completions），
-    // 我们需要从完整的 req.url 中提取
-    // 但更可靠的方式是使用 req.nextUrl.pathname
-
-    return pathname;
-}
+// 常量定义：过滤掉不应转发的响应头部
+const BLOCKED_RESPONSE_HEADERS = [
+    'content-encoding', 'transfer-encoding', 'connection',
+    'keep-alive', 'strict-transport-security'
+];
 
 /**
- * 获取请求体内容（支持文本和二进制）
+ * 获取请求体内容
  */
 async function getRequestBody(req) {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
         return undefined;
     }
     return await req.text();
 }
 
 /**
- * 清理请求头中的 Hop-by-hop headers
+ * 清理请求头
  */
 function cleanHeaders(headers) {
     const clean = new Headers(headers);
-    const hopByHop = [
-        'host', 'connection', 'keep-alive', 'proxy-authorization',
-        'proxy-authenticate', 'te', 'trailers', 'transfer-encoding',
-        'upgrade', 'content-length'
-    ];
-    hopByHop.forEach(h => clean.delete(h));
+    HOP_BY_HOP_HEADERS.forEach(h => clean.delete(h));
     return clean;
 }
 
 /**
  * 构建目标 URL
- * 将 OpenAI 兼容路径映射到 Google Gemini v1beta/openai 路径
- * 保留所有查询参数
- *
  * 路径映射规则（按优先级）：
  *   /api/v1/* -> /v1beta/openai/*
  *   /v1/*      -> /v1beta/openai/*
- *   /api/*     -> /* （其他 API 路径，保持兼容）
- *
- * 注意：Vercel [[...path]] 路由的 pathname 是完整的 URL 路径
- * 例如请求 https://xxx.vercel.app/api/v1/chat/completions
- * pathname = /api/v1/chat/completions
+ *   /api/*     -> /*
  */
 function buildTargetUrl(pathname, search) {
-    let targetPath = pathname;
+    const rules = [
+        { prefix: '/api/v1/', replacement: '/v1beta/openai/' },
+        { prefix: '/v1/', replacement: '/v1beta/openai/' },
+        { prefix: '/api/', replacement: '/' },
+    ];
 
-    // 优先匹配长前缀，避免误替换
-    if (targetPath.startsWith('/api/v1/')) {
-        targetPath = '/v1beta/openai/' + targetPath.slice(8);
-    } else if (targetPath.startsWith('/v1/')) {
-        targetPath = '/v1beta/openai/' + targetPath.slice(3);
-    } else if (targetPath.startsWith('/api/')) {
-        targetPath = '/' + targetPath.slice(5);
+    let targetPath = pathname;
+    for (const { prefix, replacement } of rules) {
+        if (targetPath.startsWith(prefix)) {
+            targetPath = replacement + targetPath.slice(prefix.length);
+            break;
+        }
     }
 
-    // 过滤掉 Vercel [[...path]] 路由可能添加的内部 query 参数（如 ?path=...）
-    // Google Gemini API 不接受 query 参数中带有不认识的字段
     if (search) {
         const params = new URLSearchParams(search);
         const allowed = ['key', 'alt', 'prettyPrint', 'fields', 'quotaUser', 'userIp'];
@@ -91,17 +76,12 @@ function buildTargetUrl(pathname, search) {
 }
 
 /**
- * 构建响应头，过滤掉不应转发的头部
+ * 构建响应头
  */
 function buildResponseHeaders(response) {
     const headers = new Headers();
-    const blocked = [
-        'content-encoding', 'transfer-encoding', 'connection',
-        'keep-alive', 'strict-transport-security'
-    ];
-
     for (const [key, value] of response.headers.entries()) {
-        if (!blocked.includes(key.toLowerCase())) {
+        if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
             headers.set(key, value);
         }
     }
@@ -115,23 +95,18 @@ function buildResponseHeaders(response) {
 }
 
 /**
- * 处理所有请求（GET, POST, PUT, DELETE）
+ * 处理所有请求
  */
 async function handleRequest(req) {
     try {
         const url = new URL(req.url);
-        const pathname = url.pathname;
-        const search = url.search;
+        const { pathname, search } = url;
 
         console.log(`[Proxy] ${req.method} ${pathname}`);
 
         // === 处理 /v1/models 请求 ===
-        // OpenAI 客户端在连接时会先请求 /v1/models
-        // 返回 Google AI Studio Free Tier 中实际可用的模型，并附带配额提示
-        // 匹配各种可能的路径：/v1/models, /api/v1/models, /api/v1beta/openai/models, /models
         if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
             const models = [
-                // ⭐ Gemma 4 系列 — 无配额限制（Unlimited TPM），当前主力模型
                 {
                     id: 'gemma-4-31b-it',
                     object: 'model',
@@ -139,7 +114,6 @@ async function handleRequest(req) {
                     owned_by: 'google',
                     description: 'Gemma 4 31B Instruct — Unlimited TPM on Free Tier ⭐ 主力'
                 },
-                // ========== Gemini 2.5 系列 (Latest) ==========
                 {
                     id: 'gemini-2.5-flash',
                     object: 'model',
@@ -161,7 +135,6 @@ async function handleRequest(req) {
                     owned_by: 'google',
                     description: 'Free Tier: 5 RPM / 50 RPD / 1M TPM ⚠️ 严重受限'
                 },
-                // ========== Gemini 2.0 系列 ==========
                 {
                     id: 'gemini-2.0-flash',
                     object: 'model',
@@ -169,7 +142,6 @@ async function handleRequest(req) {
                     owned_by: 'google',
                     description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
                 },
-                // ========== Gemma 3 系列 ==========
                 {
                     id: 'gemma-3-27b-it',
                     object: 'model',
@@ -191,7 +163,6 @@ async function handleRequest(req) {
                     owned_by: 'google',
                     description: 'Gemma 3 4B — Free Tier: 30 RPM / 1,500 RPD'
                 },
-                // ========== 旧版 Gemini 1.5 (仍可用) ==========
                 {
                     id: 'gemini-1.5-flash',
                     object: 'model',
@@ -207,10 +178,7 @@ async function handleRequest(req) {
                     description: 'Free Tier: 2 RPM / 50 RPD / 32K TPM ⚠️ 严重受限'
                 }
             ];
-            return new Response(JSON.stringify({
-                object: 'list',
-                data: models
-            }), {
+            return new Response(JSON.stringify({ object: 'list', data: models }), {
                 status: 200,
                 headers: {
                     'Content-Type': 'application/json',
@@ -221,18 +189,12 @@ async function handleRequest(req) {
             });
         }
 
-        // === 构建目标 URL ===
         let targetUrl = buildTargetUrl(pathname, search);
-
         console.log(`[Proxy] Forwarding to: ${targetUrl}`);
 
         const headers = cleanHeaders(req.headers);
         
-        // === 转发 API Key（双保险策略） ===
-        // Google 的 v1beta/openai 端点文档支持 Authorization: Bearer，
-        // 但实际部署中存在不稳定的情况。因此采用双保险：
-        // 1. 追加 ?key= 到 URL（Google 原生认证，最稳定）
-        // 2. 保留 Authorization: Bearer 头不变（OpenAI 兼容端点可能需要）
+        // === 认证桥接 ===
         const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
         const authHeader = req.headers.get('authorization') || '';
         if (authHeader.startsWith('Bearer ')) {
@@ -240,39 +202,26 @@ async function handleRequest(req) {
             const urlWithKey = new URL(targetUrl);
             urlWithKey.searchParams.set('key', apiKey);
             targetUrl = urlWithKey.toString();
-            // OpenAI 兼容端点：保留 Bearer + 追加 ?key= 双保险
-            // 原生端点：只使用 ?key=
             if (!isOpenAICompat) {
                 headers.delete('authorization');
             }
         }
 
-
-
-        // === 读取请求体 ===
         const body = await getRequestBody(req);
 
-        // === 转发请求到 Google API ===
         const response = await fetch(targetUrl, {
             method: req.method,
             headers: headers,
             body: body,
-            // 不缓存，保持实时性
             cache: 'no-store',
         });
 
         console.log(`[Proxy] Response status: ${response.status}`);
 
-        // === 构建响应头 ===
-        const responseHeaders = buildResponseHeaders(response);
-
-        // === 返回流式响应 ===
-        // response.body 是 ReadableStream，Vercel Edge Runtime 原生支持
-        // 这就是真正的流式传输 —— 不会等 Google 返回全部内容才开始发回客户端
         return new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
-            headers: responseHeaders,
+            headers: buildResponseHeaders(response),
         });
 
     } catch (error) {
@@ -295,7 +244,6 @@ async function handleRequest(req) {
     }
 }
 
-// 导出的处理函数
 export const runtime = 'edge';
 
 export async function GET(req) { return handleRequest(req); }
