@@ -143,14 +143,17 @@ async function handleRequest(req) {
       cache: 'no-store',
     });
 
-    // 如果请求成功，在 Redis 中增加计数
-    if (response.ok && modelId !== 'unknown') {
+    // 如果请求成功，必须记录到 Redis (无论模型是否识别成功)
+    if (response.ok) {
       const date = new Date().toISOString().split('T')[0];
+      const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
+      
       try {
-        // 必须使用 await，否则 Vercel Edge Runtime 会在返回 Response 后立即杀死此进程
+        // 强制执行，确保在 Upstash 面板能看到命令增加
         await Promise.all([
-          redis.incr(`quota:${date}:${modelId}`),
-          redis.incr(`quota:global:${date}`)
+          redis.incr(`quota:${date}:${finalModelId}`),
+          redis.incr(`quota:global:${date}`),
+          redis.incr(`proxy:heartbeat`) // 全局心跳，用于排除连接问题
         ]);
       } catch (err) {
         console.error(`[Redis Error] ${err}`);
