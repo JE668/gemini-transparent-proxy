@@ -4,6 +4,67 @@
 // 支持流式输出 (SSE) 和非流式输出
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
+const REQUEST_TIMEOUT_MS = 15000; // 15秒超时保护
+
+// 高配额模型列表
+const HIGH_QUOTA_MODELS = [
+    {
+        id: 'gemma-4-31b-it',
+        object: 'model',
+        created: 1743561600,
+        owned_by: 'google',
+        description: 'Gemma 4 31B — High Limit ⭐ 主力'
+    },
+    {
+        id: 'gemma-4-26b-it',
+        object: 'model',
+        created: 1743561600,
+        owned_by: 'google',
+        description: 'Gemma 4 26B — High Limit'
+    },
+    {
+        id: 'gemini-2.5-flash-exp',
+        object: 'model',
+        created: 1740960000,
+        owned_by: 'google',
+        description: 'Gemini 2.5 Flash Exp — Extremely High Limit 🚀'
+    },
+    {
+        id: 'gemma-3-27b-it',
+        object: 'model',
+        created: 1741996800,
+        owned_by: 'google',
+        description: 'Gemma 3 27B — Ultra High Limit'
+    },
+    {
+        id: 'gemma-3-12b-it',
+        object: 'model',
+        created: 1741996800,
+        owned_by: 'google',
+        description: 'Gemma 3 12B — Ultra High Limit'
+    },
+    {
+        id: 'gemma-3-4b-it',
+        object: 'model',
+        created: 1741996800,
+        owned_by: 'google',
+        description: 'Gemma 3 4B — Ultra High Limit'
+    },
+    {
+        id: 'gemma-3-2b-it',
+        object: 'model',
+        created: 1741996800,
+        owned_by: 'google',
+        description: 'Gemma 3 2B — Ultra High Limit'
+    },
+    {
+        id: 'gemma-3-1b-it',
+        object: 'model',
+        created: 1741996800,
+        owned_by: 'google',
+        description: 'Gemma 3 1B — Ultra High Limit'
+    }
+];
 
 // 常量定义：清理请求头中的 Hop-by-hop headers
 const HOP_BY_HOP_HEADERS = [
@@ -39,10 +100,6 @@ function cleanHeaders(headers) {
 
 /**
  * 构建目标 URL
- * 路径映射规则（按优先级）：
- *   /api/v1/* -> /v1beta/openai/*
- *   /v1/*      -> /v1beta/openai/*
- *   /api/*     -> /*
  */
 function buildTargetUrl(pathname, search) {
     const rules = [
@@ -61,7 +118,7 @@ function buildTargetUrl(pathname, search) {
 
     if (search) {
         const params = new URLSearchParams(search);
-        const allowed = ['key', 'alt', 'prettyPrint', 'fields', 'quotaUser', 'userIp'];
+        const allowed = ['alt', 'prettyPrint', 'fields', 'quotaUser', 'userIp'];
         const filtered = new URLSearchParams();
         for (const [k, v] of params) {
             if (allowed.includes(k)) {
@@ -106,65 +163,7 @@ async function handleRequest(req) {
 
         // === 处理 /v1/models 请求 ===
         if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
-            const models = [
-                {
-                    id: 'gemma-4-31b-it',
-                    object: 'model',
-                    created: 1743561600,
-                    owned_by: 'google',
-                    description: 'Gemma 4 31B — High Limit ⭐ 主力'
-                },
-                {
-                    id: 'gemma-4-26b-it',
-                    object: 'model',
-                    created: 1743561600,
-                    owned_by: 'google',
-                    description: 'Gemma 4 26B — High Limit'
-                },
-                {
-                    id: 'gemini-2.5-flash-exp',
-                    object: 'model',
-                    created: 1740960000,
-                    owned_by: 'google',
-                    description: 'Gemini 2.5 Flash Exp — Extremely High Limit 🚀'
-                },
-                {
-                    id: 'gemma-3-27b-it',
-                    object: 'model',
-                    created: 1741996800,
-                    owned_by: 'google',
-                    description: 'Gemma 3 27B — Ultra High Limit'
-                },
-                {
-                    id: 'gemma-3-12b-it',
-                    object: 'model',
-                    created: 1741996800,
-                    owned_by: 'google',
-                    description: 'Gemma 3 12B — Ultra High Limit'
-                },
-                {
-                    id: 'gemma-3-4b-it',
-                    object: 'model',
-                    created: 1741996800,
-                    owned_by: 'google',
-                    description: 'Gemma 3 4B — Ultra High Limit'
-                },
-                {
-                    id: 'gemma-3-2b-it',
-                    object: 'model',
-                    created: 1741996800,
-                    owned_by: 'google',
-                    description: 'Gemma 3 2B — Ultra High Limit'
-                },
-                {
-                    id: 'gemma-3-1b-it',
-                    object: 'model',
-                    created: 1741996800,
-                    owned_by: 'google',
-                    description: 'Gemma 3 1B — Ultra High Limit'
-                }
-            ];
-            return new Response(JSON.stringify({ object: 'list', data: models }), {
+            return new Response(JSON.stringify({ object: 'list', data: HIGH_QUOTA_MODELS }), {
                 status: 200,
                 headers: {
                     'Content-Type': 'application/json',
@@ -180,35 +179,44 @@ async function handleRequest(req) {
 
         const headers = cleanHeaders(req.headers);
         
-        // === 认证桥接 ===
-        const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
+        // === 认证桥接：使用安全头 x-goog-api-key ===
         const authHeader = req.headers.get('authorization') || '';
         if (authHeader.startsWith('Bearer ')) {
             const apiKey = authHeader.slice(7).trim();
-            const urlWithKey = new URL(targetUrl);
-            urlWithKey.searchParams.set('key', apiKey);
-            targetUrl = urlWithKey.toString();
-            if (!isOpenAICompat) {
-                headers.delete('authorization');
-            }
+            headers.set('x-goog-api-key', apiKey);
+            headers.delete('authorization');
         }
 
         const body = await getRequestBody(req);
 
-        const response = await fetch(targetUrl, {
-            method: req.method,
-            headers: headers,
-            body: body,
-            cache: 'no-store',
-        });
+        // === 增加请求超时控制 ===
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-        console.log(`[Proxy] Response status: ${response.status}`);
+        try {
+            const response = await fetch(targetUrl, {
+                method: req.method,
+                headers: headers,
+                body: body,
+                signal: controller.signal,
+                cache: 'no-store',
+            });
 
-        return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: buildResponseHeaders(response),
-        });
+            clearTimeout(timeoutId);
+            console.log(`[Proxy] Response status: ${response.status}`);
+
+            return new Response(response.body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: buildResponseHeaders(response),
+            });
+        } catch (fetchError) {
+            clearTimeout(timeoutId);
+            if (fetchError.name === 'AbortError') {
+                throw new Error('Request timed out after 15 seconds');
+            }
+            throw fetchError;
+        }
 
     } catch (error) {
         console.error('[Proxy] Error:', error);
