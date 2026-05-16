@@ -146,8 +146,15 @@ async function handleRequest(req) {
     // 如果请求成功，在 Redis 中增加计数
     if (response.ok && modelId !== 'unknown') {
       const date = new Date().toISOString().split('T')[0];
-      // 使用不阻塞主流程的方式更新 Redis
-      redis.incr(`quota:${date}:${modelId}`).catch(err => console.error(`[Redis Error] ${err}`));
+      try {
+        // 必须使用 await，否则 Vercel Edge Runtime 会在返回 Response 后立即杀死此进程
+        await Promise.all([
+          redis.incr(`quota:${date}:${modelId}`),
+          redis.incr(`quota:global:${date}`)
+        ]);
+      } catch (err) {
+        console.error(`[Redis Error] ${err}`);
+      }
     }
 
     console.log(`[Proxy] Response status: ${response.status} | Model: ${modelId}`);
