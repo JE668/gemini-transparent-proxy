@@ -1,6 +1,6 @@
 export const runtime = 'edge';
 import { Redis } from '@upstash/redis';
-import { HIGH_QUOTA_MODELS } from '../../lib/models';
+import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
