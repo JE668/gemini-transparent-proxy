@@ -1,152 +1,14 @@
 // app/api/[[...path]]/route.js
-// Gemini 透明代理 - 纯转发稳定版（无 TransformStream，无统计解析）
+// Gemini 透明代理 - 纯转发稳定版（带 Redis 计数统计）
+import { Redis } from '@upstash/redis';
+import { HIGH_QUOTA_MODELS } from '../../../lib/models';
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
-
-// ======================= 模型列表（基于官方免费层配额 2026-05）=======================
-const HIGH_QUOTA_MODELS = [
-  // ---------- Gemma 4 系列 (高配额, 1,500 req/day, 15 RPM) ----------
-  {
-    id: 'gemma-4-31b-it',
-    object: 'model',
-    created: 1743561600,
-    owned_by: 'google',
-    description: 'Gemma 4 31B (Dense) — 1,500 req/day (15 RPM) | 256K ctx ⭐ 主力'
-  },
-  {
-    id: 'gemma-4-26b-a4b-it',
-    object: 'model',
-    created: 1743561600,
-    owned_by: 'google',
-    description: 'Gemma 4 26B A4B (MoE) — 1,500 req/day (15 RPM) | 256K ctx'
-  },
-
-  // ---------- Gemma 3 系列 (14,400 req/day, 30 RPM) ----------
-  {
-    id: 'gemma-3-27b-it',
-    object: 'model',
-    created: 1741996800,
-    owned_by: 'google',
-    description: 'Gemma 3 27B — 14,400 req/day (30 RPM) | 128K ctx'
-  },
-  {
-    id: 'gemma-3-12b-it',
-    object: 'model',
-    created: 1741996800,
-    owned_by: 'google',
-    description: 'Gemma 3 12B — 14,400 req/day (30 RPM) | 128K ctx'
-  },
-  {
-    id: 'gemma-3-4b-it',
-    object: 'model',
-    created: 1741996800,
-    owned_by: 'google',
-    description: 'Gemma 3 4B — 14,400 req/day (30 RPM) | 128K ctx'
-  },
-  {
-    id: 'gemma-3-2b-it',
-    object: 'model',
-    created: 1741996800,
-    owned_by: 'google',
-    description: 'Gemma 3 2B — 14,400 req/day (30 RPM) | 128K ctx'
-  },
-  {
-    id: 'gemma-3-1b-it',
-    object: 'model',
-    created: 1741996800,
-    owned_by: 'google',
-    description: 'Gemma 3 1B — 14,400 req/day (30 RPM) | 128K ctx'
-  },
-
-  // ---------- Gemini 2.5 系列 ----------
-  {
-    id: 'gemini-2.5-flash-exp',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 2.5 Flash Exp — 10,000 req/day (250 RPM) | 1M ctx 🚀'
-  },
-  {
-    id: 'gemini-2.5-pro-1p-freebie',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 2.5 Pro (Trial) — 500 req/day (75 RPM) | 免费试用'
-  },
-  {
-    id: 'gemini-2.5-flash',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 2.5 Flash — 20 req/day (5 RPM) | 1M ctx ⚠️ 今日已达上限'
-  },
-  {
-    id: 'gemini-2.5-flash-lite',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 2.5 Flash-Lite — 20 req/day (10 RPM) | 1M ctx ⚠️ 今日已达上限'
-  },
-  {
-    id: 'gemini-2.5-flash-tts',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 2.5 Flash TTS — 10 req/day (3 RPM) | TTS 专用'
-  },
-
-  // ---------- Gemini 3 系列 ----------
-  {
-    id: 'gemini-3-flash',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 3 Flash — 20 req/day (5 RPM) | 1M ctx'
-  },
-  {
-    id: 'gemini-3.1-flash-lite',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 3.1 Flash-Lite — 500 req/day (15 RPM)'
-  },
-  {
-    id: 'gemini-3.1-flash-tts',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Gemini 3.1 Flash TTS — 10 req/day (3 RPM) | TTS 专用'
-  },
-
-  // ---------- 其他免费模型 ----------
-  {
-    id: 'med-gemini',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Med-Gemini — 50,000 req/day (60 RPM) | 医学专用'
-  },
-  {
-    id: 'learnlm-2.0-flash-experimental',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'LearnLM 2.0 Flash — 1,500 req/day (15 RPM) | 学习专用'
-  },
-  {
-    id: 'gemini-robotics-er-1.6-preview',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Robotics ER 1.6 Preview — 20 req/day (5 RPM)'
-  },
-  {
-    id: 'gemini-robotics-er-1.5-preview',
-    object: 'model',
-    created: 1740960000,
-    owned_by: 'google',
-    description: 'Robotics ER 1.5 Preview — 20 req/day (10 RPM)'
-  }
-];
 
 // ======================= 常量定义 =======================
 const HOP_BY_HOP_HEADERS = [
@@ -253,6 +115,26 @@ async function handleRequest(req) {
 
     const body = await getRequestBody(req);
 
+    // 记录配额使用量 (Redis)
+    let modelId = 'unknown';
+    
+    // 1. 尝试从请求体提取 (OpenAI 格式)
+    if (body) {
+      try {
+        const json = JSON.parse(body);
+        if (json.model) modelId = json.model;
+      } catch (e) {}
+    }
+
+    // 2. 如果请求体没找到，尝试从 URL 提取 (Google 原生格式)
+    // 匹配 /v1beta/models/{model}:generateContent 或类似路径
+    if (modelId === 'unknown') {
+      const modelMatch = targetUrl.match(/\/models\/([^\/:]+)/);
+      if (modelMatch && modelMatch[1]) {
+        modelId = modelMatch[1];
+      }
+    }
+
     // 直接转发请求，不使用任何 TransformStream
     const response = await fetch(targetUrl, {
       method: req.method,
@@ -261,7 +143,14 @@ async function handleRequest(req) {
       cache: 'no-store',
     });
 
-    console.log(`[Proxy] Response status: ${response.status}`);
+    // 如果请求成功，在 Redis 中增加计数
+    if (response.ok && modelId !== 'unknown') {
+      const date = new Date().toISOString().split('T')[0];
+      // 使用不阻塞主流程的方式更新 Redis
+      redis.incr(`quota:${date}:${modelId}`).catch(err => console.error(`[Redis Error] ${err}`));
+    }
+
+    console.log(`[Proxy] Response status: ${response.status} | Model: ${modelId}`);
 
     // 原样返回响应体
     return new Response(response.body, {
