@@ -1,71 +1,124 @@
-import DashboardClient from './DashboardClient';
+'use client';
+import { useEffect, useState } from 'react';
 
-export const runtime = 'edge';
+export default function DashboardPage() {
+  const [health, setHealth] = useState(null);
+  const [config, setConfig] = useState(null);
+  const [quota, setQuota] = useState(null);
+  const [prompt, setPrompt] = useState('');
+  const [testResult, setTestResult] = useState('');
 
-export default async function DashboardPage({ searchParams }) {
-    const password = process.env.DASHBOARD_PASSWORD;
-    const { pwd } = searchParams;
+  useEffect(() => {
+    fetch('/api/health').then(res => res.json()).then(setHealth).catch(console.error);
+    fetch('/api/config').then(res => res.json()).then(setConfig).catch(console.error);
+    fetch('/api/quota').then(res => res.json()).then(setQuota).catch(console.error);
+  }, []);
 
-    if (password && pwd !== password) {
-        return (
-            <div style={{ 
-                display: 'flex', 
-                flexDirection: 'column', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                height: '100vh', 
-                backgroundColor: '#0f172a', 
-                color: '#f8fafc', 
-                fontFamily: 'system-ui' 
-            }}>
-                <div style={{ 
-                    padding: '40px', 
-                    backgroundColor: '#1e293b', 
-                    borderRadius: '16px', 
-                    border: '1px solid #334155', 
-                    textAlign: 'center',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
-                }}>
-                    <h2 style={{ marginBottom: '20px' }}>🔐 Dashboard Access</h2>
-                    <form method="GET" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                        <input 
-                            type="password" 
-                            name="pwd" 
-                            placeholder="Enter Admin Password" 
-                            style={{ 
-                                padding: '12px', 
-                                borderRadius: '8px', 
-                                border: '1px solid #334155', 
-                                backgroundColor: '#0f172a', 
-                                color: '#fff',
-                                textAlign: 'center'
-                            }} 
-                        />
-                        <button 
-                            type="submit" 
-                            style={{ 
-                                padding: '12px', 
-                                borderRadius: '8px', 
-                                border: 'none', 
-                                backgroundColor: '#3b82f6', 
-                                color: '#fff', 
-                                fontWeight: '600', 
-                                cursor: 'pointer' 
-                            }}
-                        >
-                            Unlock
-                        </button>
-                    </form>
-                </div>
-            </div>
-        );
+  const testAPI = async () => {
+    const apiKey = prompt('请输入你的 API Key（测试用）:');
+    if (!apiKey) return;
+    try {
+      const res = await fetch('/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'gemma-4-31b-it', messages: [{ role: 'user', content: prompt }] })
+      });
+      const data = await res.json();
+      setTestResult(JSON.stringify(data, null, 2));
+    } catch (err) {
+      setTestResult('Error: ' + err.message);
     }
+  };
 
-    // Sanitize API Key for display (only show start and end)
-    const apiKey = process.env.GEMINI_API_KEY || 'Not Set';
-    const maskedKey = apiKey.length > 12 
-        ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
-        : '********';
+  return (
+    <div style={{ padding: '2rem', fontFamily: 'system-ui, sans-serif', maxWidth: '800px', margin: '0 auto', lineHeight: '1.5' }}>
+      <h1 style={{ borderBottom: '2px solid #eee', paddingBottom: '0.5rem' }}>Gemini 代理 Dashboard 🦞</h1>
+      
+      <section style={{ marginBottom: '2rem' }}>
+        <h2>健康状态</h2>
+        {health ? (
+          <p style={{ fontSize: '1.2rem' }}>
+            状态: <span style={{ color: health.status === 'ok' ? 'green' : 'red' }}>
+              {health.status === 'ok' ? '🟢 正常' : '🔴 异常'}
+            </span> | 延迟: <strong>{health.latency}ms</strong>
+            <br /><small>{health.message}</small>
+          </p>
+        ) : '加载中...'}
+      </section>
 
-    return <DashboardClient config={{ apiKey: maskedKey }} />;
+      <section style={{ marginBottom: '2rem' }}>
+        <h2>代理配置</h2>
+        {config ? (
+          <pre style={{ background: '#f4f4f4', padding: '1rem', borderRadius: '8px', overflowX: 'auto' }}>
+            {JSON.stringify(config, null, 2)}
+          </pre>
+        ) : '加载中...'}
+      </section>
+
+      <section style={{ marginBottom: '2rem' }}>
+        <h2>配额情况</h2>
+        {quota ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #ccc' }}>
+                <th>模型</th>
+                <th>使用率</th>
+                <th>已用/上限</th>
+              </tr>
+            </thead>
+            <tbody>
+              {quota.map((item, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                  <td>{item.model}</td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{ background: '#eee', width: '100px', height: '10px', borderRadius: '5px', overflow: 'hidden' }}>
+                        <div style={{ background: item.percent > 90 ? 'red' : 'green', width: `${item.percent}%`, height: '100%' }} />
+                      </div>
+                      {item.percent}%
+                    </div>
+                  </td>
+                  <td>{item.used} / {item.limit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : '加载中...'}
+      </section>
+
+      <section style={{ marginBottom: '2rem' }}>
+        <h2>API 测试器</h2>
+        <textarea 
+          rows="3" 
+          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #ccc', marginBottom: '10px' }} 
+          value={prompt} 
+          onChange={e => setPrompt(e.target.value)} 
+          placeholder="输入消息..." 
+        />
+        <button 
+          onClick={testAPI} 
+          style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+        >
+          发送测试请求
+        </button>
+        {testResult && (
+          <pre style={{ background: '#222', color: '#fff', padding: '1rem', borderRadius: '8px', marginTop: '1rem', overflowX: 'auto', fontSize: '0.85rem' }}>
+            {testResult}
+          </pre>
+        )}
+      </section>
+
+      <section style={{ marginBottom: '2rem' }}>
+        <h2>快速链接</h2>
+        <ul style={{ listStyle: 'none', padding: 0 }}>
+          <li style={{ marginBottom: '0.5rem' }}>
+            <a href="https://ai.google.dev/gemini-api/docs" target="_blank" rel="noopener noreferrer" style={{ color: '#007bff' }}>🌐 Gemini API 官方文档</a>
+          </li>
+          <li>
+            <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={{ color: '#007bff' }}>💻 GitHub 仓库</a>
+          </li>
+        </ul>
+      </section>
+    </div>
+  );
 }
