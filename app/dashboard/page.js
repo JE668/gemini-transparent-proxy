@@ -58,31 +58,36 @@ export default function DashboardPage() {
       <section style={{ marginBottom: '2rem' }}>
         <h2>配额情况</h2>
         {quota ? (
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #ccc' }}>
-                <th>模型</th>
-                <th>使用率</th>
-                <th>已用/上限</th>
-              </tr>
-            </thead>
-            <tbody>
-              {quota.map((item, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
-                  <td>{item.model}</td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <div style={{ background: '#eee', width: '100px', height: '10px', borderRadius: '5px', overflow: 'hidden' }}>
-                        <div style={{ background: item.percent > 90 ? 'red' : 'green', width: `${item.percent}%`, height: '100%' }} />
-                      </div>
-                      {item.percent}%
-                    </div>
-                  </td>
-                  <td>{item.used} / {item.limit}</td>
+          <>
+            <p style={{ marginBottom: '1rem', fontSize: '0.9rem', color: '#666' }}>
+              总请求数: <strong>{quota.globalRequests || 0}</strong>
+            </p>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #ccc' }}>
+                  <th>模型</th>
+                  <th>使用率</th>
+                  <th>已用/上限</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(quota.data || []).map((item, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                    <td>{item.model}</td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ background: '#eee', width: '100px', height: '10px', borderRadius: '5px', overflow: 'hidden' }}>
+                          <div style={{ background: item.percent > 90 ? 'red' : 'green', width: `${item.percent}%`, height: '100%' }} />
+                        </div>
+                        {item.percent}%
+                      </div>
+                    </td>
+                    <td>{item.used} / {item.limit}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         ) : '加载中...'}
       </section>
 
