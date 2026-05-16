@@ -179,12 +179,17 @@ async function handleRequest(req) {
 
         const headers = cleanHeaders(req.headers);
         
-        // === 认证桥接：使用安全头 x-goog-api-key ===
+        // === 认证桥接 ===
+        const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
         const authHeader = req.headers.get('authorization') || '';
         if (authHeader.startsWith('Bearer ')) {
-            const apiKey = authHeader.slice(7).trim();
-            headers.set('x-goog-api-key', apiKey);
+          const apiKey = authHeader.slice(7).trim();
+          const urlWithKey = new URL(targetUrl);
+          urlWithKey.searchParams.set('key', apiKey);
+  targetUrl = urlWithKey.toString();
+          if (!isOpenAICompat) {
             headers.delete('authorization');
+          }
         }
 
         const body = await getRequestBody(req);
