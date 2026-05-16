@@ -1,6 +1,7 @@
 export const runtime = 'edge';
 import { Redis } from '@upstash/redis';
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
+import { getQuotaDate } from '../../../lib/utils';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -9,7 +10,7 @@ const redis = new Redis({
 
 export async function GET() {
   try {
-    const date = new Date().toISOString().split('T')[0];
+    const date = getQuotaDate();
     
     // 获取全局请求数用于调试
     const globalUsed = await redis.get(`quota:global:${date}`) || 0;

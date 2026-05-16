@@ -2,6 +2,7 @@
 // Gemini 透明代理 - 纯转发稳定版（带 Redis 计数统计）
 import { Redis } from '@upstash/redis';
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
+import { getQuotaDate } from '../../../lib/utils';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -145,7 +146,7 @@ async function handleRequest(req) {
 
     // 如果请求成功，必须记录到 Redis (无论模型是否识别成功)
     if (response.ok) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = getQuotaDate();
       const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
       
       try {
