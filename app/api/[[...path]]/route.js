@@ -112,70 +112,56 @@ async function handleRequest(req) {
                     object: 'model',
                     created: 1743561600,
                     owned_by: 'google',
-                    description: 'Gemma 4 31B Instruct — Unlimited TPM on Free Tier ⭐ 主力'
+                    description: 'Gemma 4 31B — High Limit ⭐ 主力'
                 },
                 {
-                    id: 'gemini-2.5-flash',
+                    id: 'gemma-4-26b-it',
+                    object: 'model',
+                    created: 1743561600,
+                    owned_by: 'google',
+                    description: 'Gemma 4 26B — High Limit'
+                },
+                {
+                    id: 'gemini-2.5-flash-exp',
                     object: 'model',
                     created: 1740960000,
                     owned_by: 'google',
-                    description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
-                },
-                {
-                    id: 'gemini-2.5-flash-lite',
-                    object: 'model',
-                    created: 1740960000,
-                    owned_by: 'google',
-                    description: 'Free Tier: 30 RPM / 1,500 RPD / 1M TPM'
-                },
-                {
-                    id: 'gemini-2.5-pro',
-                    object: 'model',
-                    created: 1740960000,
-                    owned_by: 'google',
-                    description: 'Free Tier: 5 RPM / 50 RPD / 1M TPM ⚠️ 严重受限'
-                },
-                {
-                    id: 'gemini-2.0-flash',
-                    object: 'model',
-                    created: 1735689600,
-                    owned_by: 'google',
-                    description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
+                    description: 'Gemini 2.5 Flash Exp — Extremely High Limit 🚀'
                 },
                 {
                     id: 'gemma-3-27b-it',
                     object: 'model',
                     created: 1741996800,
                     owned_by: 'google',
-                    description: 'Gemma 3 27B — Free Tier: 30 RPM / 1,500 RPD'
+                    description: 'Gemma 3 27B — Ultra High Limit'
                 },
                 {
                     id: 'gemma-3-12b-it',
                     object: 'model',
                     created: 1741996800,
                     owned_by: 'google',
-                    description: 'Gemma 3 12B — Free Tier: 30 RPM / 1,500 RPD'
+                    description: 'Gemma 3 12B — Ultra High Limit'
                 },
                 {
                     id: 'gemma-3-4b-it',
                     object: 'model',
                     created: 1741996800,
                     owned_by: 'google',
-                    description: 'Gemma 3 4B — Free Tier: 30 RPM / 1,500 RPD'
+                    description: 'Gemma 3 4B — Ultra High Limit'
                 },
                 {
-                    id: 'gemini-1.5-flash',
+                    id: 'gemma-3-2b-it',
                     object: 'model',
-                    created: 1714521600,
+                    created: 1741996800,
                     owned_by: 'google',
-                    description: 'Free Tier: 15 RPM / 1,500 RPD / 1M TPM'
+                    description: 'Gemma 3 2B — Ultra High Limit'
                 },
                 {
-                    id: 'gemini-1.5-pro',
+                    id: 'gemma-3-1b-it',
                     object: 'model',
-                    created: 1714521600,
+                    created: 1741996800,
                     owned_by: 'google',
-                    description: 'Free Tier: 2 RPM / 50 RPD / 32K TPM ⚠️ 严重受限'
+                    description: 'Gemma 3 1B — Ultra High Limit'
                 }
             ];
             return new Response(JSON.stringify({ object: 'list', data: models }), {
