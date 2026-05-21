@@ -150,12 +150,12 @@ async function handleRequest(req) {
       const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
       
       try {
-        // 强制执行，确保在 Upstash 面板能看到命令增加
-        await Promise.all([
+        // 异步执行，不阻塞 Response 返回，防止 Vercel 504 超时
+        Promise.all([
           redis.incr(`quota:${date}:${finalModelId}`),
           redis.incr(`quota:global:${date}`),
-          redis.incr(`proxy:heartbeat`) // 全局心跳，用于排除连接问题
-        ]);
+          redis.incr(`proxy:heartbeat`)
+        ]).catch(err => console.error(`[Redis Background Error] ${err}`));
       } catch (err) {
         console.error(`[Redis Error] ${err}`);
       }
