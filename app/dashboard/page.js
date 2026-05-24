@@ -140,7 +140,10 @@ export default function DashboardPage() {
                       <span>Error Rate: {item.errorRate !== undefined ? `${item.errorRate}%` : 'N/A'}</span>
                     </div>
                   </div>
-                ))}\n              </div>\n            ) : '加载中...'}\n          </div>
+                ))}
+              </div>
+            ) : '加载中...'}
+          </div>
 
           <div style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -182,6 +185,44 @@ export default function DashboardPage() {
               background: '#f1f5f9', padding: '1rem', borderRadius: '12px', 
               fontSize: '0.85rem', color: '#475569', overflowX: 'auto', 
               border: '1px solid #e2e8f0'
-            }}>\n              {config ? JSON.stringify(config, null, 2) : '加载中...'}\n            </pre>
-          </div>\n        </div>\n\n        <footer style={{ marginTop: '3rem', textAlign: 'center', paddingBottom: '2rem' }}>\n          <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', fontSize: '0.95rem' }}>\n            <a href=\"https://ai.google.dev/gemini-api/docs\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>🌐 官方文档</a>\n            <a href=\"https://github.com/JE668/gemini-transparent-proxy\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>💻 GitHub 仓库</a>\n          </div>\n          <p style={{ marginTop: '1.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>\n            &copy; {new Date().getFullYear()} Gemini Transparent Proxy | Powered by Vercel Edge\n          </p>\n        </footer>\n      </div>\n    </div>\n  );\n}\n\nconst cardStyle = {\n  backgroundColor: 'white',\n  padding: '1.5rem',\n  borderRadius: '20px',\n  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02)',\n  border: '1px solid #f1f5f9',\n};\n\nconst cardTitleStyle = {\n  fontSize: '1.1rem',\n  fontWeight: '700',
-  color: '#475569',\n  margin: 0,\n};\n\nconst linkStyle = {\n  color: '#4f46e5',\n  textDecoration: 'none',\n  fontWeight: '500',\n  transition: 'color 0.2s',\n};\nEOF
+            }}>
+              {config ? JSON.stringify(config, null, 2) : '加载中...'}
+            </pre>
+          </div>
+        </div>
+
+        <footer style={{ marginTop: '3rem', textAlign: 'center', paddingBottom: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', fontSize: '0.95rem' }}>
+            <a href=\"https://ai.google.dev/gemini-api/docs\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>🌐 官方文档</a>
+            <a href=\"https://github.com/JE668/gemini-transparent-proxy\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>💻 GitHub 仓库</a>
+          </div>
+          <p style={{ marginTop: '1.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>
+            &copy; {new Date().getFullYear()} Gemini Transparent Proxy | Powered by Vercel Edge
+          </p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+const cardStyle = {
+  backgroundColor: 'white',
+  padding: '1.5rem',
+  borderRadius: '20px',
+  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02)',
+  border: '1px solid #f1f5f9',
+};
+
+const cardTitleStyle = {
+  fontSize: '1.1rem',
+  fontWeight: '700',
+  color: '#475569',
+  margin: 0,
+};
+
+const linkStyle = {
+  color: '#4f46e5',
+  textDecoration: 'none',
+  fontWeight: '500',
+  transition: 'color 0.2s',
+};
