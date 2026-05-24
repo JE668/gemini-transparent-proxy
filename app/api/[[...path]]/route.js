@@ -1,5 +1,5 @@
 // app/api/[[...path]]/route.js
-// Gemini 透明代理 - 纯转发稳定版（带 Redis 计数统计）
+// Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
 import { Redis } from '@upstash/redis';
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
@@ -78,14 +78,40 @@ function buildResponseHeaders(response) {
   return headers;
 }
 
+// ======================= 智能重试逻辑 =======================
+async function fetchWithRetry(url, options, maxAttempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // 只有 5xx 错误才触发重试
+      if (response.status >= 500 && response.status <= 599) {
+        console.warn(`[Proxy] Attempt ${attempt} failed with status ${response.status}. Retrying...`);
+        if (attempt < maxAttempts) {
+          // 指数退避: 1s, 2s
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+          continue;
+        }
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+      }
+    }
+  }
+  throw lastError || new Error('Max retry attempts reached');
+}
+
 // ======================= 主处理器 =======================
 async function handleRequest(req) {
+  const startTime = Date.now();
   try {
     const url = new URL(req.url);
     const { pathname, search } = url;
-    console.log(`[Proxy] ${req.method} ${pathname}`);
 
-    // 处理 /v1/models 请求
     if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
       return new Response(JSON.stringify({ object: 'list', data: HIGH_QUOTA_MODELS }), {
         status: 200,
@@ -101,7 +127,6 @@ async function handleRequest(req) {
     let targetUrl = buildTargetUrl(pathname, search);
     const headers = cleanHeaders(req.headers);
 
-    // 认证桥接：将 Authorization: Bearer 转为 URL 参数 ?key=
     const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
     const authHeader = req.headers.get('authorization') || '';
     if (authHeader.startsWith('Bearer ')) {
@@ -116,54 +141,44 @@ async function handleRequest(req) {
 
     const body = await getRequestBody(req);
 
-    // 记录配额使用量 (Redis)
     let modelId = 'unknown';
-    
-    // 1. 尝试从请求体提取 (OpenAI 格式)
     if (body) {
       try {
         const json = JSON.parse(body);
         if (json.model) modelId = json.model;
       } catch (e) {}
     }
-
-    // 2. 如果请求体没找到，尝试从 URL 提取 (Google 原生格式)
-    // 匹配 /v1beta/models/{model}:generateContent 或类似路径
     if (modelId === 'unknown') {
-      const modelMatch = targetUrl.match(/\/models\/([^\/:]+)/);
+      const modelMatch = targetUrl.match(/\\/models\\/([^\\/:]+)/);
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
       }
     }
 
-    // 直接转发请求，不使用任何 TransformStream
-    const response = await fetch(targetUrl, {
+    // 使用智能重试机制发起请求
+    const response = await fetchWithRetry(targetUrl, {
       method: req.method,
       headers: headers,
       body: body,
       cache: 'no-store',
     });
 
-    // 如果请求成功，必须记录到 Redis (无论模型是否识别成功)
-    if (response.ok) {
-      const date = getQuotaDate();
-      const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
-      
-      try {
-        // 异步执行，不阻塞 Response 返回，防止 Vercel 504 超时
-        Promise.all([
-          redis.incr(`quota:${date}:${finalModelId}`),
-          redis.incr(`quota:global:${date}`),
-          redis.incr(`proxy:heartbeat`)
-        ]).catch(err => console.error(`[Redis Background Error] ${err}`));
-      } catch (err) {
-        console.error(`[Redis Error] ${err}`);
-      }
-    }
+    const latency = Date.now() - startTime;
+    const date = getQuotaDate();
+    const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
 
-    console.log(`[Proxy] Response status: ${response.status} | Model: ${modelId}`);
+    // 异步记录详细遥测数据
+    Promise.all([
+      redis.incr(`quota:${date}:${finalModelId}`),
+      redis.incr(`quota:global:${date}`),
+      redis.incr(`proxy:heartbeat`),
+      // 记录状态码分布
+      redis.incr(`status:${date}:${response.status}`),
+      // 记录延迟 (使用 Redis 列表存储最近 100 次延迟，用于计算平均值)
+      redis.lpush(`latency:${finalModelId}`, latency),
+      redis.ltrim(`latency:${finalModelId}`, 0, 99),
+    ]).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
-    // 原样返回响应体
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
@@ -189,7 +204,6 @@ async function handleRequest(req) {
   }
 }
 
-// ======================= Edge Runtime & 导出 =======================
 export const runtime = 'edge';
 
 export async function GET(req) { return handleRequest(req); }
