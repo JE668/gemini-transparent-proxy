@@ -78,19 +78,23 @@ function buildResponseHeaders(response) {
 
 async function fetchWithRetry(url, options, maxAttempts = 3) {
   let lastError;
+  let retries = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(url, options);
       if (response.status >= 500 && response.status <= 599) {
         console.warn(`[Proxy] Attempt ${attempt} failed with status ${response.status}. Retrying...`);
+        retries++;
         if (attempt < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, attempt * 1000));
           continue;
         }
       }
+      response._retries = retries;
       return response;
     } catch (error) {
       lastError = error;
+      retries++;
       if (attempt < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, attempt * 1000));
       }
@@ -159,14 +163,70 @@ async function handleRequest(req) {
     const date = getQuotaDate();
     const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
 
-    Promise.all([
-      redis.incr(`quota:${date}:${finalModelId}`),
-      redis.incr(`quota:global:${date}`),
-      redis.incr('proxy:heartbeat'),
-      redis.incr(`status:${date}:${response.status}`),
-      redis.lpush(`latency:${finalModelId}`, latency),
-      redis.ltrim(`latency:${finalModelId}`, 0, 99),
-    ]).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+  // 北京时间整点小时 (0-23)，用于时间线分桶
+  const bjHour = (new Date().getUTCHours() + 8) % 24;
+
+  // 来源统计：API Key fingerprint (SHA-1 前8位)
+  let clientFingerprint = 'anon';
+  if (authHeader.startsWith('Bearer ')) {
+    try {
+      const keyData = new TextEncoder().encode(authHeader.slice(7).trim());
+      const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
+      const hashArr = Array.from(new Uint8Array(hashBuf));
+      clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {}
+  }
+
+  const telemetryOps = [
+    redis.incr(`quota:${date}:${finalModelId}`),
+    redis.incr(`quota:global:${date}`),
+    redis.incr('proxy:heartbeat'),
+    redis.incr(`status:${date}:${response.status}`),
+    redis.lpush(`latency:${finalModelId}`, latency),
+    redis.ltrim(`latency:${finalModelId}`, 0, 99),
+    // 时间线分桶
+    redis.incr(`timeline:${date}:h${bjHour}`),
+    redis.sadd(`timeline:${date}:hours`, `h${bjHour}`),
+    // 来源统计
+    redis.incr(`clients:${date}:${clientFingerprint}`),
+    redis.sadd(`clients:${date}:keys`, clientFingerprint),
+  ];
+
+  // 重试计数
+  const retries = response._retries || 0;
+  if (retries > 0) {
+    telemetryOps.push(redis.incr(`retries:${date}`));
+  }
+
+  // 最近请求摘要
+  const recentEntry = JSON.stringify({
+    ts: new Date().toISOString(),
+    model: finalModelId,
+    status: response.status,
+    latency: latency,
+    retries: retries,
+    client: clientFingerprint,
+  });
+  telemetryOps.push(
+    redis.lpush(`recent:${date}`, recentEntry),
+    redis.ltrim(`recent:${date}`, 0, 49),
+  );
+
+  // 错误日志：4xx/5xx 写入 Redis List
+  if (response.status >= 400) {
+    const errorEntry = JSON.stringify({
+      ts: new Date().toISOString(),
+      model: finalModelId,
+      status: response.status,
+      latency: latency,
+    });
+    telemetryOps.push(
+      redis.lpush(`errors:${date}`, errorEntry),
+      redis.ltrim(`errors:${date}`, 0, 99),
+    );
+  }
+
+  Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     return new Response(response.body, {
       status: response.status,

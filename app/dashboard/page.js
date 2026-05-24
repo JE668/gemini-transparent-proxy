@@ -1,22 +1,133 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 
 const REFRESH_INTERVAL = 30000;
+
+// ---- 配额重置倒计时 ----
+function getTimeUntilReset() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  const utcS = now.getUTCSeconds();
+  let hoursLeft = 7 - utcH;
+  let minutesLeft = 60 - utcM;
+  let secondsLeft = 60 - utcS;
+  if (utcM === 0) minutesLeft = 0;
+  if (utcS === 0) secondsLeft = 0;
+  if (secondsLeft === 60) secondsLeft = 0;
+  else minutesLeft -= 1;
+  if (minutesLeft < 0) { minutesLeft += 60; hoursLeft -= 1; }
+  if (minutesLeft === 60) minutesLeft = 0;
+  if (hoursLeft < 0) hoursLeft += 24;
+  return { hours: hoursLeft, minutes: minutesLeft, seconds: secondsLeft };
+}
+
+function formatCountdown(cd) {
+  return `${String(cd.hours).padStart(2, '0')}:${String(cd.minutes).padStart(2, '0')}:${String(cd.seconds).padStart(2, '0')}`;
+}
+
+function formatTime(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return iso; }
+}
+
+function shortModel(id) {
+  return id.replace('models/', '').replace('gemini-', 'g-').replace('gemma-', 'gem-');
+}
+
+// ---- SVG 折线图 ----
+function SparklineChart({ data, width = 700, height = 140 }) {
+  if (!data || data.length === 0) return null;
+  const maxVal = Math.max(...data.map(d => d.count), 1);
+  const padX = 40, padY = 20;
+  const chartW = width - padX * 2;
+  const chartH = height - padY * 2;
+  const stepX = chartW / (data.length - 1);
+  const points = data.map((d, i) => ({ x: padX + i * stepX, y: padY + chartH - (d.count / maxVal) * chartH, ...d }));
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  const areaPath = `${linePath} L${points[points.length - 1].x},${padY + chartH} L${points[0].x},${padY + chartH} Z`;
+  const currentBjHour = (new Date().getUTCHours() + 8) % 24;
+
+  return (
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+      {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+        const y = padY + chartH - ratio * chartH;
+        return (
+          <g key={i}>
+            <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#f1f5f9" strokeWidth="1" />
+            <text x={padX - 8} y={y + 4} textAnchor="end" fill="#94a3b8" fontSize="10" fontFamily="monospace">{Math.round(maxVal * ratio)}</text>
+          </g>
+        );
+      })}
+      <path d={areaPath} fill="url(#areaGrad)" opacity="0.3" />
+      <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6366f1" /><stop offset="100%" stopColor="#6366f1" stopOpacity="0" /></linearGradient></defs>
+      <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {points.map((p, i) => {
+        const isCurrent = p.hour === currentBjHour;
+        return (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r={isCurrent ? 4.5 : 3} fill={isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isCurrent ? 2.5 : 2} />
+            {(i % 3 === 0 || i === data.length - 1) && (
+              <text x={p.x} y={height - 2} textAnchor="middle" fill="#94a3b8" fontSize="10" fontFamily="monospace">{p.label}</text>
+            )}
+            {isCurrent && <text x={p.x} y={p.y - 10} textAnchor="middle" fill="#6366f1" fontSize="11" fontWeight="700" fontFamily="monospace">{p.count}</text>}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ---- 水平条形图 ----
+function HorizontalBar({ label, value, max, color = '#6366f1' }) {
+  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  return (
+    <div style={{ marginBottom: '10px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '13px' }}>
+        <span style={{ fontFamily: 'monospace', fontWeight: '600', color: '#1e293b' }}>{label}</span>
+        <span style={{ fontFamily: 'monospace', color: '#64748b' }}>{value.toLocaleString()}</span>
+      </div>
+      <div style={{ backgroundColor: '#f1f5f9', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, borderRadius: '4px', background: color, transition: 'width 0.5s ease' }} />
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const [quota, setQuota] = useState(null);
   const [health, setHealth] = useState(null);
+  const [errors, setErrors] = useState(null);
+  const [timeline, setTimeline] = useState(null);
+  const [clients, setClients] = useState(null);
+  const [recent, setRecent] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [countdown, setCountdown] = useState(getTimeUntilReset());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const fetchData = useCallback(async () => {
     try {
-      const [quotaRes, healthRes] = await Promise.all([
+      const [quotaRes, healthRes, errorsRes, timelineRes, clientsRes, recentRes] = await Promise.all([
         fetch('/api/quota').then(r => r.json()),
         fetch('/api/health').then(r => r.json()).catch(() => null),
+        fetch('/api/errors').then(r => r.json()).catch(() => null),
+        fetch('/api/timeline').then(r => r.json()).catch(() => null),
+        fetch('/api/clients').then(r => r.json()).catch(() => null),
+        fetch('/api/recent').then(r => r.json()).catch(() => null),
       ]);
       setQuota(quotaRes);
       setHealth(healthRes);
+      setErrors(errorsRes);
+      setTimeline(timelineRes);
+      setClients(clientsRes);
+      setRecent(recentRes);
       setLastUpdate(new Date());
     } catch (e) {
       console.error('Fetch error:', e);
@@ -31,7 +142,16 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, [fetchData]);
 
-  // Compute global stats from quota data
+  // 模型分布：从 quota 数据聚合
+  const modelDistribution = useMemo(() => {
+    if (!quota?.data) return [];
+    const maxUsed = Math.max(...quota.data.map(d => d.used), 1);
+    const colors = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8'];
+    return quota.data
+      .map((d, i) => ({ label: shortModel(d.model), value: d.used, max: maxUsed, color: colors[i % colors.length] }))
+      .sort((a, b) => b.value - a.value);
+  }, [quota]);
+
   const globalStats = quota?.data ? quota.data.reduce((acc, item) => {
     acc.totalUsed += item.used;
     acc.totalLimit += item.limit;
@@ -56,6 +176,15 @@ export default function DashboardPage() {
   }
 
   const systemOk = health?.status === 'ok';
+  const hasErrors = errors?.errors?.length > 0;
+  const hasTimeline = timeline?.timeline?.length > 0;
+  const hasClients = clients?.clients?.length > 0;
+  const hasRecent = recent?.recent?.length > 0;
+  const totalRetries = recent?.retries || 0;
+  const peakHour = hasTimeline
+    ? timeline.timeline.reduce((max, d) => d.count > max.count ? d : max, { count: 0 })
+    : null;
+  const clientMax = hasClients ? Math.max(...clients.clients.map(c => c.requests), 1) : 1;
 
   return (
     <div style={pageStyle}>
@@ -71,73 +200,243 @@ export default function DashboardPage() {
                 : 'Monitoring your proxy status and quota usage'}
             </p>
           </div>
-          <button onClick={fetchData} style={refreshBtnStyle} title="Refresh now">
-            &#x21bb;
-          </button>
+          <button onClick={fetchData} style={refreshBtnStyle} title="Refresh now">&#x21bb;</button>
         </header>
 
         {/* Global Status Bar */}
         <div style={statusBarStyle}>
-          <div style={statusItemStyle}>
-            <div style={{ ...statusDotStyle, backgroundColor: systemOk ? '#22c55e' : '#ef4444', boxShadow: systemOk ? '0 0 8px rgba(34,197,94,0.5)' : '0 0 8px rgba(239,68,68,0.5)' }} />
-            <div>
-              <div style={statusLabelStyle}>System</div>
-              <div style={{ ...statusValueStyle, color: systemOk ? '#166534' : '#991b1b' }}>
-                {systemOk ? 'Online' : 'Offline'}
-              </div>
-            </div>
-          </div>
-
+          <StatusDot label="System" ok={systemOk} okText="Online" failText="Offline" />
           <div style={statusDividerStyle} />
-
-          <div style={statusItemStyle}>
-            <div style={statusEmojiStyle}>{}</div>
-            <div>
-              <div style={statusLabelStyle}>Total Requests</div>
-              <div style={statusValueStyle}>{(quota?.globalRequests || 0).toLocaleString()}</div>
-            </div>
-          </div>
-
+          <StatusEmoji emoji="&#x1F4C8;" label="Total Requests" value={(quota?.globalRequests || 0).toLocaleString()} />
           <div style={statusDividerStyle} />
-
-          <div style={statusItemStyle}>
-            <div style={statusEmojiStyle}>{}</div>
-            <div>
-              <div style={statusLabelStyle}>Avg Latency</div>
-              <div style={statusValueStyle}>{globalAvgLatency != null ? `${globalAvgLatency}ms` : 'N/A'}</div>
-            </div>
-          </div>
-
+          <StatusEmoji emoji="&#x23F1;" label="Avg Latency" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : 'N/A'} />
           <div style={statusDividerStyle} />
-
-          <div style={statusItemStyle}>
-            <div style={statusEmojiStyle}>{}</div>
-            <div>
-              <div style={statusLabelStyle}>Error Rate</div>
-              <div style={{ ...statusValueStyle, color: (globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534' }}>
-                {globalStats ? `${globalStats.errorRate}%` : 'N/A'}
-              </div>
-            </div>
-          </div>
+          <StatusEmoji emoji="&#x26A0;" label="Error Rate" value={globalStats ? `${globalStats.errorRate}%` : 'N/A'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
+          <div style={statusDividerStyle} />
+          <StatusEmoji emoji="&#x1F504;" label="Retries" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
+          <div style={statusDividerStyle} />
+          <StatusEmoji emoji="&#x23F0;" label="Quota Reset" value={formatCountdown(countdown)} mono />
         </div>
 
         {/* Model Cards */}
         <div style={modelGridStyle}>
-          {quota?.data?.map((item, i) => (
-            <ModelCard key={i} item={item} />
-          ))}
+          {quota?.data?.map((item, i) => <ModelCard key={i} item={item} />)}
+        </div>
+
+        {/* Row: Timeline + Model Distribution */}
+        <div style={twoColStyle}>
+          {/* Request Timeline */}
+          {hasTimeline && (
+            <div style={sectionCardStyle}>
+              <div style={sectionHeaderStyle}>
+                <h2 style={sectionTitleStyle}>
+                  <span style={{ marginRight: '8px' }}>&#x1F4CA;</span>Request Timeline
+                  <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>UTC+8 {timeline.date}</span>
+                </h2>
+                {peakHour && peakHour.count > 0 && (
+                  <span style={peakBadge}>Peak: {peakHour.label} ({peakHour.count})</span>
+                )}
+              </div>
+              <SparklineChart data={timeline.timeline} />
+            </div>
+          )}
+
+          {/* Model Distribution */}
+          {modelDistribution.length > 0 && (
+            <div style={sectionCardStyle}>
+              <div style={sectionHeaderStyle}>
+                <h2 style={sectionTitleStyle}>
+                  <span style={{ marginRight: '8px' }}>&#x1F4CB;</span>Model Distribution
+                  <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>Today</span>
+                </h2>
+                <span style={peakBadge}>{quota.data.reduce((s, d) => s + d.used, 0).toLocaleString()} total</span>
+              </div>
+              {modelDistribution.map((d, i) => (
+                <HorizontalBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Row: Clients + Retries */}
+        <div style={twoColStyle}>
+          {/* Client Source Top 10 */}
+          <div style={sectionCardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>
+                <span style={{ marginRight: '8px' }}>&#x1F511;</span>Client Sources
+                <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>
+                  {clients?.totalClients || 0} keys
+                </span>
+              </h2>
+              {clients?.totalRequests > 0 && (
+                <span style={peakBadge}>{clients.totalRequests.toLocaleString()} reqs</span>
+              )}
+            </div>
+            {hasClients ? (
+              clients.clients.map((c, i) => (
+                <HorizontalBar
+                  key={i}
+                  label={c.fingerprint}
+                  value={c.requests}
+                  max={clientMax}
+                  color={['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81'][i % 10]}
+                />
+              ))
+            ) : (
+              <EmptyState emoji="&#x1F512;" text="No client data yet" />
+            )}
+          </div>
+
+          {/* Retry Events */}
+          <div style={sectionCardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>
+                <span style={{ marginRight: '8px' }}>&#x1F504;</span>Retry Events
+              </h2>
+              <span style={{
+                ...badgeBase,
+                backgroundColor: totalRetries > 10 ? '#fef2f2' : totalRetries > 0 ? '#fffbeb' : '#f0fdf4',
+                color: totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669',
+                border: `1px solid ${totalRetries > 10 ? '#fecaca' : totalRetries > 0 ? '#fde68a' : '#bbf7d0'}`,
+              }}>
+                {totalRetries} today
+              </span>
+            </div>
+
+            {/* Retry摘要 */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+              <MiniStat label="Total Retries" value={totalRetries} color={totalRetries > 0 ? '#d97706' : '#059669'} />
+              <MiniStat label="Retry Rate" value={quota?.globalRequests > 0 ? `${((totalRetries / quota.globalRequests) * 100).toFixed(2)}%` : '0%'} color="#6366f1" />
+              <MiniStat label="Status" value={totalRetries > 10 ? 'Degraded' : totalRetries > 0 ? 'Warning' : 'Healthy'} color={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669'} />
+            </div>
+
+            {/* 最近有重试的请求 */}
+            {hasRecent && (
+              <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '8px', fontWeight: '600' }}>
+                Recent Retried Requests
+              </div>
+            )}
+            <div style={errorListStyle}>
+              {recent.recent
+                .filter(r => r.retries > 0)
+                .slice(0, 10)
+                .map((r, i) => (
+                  <div key={i} style={errorRowStyle}>
+                    <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
+                    <span style={{ ...errorStatusBadgeStyle, backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
+                      {r.retries}R
+                    </span>
+                    <span style={errorModelStyle}>{shortModel(r.model)}</span>
+                    <span style={errorLatencyStyle}>{r.latency}ms</span>
+                  </div>
+                ))
+              }
+              {recent.recent.filter(r => r.retries > 0).length === 0 && (
+                <EmptyState emoji="&#x2705;" text="No retries today" />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Row: Error Stream + Recent Requests */}
+        <div style={twoColStyle}>
+          {/* Error Stream */}
+          <div style={sectionCardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>
+                <span style={{ marginRight: '8px' }}>&#x1F534;</span>Error Stream
+              </h2>
+              {errors?.count > 0 && <span style={errorCountBadge}>{errors.count} today</span>}
+            </div>
+            {hasErrors ? (
+              <div style={errorListStyle}>
+                {errors.errors.slice(0, 15).map((entry, i) => (
+                  <div key={i} style={errorRowStyle}>
+                    <span style={errorTimeStyle}>{formatTime(entry.ts)}</span>
+                    <span style={{
+                      ...errorStatusBadgeStyle,
+                      backgroundColor: entry.status >= 500 ? '#fef2f2' : '#fffbeb',
+                      color: entry.status >= 500 ? '#dc2626' : '#d97706',
+                      border: `1px solid ${entry.status >= 500 ? '#fecaca' : '#fde68a'}`,
+                    }}>{entry.status}</span>
+                    <span style={errorModelStyle}>{shortModel(entry.model)}</span>
+                    <span style={errorLatencyStyle}>{entry.latency}ms</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState emoji="&#x2705;" text="No errors today" />
+            )}
+          </div>
+
+          {/* Recent Requests */}
+          <div style={sectionCardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>
+                <span style={{ marginRight: '8px' }}>&#x1F4E5;</span>Recent Requests
+              </h2>
+              <span style={peakBadge}>Last 30</span>
+            </div>
+            {hasRecent ? (
+              <div style={errorListStyle}>
+                {recent.recent.slice(0, 20).map((r, i) => (
+                  <div key={i} style={errorRowStyle}>
+                    <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
+                    <span style={{
+                      ...errorStatusBadgeStyle,
+                      backgroundColor: r.status >= 400 ? '#fef2f2' : '#f0fdf4',
+                      color: r.status >= 400 ? '#dc2626' : '#059669',
+                      border: `1px solid ${r.status >= 400 ? '#fecaca' : '#bbf7d0'}`,
+                    }}>{r.status}</span>
+                    <span style={errorModelStyle}>{shortModel(r.model)}</span>
+                    <span style={errorLatencyStyle}>{r.latency}ms</span>
+                    {r.retries > 0 && (
+                      <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '4px', backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
+                        {r.retries}R
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState emoji="&#x1F4ED;" text="No requests yet" />
+            )}
+          </div>
         </div>
 
         {/* Footer */}
         <footer style={footerStyle}>
-          <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>
-            GitHub
-          </a>
+          <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>GitHub</a>
           <span style={{ color: '#cbd5e1' }}>|</span>
-          <span style={{ color: '#94a3b8', fontSize: '13px' }}>
-            Gemini Transparent Proxy &middot; Vercel Edge
-          </span>
+          <span style={{ color: '#94a3b8', fontSize: '13px' }}>Gemini Transparent Proxy &middot; Vercel Edge</span>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+// ---- Sub-Components ----
+
+function StatusDot({ label, ok, okText, failText }) {
+  return (
+    <div style={statusItemStyle}>
+      <div style={{ ...statusDotStyle, backgroundColor: ok ? '#22c55e' : '#ef4444', boxShadow: ok ? '0 0 8px rgba(34,197,94,0.5)' : '0 0 8px rgba(239,68,68,0.5)' }} />
+      <div>
+        <div style={statusLabelStyle}>{label}</div>
+        <div style={{ ...statusValueStyle, color: ok ? '#166534' : '#991b1b' }}>{ok ? okText : failText}</div>
+      </div>
+    </div>
+  );
+}
+
+function StatusEmoji({ emoji, label, value, valueColor, mono }) {
+  return (
+    <div style={statusItemStyle}>
+      <div style={statusEmojiStyle}>{emoji}</div>
+      <div>
+        <div style={statusLabelStyle}>{label}</div>
+        <div style={{ ...statusValueStyle, color: valueColor || '#0f172a', fontFamily: mono ? 'monospace' : undefined, fontSize: mono ? '16px' : undefined, letterSpacing: mono ? '0.05em' : undefined }}>{value}</div>
       </div>
     </div>
   );
@@ -151,45 +450,24 @@ function ModelCard({ item }) {
 
   return (
     <div style={cardStyle}>
-      {/* Model Name & Usage Count */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
         <h3 style={cardModelNameStyle}>{item.model}</h3>
         <span style={cardUsageStyle}>
           {item.used.toLocaleString()} <span style={{ color: '#94a3b8' }}>/ {item.limit.toLocaleString()}</span>
         </span>
       </div>
-
-      {/* Progress Bar */}
       <div style={progressTrackStyle}>
-        <div style={{
-          ...progressFillStyle,
-          width: `${percent}%`,
-          background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : '#818cf8'})`,
-        }} />
+        <div style={{ ...progressFillStyle, width: `${percent}%`, background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : '#818cf8'})` }} />
       </div>
-
-      {/* Percentage Label */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', marginBottom: '14px' }}>
-        <span style={{ fontSize: '13px', fontWeight: '600', color: barColor }}>
-          {percent.toFixed(1)}%
-        </span>
+        <span style={{ fontSize: '13px', fontWeight: '600', color: barColor }}>{percent.toFixed(1)}%</span>
         <span style={{ fontSize: '12px', color: '#94a3b8' }}>
           {item.limit - item.used > 0 ? `${(item.limit - item.used).toLocaleString()} remaining` : 'Quota exhausted'}
         </span>
       </div>
-
-      {/* Latency & Error Tags */}
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        <Tag
-          label="Latency"
-          value={item.avgLatency != null ? `${item.avgLatency}ms` : 'N/A'}
-          color={item.avgLatency != null && item.avgLatency > 3000 ? '#dc2626' : item.avgLatency != null && item.avgLatency > 1500 ? '#d97706' : '#059669'}
-        />
-        <Tag
-          label="Errors"
-          value={item.errorRate != null ? `${item.errorRate}%` : '0%'}
-          color={(item.errorRate || 0) > 5 ? '#dc2626' : (item.errorRate || 0) > 1 ? '#d97706' : '#059669'}
-        />
+        <Tag label="Latency" value={item.avgLatency != null ? `${item.avgLatency}ms` : 'N/A'} color={item.avgLatency != null && item.avgLatency > 3000 ? '#dc2626' : item.avgLatency != null && item.avgLatency > 1500 ? '#d97706' : '#059669'} />
+        <Tag label="Errors" value={item.errorRate != null ? `${item.errorRate}%` : '0%'} color={(item.errorRate || 0) > 5 ? '#dc2626' : (item.errorRate || 0) > 1 ? '#d97706' : '#059669'} />
       </div>
     </div>
   );
@@ -197,197 +475,72 @@ function ModelCard({ item }) {
 
 function Tag({ label, value, color }) {
   return (
-    <span style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '4px',
-      padding: '3px 10px',
-      borderRadius: '6px',
-      fontSize: '12px',
-      fontFamily: 'monospace',
-      backgroundColor: `${color}11`,
-      color: color,
-      border: `1px solid ${color}33`,
-    }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'monospace', backgroundColor: `${color}11`, color, border: `1px solid ${color}33` }}>
       <span style={{ opacity: 0.7 }}>{label}</span>
       <span style={{ fontWeight: '600' }}>{value}</span>
     </span>
   );
 }
 
+function MiniStat({ label, value, color }) {
+  return (
+    <div style={{ flex: 1, padding: '12px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', textAlign: 'center' }}>
+      <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px', fontWeight: '500' }}>{label}</div>
+      <div style={{ fontSize: '18px', fontWeight: '700', color, fontFamily: 'monospace' }}>{value}</div>
+    </div>
+  );
+}
+
+function EmptyState({ emoji, text }) {
+  return (
+    <div style={emptyStateStyle}>
+      <span style={{ fontSize: '24px', marginBottom: '8px' }}>{emoji}</span>
+      <span style={{ color: '#94a3b8', fontWeight: '600' }}>{text}</span>
+    </div>
+  );
+}
+
 // ===================== Styles =====================
 
-const pageStyle = {
-  backgroundColor: '#f1f5f9',
-  minHeight: '100vh',
-  padding: '32px 20px',
-  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-  color: '#1e293b',
-};
+const pageStyle = { backgroundColor: '#f1f5f9', minHeight: '100vh', padding: '32px 20px', fontFamily: 'Inter, system-ui, -apple-system, sans-serif', color: '#1e293b' };
+const centerStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' };
+const spinnerStyle = { width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' };
+const headerStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' };
+const titleStyle = { fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.025em' };
+const subtitleStyle = { color: '#64748b', fontSize: '14px', marginTop: '4px', margin: 0 };
+const refreshBtnStyle = { width: '40px', height: '40px', borderRadius: '12px', border: '1px solid #e2e8f0', backgroundColor: 'white', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1', transition: 'all 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' };
 
-const centerStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: '100vh',
-};
+const statusBarStyle = { display: 'flex', alignItems: 'center', backgroundColor: 'white', borderRadius: '16px', padding: '20px 28px', marginBottom: '28px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', flexWrap: 'wrap' };
+const statusItemStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 20px' };
+const statusDotStyle = { width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0 };
+const statusEmojiStyle = { fontSize: '20px', flexShrink: 0 };
+const statusDividerStyle = { width: '1px', height: '36px', backgroundColor: '#e2e8f0', flexShrink: 0 };
+const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.05em' };
+const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
 
-const spinnerStyle = {
-  width: '40px',
-  height: '40px',
-  border: '3px solid #e2e8f0',
-  borderTopColor: '#6366f1',
-  borderRadius: '50%',
-  animation: 'spin 0.8s linear infinite',
-};
+const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px', marginBottom: '28px' };
+const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' };
 
-const headerStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  marginBottom: '24px',
-};
+const cardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
+const cardModelNameStyle = { fontSize: '15px', fontWeight: '700', color: '#1e293b', margin: 0, fontFamily: 'monospace' };
+const cardUsageStyle = { fontSize: '16px', fontWeight: '700', color: '#6366f1' };
+const progressTrackStyle = { backgroundColor: '#f1f5f9', height: '8px', borderRadius: '4px', overflow: 'hidden' };
+const progressFillStyle = { height: '100%', borderRadius: '4px', transition: 'width 0.6s ease' };
 
-const titleStyle = {
-  fontSize: '28px',
-  fontWeight: '800',
-  color: '#0f172a',
-  margin: 0,
-  letterSpacing: '-0.025em',
-};
+const sectionCardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
+const sectionHeaderStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' };
+const sectionTitleStyle = { fontSize: '18px', fontWeight: '700', color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center' };
+const peakBadge = { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: '20px', backgroundColor: '#eef2ff', color: '#6366f1', fontSize: '13px', fontWeight: '600', border: '1px solid #c7d2fe' };
+const badgeBase = { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: '600' };
 
-const subtitleStyle = {
-  color: '#64748b',
-  fontSize: '14px',
-  marginTop: '4px',
-  margin: 0,
-};
+const errorCountBadge = { ...badgeBase, backgroundColor: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' };
+const errorListStyle = { display: 'flex', flexDirection: 'column', gap: '8px' };
+const errorRowStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', fontFamily: 'monospace', fontSize: '13px' };
+const errorTimeStyle = { color: '#94a3b8', fontSize: '12px', minWidth: '70px' };
+const errorStatusBadgeStyle = { padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', minWidth: '40px', textAlign: 'center' };
+const errorModelStyle = { color: '#475569', fontWeight: '600', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+const errorLatencyStyle = { color: '#94a3b8', fontSize: '12px', textAlign: 'right', minWidth: '60px' };
 
-const refreshBtnStyle = {
-  width: '40px',
-  height: '40px',
-  borderRadius: '12px',
-  border: '1px solid #e2e8f0',
-  backgroundColor: 'white',
-  fontSize: '20px',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#6366f1',
-  transition: 'all 0.2s',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-};
-
-const statusBarStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  backgroundColor: 'white',
-  borderRadius: '16px',
-  padding: '20px 28px',
-  marginBottom: '28px',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-  border: '1px solid #e2e8f0',
-  gap: '0',
-  flexWrap: 'wrap',
-};
-
-const statusItemStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '12px',
-  padding: '4px 20px',
-};
-
-const statusDotStyle = {
-  width: '10px',
-  height: '10px',
-  borderRadius: '50%',
-  flexShrink: 0,
-};
-
-const statusEmojiStyle = {
-  fontSize: '20px',
-  flexShrink: 0,
-};
-
-const statusDividerStyle = {
-  width: '1px',
-  height: '36px',
-  backgroundColor: '#e2e8f0',
-  flexShrink: 0,
-};
-
-const statusLabelStyle = {
-  fontSize: '12px',
-  color: '#94a3b8',
-  fontWeight: '500',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-};
-
-const statusValueStyle = {
-  fontSize: '18px',
-  fontWeight: '700',
-  color: '#0f172a',
-};
-
-const modelGridStyle = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
-  gap: '16px',
-  marginBottom: '40px',
-};
-
-const cardStyle = {
-  backgroundColor: 'white',
-  borderRadius: '16px',
-  padding: '24px',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-  border: '1px solid #e2e8f0',
-  transition: 'box-shadow 0.2s',
-};
-
-const cardModelNameStyle = {
-  fontSize: '15px',
-  fontWeight: '700',
-  color: '#1e293b',
-  margin: 0,
-  fontFamily: 'monospace',
-};
-
-const cardUsageStyle = {
-  fontSize: '16px',
-  fontWeight: '700',
-  color: '#6366f1',
-};
-
-const progressTrackStyle = {
-  backgroundColor: '#f1f5f9',
-  height: '8px',
-  borderRadius: '4px',
-  overflow: 'hidden',
-};
-
-const progressFillStyle = {
-  height: '100%',
-  borderRadius: '4px',
-  transition: 'width 0.6s ease',
-};
-
-const footerStyle = {
-  display: 'flex',
-  justifyContent: 'center',
-  alignItems: 'center',
-  gap: '12px',
-  paddingTop: '20px',
-  borderTop: '1px solid #e2e8f0',
-};
-
-const footerLinkStyle = {
-  color: '#6366f1',
-  textDecoration: 'none',
-  fontSize: '13px',
-  fontWeight: '500',
-};
+const emptyStateStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', gap: '8px' };
+const footerStyle = { display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', paddingTop: '20px', borderTop: '1px solid #e2e8f0' };
+const footerLinkStyle = { color: '#6366f1', textDecoration: 'none', fontSize: '13px', fontWeight: '500' };

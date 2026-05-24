@@ -7,7 +7,7 @@ export async function GET() {
     deploy_timestamp: new Date().toISOString(),
     proxyBase: process.env.NEXT_PUBLIC_BASE_URL || 'https://api.170909.xyz',
     defaultModel: process.env.DEFAULT_MODEL || 'gemma-4-31b-it',
-    modelsCount: 18,
+    modelsCount: 5,
     features: {
       streaming: true,
       openAICompat: true,
