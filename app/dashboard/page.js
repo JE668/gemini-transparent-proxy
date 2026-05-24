@@ -24,8 +24,14 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: 'gemma-4-31b-it', messages: [{ role: 'user', content: prompt }] })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gemma-4-31b-it',
+          messages: [{ role: 'user', content: prompt }]
+        })
       });
       const data = await res.json();
       setTestResult(JSON.stringify(data, null, 2));
@@ -43,15 +49,15 @@ export default function DashboardPage() {
   }
 
   return (
-    <div style={{ 
-      backgroundColor: '#f8fafc', 
-      minHeight: '100vh', 
-      padding: '2rem 1rem', 
+    <div style={{
+      backgroundColor: '#f8fafc',
+      minHeight: '100vh',
+      padding: '2rem 1rem',
       fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
       color: '#1e293b'
     }}>
       <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
-        
+
         <header style={{ marginBottom: '2.5rem', textAlign: 'center' }}>
           <h1 style={{ fontSize: '2.5rem', fontWeight: '800', margin: '0 0 0.5rem 0', color: '#0f172a', letterSpacing: '-0.025em' }}>
             Gemini Proxy <span style={{ color: '#4f46e5' }}>Dashboard</span> 🦞
@@ -59,13 +65,13 @@ export default function DashboardPage() {
           <p style={{ color: '#64748b', fontSize: '1.1rem' }}>实时监控您的代理运行状态与配额消耗</p>
         </header>
 
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-          gap: '1.5rem', 
-          marginBottom: '2.5rem' 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gap: '1.5rem',
+          marginBottom: '2.5rem'
         }}>
-          
+
           <div style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={cardTitleStyle}>系统状态</h3>
@@ -73,8 +79,8 @@ export default function DashboardPage() {
             </div>
             {health ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div style={{ 
-                  width: '12px', height: '12px', borderRadius: '50%', 
+                <div style={{
+                  width: '12px', height: '12px', borderRadius: '50%',
                   backgroundColor: health.status === 'ok' ? '#22c55e' : '#ef4444',
                   boxShadow: health.status === 'ok' ? '0 0 8px #22c55e' : '0 0 8px #ef4444',
                   animation: health.status === 'ok' ? 'pulse 2s infinite' : 'none'
@@ -109,11 +115,12 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', 
-          gap: '1.5rem' 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
+          gap: '1.5rem'
         }}>
+
           <div style={{ ...cardStyle, gridRow: 'span 2' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={cardTitleStyle}>模型性能与配额</h3>
@@ -128,10 +135,10 @@ export default function DashboardPage() {
                       <span style={{ color: '#64748b' }}>{item.used} / {item.limit}</span>
                     </div>
                     <div style={{ background: '#e2e8f0', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ 
+                      <div style={{
                         background: `linear-gradient(90deg, ${item.percent > 90 ? '#ef4444' : item.percent > 70 ? '#f59e0b' : '#3b82f6'}, #6366f1)`,
-                        width: `${Math.min(item.percent, 100)}%`, 
-                        height: '100%', 
+                        width: `${Math.min(item.percent, 100)}%`,
+                        height: '100%',
                         transition: 'width 0.5s ease'
                       }} />
                     </div>
@@ -151,39 +158,51 @@ export default function DashboardPage() {
               <div style={{ fontSize: '1.5rem' }}>🧪</div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <textarea 
-                rows=\"3\" 
-                style={{ 
-                  width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', 
+              <textarea
+                rows={3}
+                style={{
+                  width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0',
                   fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s',
                   boxSizing: 'border-box'
-                }} 
+                }}
                 onFocus={(e) => e.target.style.borderColor = '#4f46e5'}
                 onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                value={prompt} 
-                onChange={e => setPrompt(e.target.value)} 
-                placeholder=\"输入一条测试消息...\"\n              />
-              <button 
-                onClick={testAPI} 
-                style={{ 
-                  padding: '12px', background: '#4f46e5', color: 'white', border: 'none', 
-                  borderRadius: '12px', fontWeight: '600', cursor: 'pointer', 
-                  transition: 'background 0.2s', boxShadow: '0 4px 6px -1px rgba(79, 70, 229, 0.3)'\n                }}\n                onMouseEnter={(e) => e.target.style.background = '#4338ca'}\n                onMouseLeave={(e) => e.target.style.background = '#4f46e5'}\n              >\n                发送测试请求\n              </button>
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                placeholder="输入一条测试消息..."
+              />
+              <button
+                onClick={testAPI}
+                style={{
+                  padding: '12px', background: '#4f46e5', color: 'white', border: 'none',
+                  borderRadius: '12px', fontWeight: '600', cursor: 'pointer',
+                  transition: 'background 0.2s', boxShadow: '0 4px 6px -1px rgba(79, 70, 229, 0.3)'
+                }}
+                onMouseEnter={(e) => e.target.style.background = '#4338ca'}
+                onMouseLeave={(e) => e.target.style.background = '#4f46e5'}
+              >
+                发送测试请求
+              </button>
               {testResult && (
-                <pre style={{ 
-                  background: '#1e293b', color: '#e2e8f0', padding: '1rem', 
-                  borderRadius: '12px', marginTop: '1rem', overflowX: 'auto', 
+                <pre style={{
+                  background: '#1e293b', color: '#e2e8f0', padding: '1rem',
+                  borderRadius: '12px', marginTop: '1rem', overflowX: 'auto',
                   fontSize: '0.8rem', lineHeight: '1.4', maxHeight: '200px'
-                }}>\n                  {testResult}\n                </pre>\n              )}\n            </div>\n          </div>
+                }}>
+                  {testResult}
+                </pre>
+              )}
+            </div>
+          </div>
 
           <div style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={cardTitleStyle}>配置概览</h3>
               <div style={{ fontSize: '1.5rem' }}>📄</div>
             </div>
-            <pre style={{ 
-              background: '#f1f5f9', padding: '1rem', borderRadius: '12px', 
-              fontSize: '0.85rem', color: '#475569', overflowX: 'auto', 
+            <pre style={{
+              background: '#f1f5f9', padding: '1rem', borderRadius: '12px',
+              fontSize: '0.85rem', color: '#475569', overflowX: 'auto',
               border: '1px solid #e2e8f0'
             }}>
               {config ? JSON.stringify(config, null, 2) : '加载中...'}
@@ -193,8 +212,8 @@ export default function DashboardPage() {
 
         <footer style={{ marginTop: '3rem', textAlign: 'center', paddingBottom: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', fontSize: '0.95rem' }}>
-            <a href=\"https://ai.google.dev/gemini-api/docs\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>🌐 官方文档</a>
-            <a href=\"https://github.com/JE668/gemini-transparent-proxy\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>💻 GitHub 仓库</a>
+            <a href="https://ai.google.dev/gemini-api/docs" target="_blank" rel="noopener noreferrer" style={linkStyle}>🌐 官方文档</a>
+            <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={linkStyle}>💻 GitHub 仓库</a>
           </div>
           <p style={{ marginTop: '1.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>
             &copy; {new Date().getFullYear()} Gemini Transparent Proxy | Powered by Vercel Edge

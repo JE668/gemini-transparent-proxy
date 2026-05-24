@@ -12,26 +12,24 @@ export async function GET() {
   try {
     const date = getQuotaDate();
     const globalUsed = await redis.get(`quota:global:${date}`) || 0;
-    
     const quotaData = [];
 
     for (const model of HIGH_QUOTA_MODELS) {
       const used = await redis.get(`quota:${date}:${model.id}`) || 0;
-      const limit = model.limit || 1000; 
+      const limit = model.limit || 1000;
       const percent = parseFloat(((used / limit) * 100).toFixed(2));
-      
-      // 获取该模型的最近延迟数据
+
       const latencies = await redis.lrange(`latency:${model.id}`, 0, -1);
-      const avgLatency = latencies.length > 0 
+      const avgLatency = latencies.length > 0
         ? Math.round(latencies.reduce((a, b) => a + parseInt(b), 0) / latencies.length)
         : null;
 
-      // 获取该模型的错误分布 (仅针对今日)
-      // 简单实现：假设 200 是成功，其他是失败
       const successCount = await redis.get(`status:${date}:200`) || 0;
-      const errorCount = (await redis.get(`status:${date}:500`) || 0) + (await redis.get(`status:${date}:502`) || 0);
-      const errorRate = (successCount + errorCount) > 0 
-        ? parseFloat(((errorCount / (parseInt(successCount) + parseInt(errorCount))) * 100).toFixed(2))
+      const errorCount = (await redis.get(`status:${date}:500`) || 0)
+        + (await redis.get(`status:${date}:502`) || 0);
+      const total = parseInt(successCount) + parseInt(errorCount);
+      const errorRate = total > 0
+        ? parseFloat(((parseInt(errorCount) / total) * 100).toFixed(2))
         : 0;
 
       quotaData.push({
@@ -51,6 +49,8 @@ export async function GET() {
     });
   } catch (err) {
     console.error('Quota API Error:', err);
-    return Response.json({ error: '获取 Redis 数据失败: ' + err.message }, { status: 500 });
+    return Response.json({
+      error: '获取 Redis 数据失败: ' + err.message
+    }, { status: 500 });
   }
 }

@@ -11,7 +11,6 @@ const redis = new Redis({
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
-// ======================= 常量定义 =======================
 const HOP_BY_HOP_HEADERS = [
   'host', 'connection', 'keep-alive', 'proxy-authorization',
   'proxy-authenticate', 'te', 'trailers', 'transfer-encoding',
@@ -23,7 +22,6 @@ const BLOCKED_RESPONSE_HEADERS = [
   'keep-alive', 'strict-transport-security'
 ];
 
-// ======================= 辅助函数 =======================
 async function getRequestBody(req) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return undefined;
   return await req.text();
@@ -78,7 +76,6 @@ function buildResponseHeaders(response) {
   return headers;
 }
 
-// ======================= 智能重试逻辑 =======================
 async function fetchWithRetry(url, options, maxAttempts = 3) {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -102,7 +99,6 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
   throw lastError || new Error('Max retry attempts reached');
 }
 
-// ======================= 主处理器 =======================
 async function handleRequest(req) {
   const startTime = Date.now();
   try {
@@ -146,7 +142,7 @@ async function handleRequest(req) {
       } catch (e) {}
     }
     if (modelId === 'unknown') {
-      const modelMatch = targetUrl.match(/\/models\/([^\/:]+)/);
+      const modelMatch = targetUrl.match(/\/models\/([^/:]+)/);
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
       }
@@ -166,7 +162,7 @@ async function handleRequest(req) {
     Promise.all([
       redis.incr(`quota:${date}:${finalModelId}`),
       redis.incr(`quota:global:${date}`),
-      redis.incr(`proxy:heartbeat`),
+      redis.incr('proxy:heartbeat'),
       redis.incr(`status:${date}:${response.status}`),
       redis.lpush(`latency:${finalModelId}`, latency),
       redis.ltrim(`latency:${finalModelId}`, 0, 99),
