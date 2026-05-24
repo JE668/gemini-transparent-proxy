@@ -49,8 +49,139 @@ export default function DashboardPage() {
       padding: '2rem 1rem', 
       fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
       color: '#1e293b'
-    }}>\n      <div style={{ maxWidth: '1100px', margin: '0 auto' }}>\n        \n        {/* Header */}\n        <header style={{ marginBottom: '2.5rem', textAlign: 'center' }}>\n          <h1 style={{ fontSize: '2.5rem', fontWeight: '800', margin: '0 0 0.5rem 0', color: '#0f172a', letterSpacing: '-0.025em' }}>\n            Gemini Proxy <span style={{ color: '#4f46e5' }}>Dashboard</span> 🦞\n          </h1>\n          <p style={{ color: '#64748b', fontSize: '1.1rem' }}>实时监控您的代理运行状态与配额消耗</p>\n        </header>\n\n        {/* Top Stats Grid */}\n        <div style={{ \n          display: 'grid', \n          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', \n          gap: '1.5rem', \n          marginBottom: '2.5rem' \n        }}>\n          \n          {/* Health Card */}\n          <div style={cardStyle}>\n            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>\n              <h3 style={cardTitleStyle}>系统状态</h3>\n              <div style={{ fontSize: '1.5rem' }}>⚡️</div>\n            </div>\n            {health ? (\n              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>\n                <div style={{ \n                  width: '12px', height: '12px', borderRadius: '50%', \n                  backgroundColor: health.status === 'ok' ? '#22c55e' : '#ef4444',\n                  boxShadow: health.status === 'ok' ? '0 0 8px #22c55e' : '0 0 8px #ef4444',\n                  animation: health.status === 'ok' ? 'pulse 2s infinite' : 'none'\n                }} />\n                <span style={{ fontSize: '1.2rem', fontWeight: '600', color: health.status === 'ok' ? '#166534' : '#991b1b' }}>\n                  {health.status === 'ok' ? '运行正常' : '服务异常'}\n                </span>\n                <span style={{ marginLeft: 'auto', color: '#94a3b8', fontSize: '0.9rem' }}>{health.latency}ms</span>\n              </div>\n            ) : '加载中...'}\n            <style>{`@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }`}</style>\n          </div>\n\n          {/* Global Usage Card */}\n          <div style={cardStyle}>\n            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>\n              <h3 style={cardTitleStyle}>总请求量</h3>\n              <div style={{ fontSize: '1.5rem' }}>📈</div>\n            </div>\n            <div style={{ fontSize: '2rem', fontWeight: '800', color: '#4f46e5' }}>\n              {quota?.globalRequests?.toLocaleString() || 0} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 'normal' }}>requests</span>\n            </div>\n          </div>\n\n          {/* Version Card */}\n          <div style={cardStyle}>\n            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>\n              <h3 style={cardTitleStyle}>版本信息</h3>\n              <div style={{ fontSize: '1.5rem' }}>⚙️</div>\n            </div>\n            <div style={{ fontSize: '1.2rem', fontWeight: '600' }}>\n              v{config?.version || 'Unknown'} <span style={{ marginLeft: '10px', color: '#94a3b8', fontSize: '0.9rem' }}>Next.js Edge</span>\n            </div>\n          </div>\n        </div>\n\n        <div style={{ \n          display: 'grid', \n          gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', \n          gap: '1.5rem' \n        }}>\n          {/* Quota Section */}\n          <div style={{ ...cardStyle, gridRow: 'span 2' }}>\n            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>\n              <h3 style={cardTitleStyle}>模型性能与配额</h3>\n              <div style={{ fontSize: '1.5rem' }}>💎</div>\n            </div>\n            {quota?.data ? (\n              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>\n                {quota.data.map((item, i) => (\n                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>\n                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', fontWeight: '500' }}>\n                      <span>{item.model}</span>\n                      <span style={{ color: '#64748b' }}>{item.used} / {item.limit}</span>\n                    </div>\n                    <div style={{ background: '#e2e8f0', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>\n                      <div style={{ \n                        background: `linear-gradient(90deg, ${item.percent > 90 ? '#ef4444' : item.percent > 70 ? '#f59e0b' : '#3b82f6'}, #6366f1)`,\n                        width: `${Math.min(item.percent, 100)}%`, \n                        height: '100%', \n                        transition: 'width 0.5s ease'\n                      }} />\n                    </div>\n                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#64748b' }}>\n                      <span>Avg Latency: {item.avgLatency ? `${item.avgLatency}ms` : 'N/A'}</span>\n                      <span>Error Rate: {item.errorRate !== undefined ? `${item.errorRate}%` : 'N/A'}</span>\n                    </div>\n                  </div>\n                ))}\n              </div>\n            ) : '加载中...'}\n          </div>\n\n          {/* API Tester Section */}\n          <div style={cardStyle}>\n            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>\n              <h3 style={cardTitleStyle}>快捷测试</h3>\n              <div style={{ fontSize: '1.5rem' }}>🧪</div>\n            </div>\n            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>\n              <textarea \n                rows=\"3\" \n                style={{ \n                  width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', \n                  fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s',\n                  boxSizing: 'border-box'\n                }} \n                onFocus={(e) => e.target.style.borderColor = '#4f46e5'}\n                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}\n                value={prompt} \n                onChange={e => setPrompt(e.target.value)} \n                placeholder=\"输入一条测试消息...\"\n              />\n              <button \n                onClick={testAPI} \n                style={{ \n                  padding: '12px', background: '#4f46e5', color: 'white', border: 'none', \n                  borderRadius: '12px', fontWeight: '600', cursor: 'pointer', \n                  transition: 'background 0.2s', boxShadow: '0 4px 6px -1px rgba(79, 70, 229, 0.3)'\n                }}\n                onMouseEnter={(e) => e.target.style.background = '#4338ca'}\n                onMouseLeave={(e) => e.target.style.background = '#4f46e5'}\n              >\n                发送测试请求\n              </button>\n              {testResult && (\n                <pre style={{ \n                  background: '#1e293b', color: '#e2e8f0', padding: '1rem', \n                  borderRadius: '12px', marginTop: '1rem', overflowX: 'auto', \n                  fontSize: '0.8rem', lineHeight: '1.4', maxHeight: '200px'\n                }}>\n                  {testResult}\n                </pre>\n              )}\n            </div>\n          </div>\n\n          {/* Config Section */}\n          <div style={cardStyle}>\n            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>\n              <h3 style={cardTitleStyle}>配置概览</h3>\n              <div style={{ fontSize: '1.5rem' }}>📄</div>\n            </div>\n            <pre style={{ \n              background: '#f1f5f9', padding: '1rem', borderRadius: '12px', \n              fontSize: '0.85rem', color: '#475569', overflowX: 'auto', \n              border: '1px solid #e2e8f0'\n            }}>\n              {config ? JSON.stringify(config, null, 2) : '加载中...'}\n            </pre>\n          </div>\n        </div>\n\n        {/* Footer Links */}\n        <footer style={{ marginTop: '3rem', textAlign: 'center', paddingBottom: '2rem' }}>\n          <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', fontSize: '0.95rem' }}>\n            <a href=\"https://ai.google.dev/gemini-api/docs\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>🌐 官方文档</a>\n            <a href=\"https://github.com/JE668/gemini-transparent-proxy\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>💻 GitHub 仓库</a>\n          </div>\n          <p style={{ marginTop: '1.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>\n            &copy; {new Date().getFullYear()} Gemini Transparent Proxy | Powered by Vercel Edge\n          </p>
-        </footer>\n      </div>\n    </div>\n  );\n}\n\nconst cardStyle = {\n  backgroundColor: 'white',\n  padding: '1.5rem',\n  borderRadius: '20px',\n  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02)',\n  border: '1px solid #f1f5f9',\n};\n\nconst cardTitleStyle = {\n  fontSize: '1.1rem',
-  fontWeight: '700',
-  color: '#475569',
-  margin: 0,\n};\n\nconst linkStyle = {\n  color: '#4f46e5',\n  textDecoration: 'none',\n  fontWeight: '500',\n  transition: 'color 0.2s',\n};\nEOF
+    }}>
+      <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+        
+        <header style={{ marginBottom: '2.5rem', textAlign: 'center' }}>
+          <h1 style={{ fontSize: '2.5rem', fontWeight: '800', margin: '0 0 0.5rem 0', color: '#0f172a', letterSpacing: '-0.025em' }}>
+            Gemini Proxy <span style={{ color: '#4f46e5' }}>Dashboard</span> 🦞
+          </h1>
+          <p style={{ color: '#64748b', fontSize: '1.1rem' }}>实时监控您的代理运行状态与配额消耗</p>
+        </header>
+
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
+          gap: '1.5rem', 
+          marginBottom: '2.5rem' 
+        }}>
+          
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={cardTitleStyle}>系统状态</h3>
+              <div style={{ fontSize: '1.5rem' }}>⚡️</div>
+            </div>
+            {health ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ 
+                  width: '12px', height: '12px', borderRadius: '50%', 
+                  backgroundColor: health.status === 'ok' ? '#22c55e' : '#ef4444',
+                  boxShadow: health.status === 'ok' ? '0 0 8px #22c55e' : '0 0 8px #ef4444',
+                  animation: health.status === 'ok' ? 'pulse 2s infinite' : 'none'
+                }} />
+                <span style={{ fontSize: '1.2rem', fontWeight: '600', color: health.status === 'ok' ? '#166534' : '#991b1b' }}>
+                  {health.status === 'ok' ? '运行正常' : '服务异常'}
+                </span>
+                <span style={{ marginLeft: 'auto', color: '#94a3b8', fontSize: '0.9rem' }}>{health.latency}ms</span>
+              </div>
+            ) : '加载中...'}
+            <style>{`@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }`}</style>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={cardTitleStyle}>总请求量</h3>
+              <div style={{ fontSize: '1.5rem' }}>📈</div>
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: '800', color: '#4f46e5' }}>
+              {quota?.globalRequests?.toLocaleString() || 0} <span style={{ fontSize: '1rem', color: '#94a3b8', fontWeight: 'normal' }}>requests</span>
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={cardTitleStyle}>版本信息</h3>
+              <div style={{ fontSize: '1.5rem' }}>⚙️</div>
+            </div>
+            <div style={{ fontSize: '1.2rem', fontWeight: '600' }}>
+              v{config?.version || 'Unknown'} <span style={{ marginLeft: '10px', color: '#94a3b8', fontSize: '0.9rem' }}>Next.js Edge</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', 
+          gap: '1.5rem' 
+        }}>
+          <div style={{ ...cardStyle, gridRow: 'span 2' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={cardTitleStyle}>模型性能与配额</h3>
+              <div style={{ fontSize: '1.5rem' }}>💎</div>
+            </div>
+            {quota?.data ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+                {quota.data.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', fontWeight: '500' }}>
+                      <span>{item.model}</span>
+                      <span style={{ color: '#64748b' }}>{item.used} / {item.limit}</span>
+                    </div>
+                    <div style={{ background: '#e2e8f0', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ 
+                        background: `linear-gradient(90deg, ${item.percent > 90 ? '#ef4444' : item.percent > 70 ? '#f59e0b' : '#3b82f6'}, #6366f1)`,
+                        width: `${Math.min(item.percent, 100)}%`, 
+                        height: '100%', 
+                        transition: 'width 0.5s ease'
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#64748b' }}>
+                      <span>Avg Latency: {item.avgLatency ? `${item.avgLatency}ms` : 'N/A'}</span>
+                      <span>Error Rate: {item.errorRate !== undefined ? `${item.errorRate}%` : 'N/A'}</span>
+                    </div>
+                  </div>
+                ))}\n              </div>\n            ) : '加载中...'}\n          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={cardTitleStyle}>快捷测试</h3>
+              <div style={{ fontSize: '1.5rem' }}>🧪</div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <textarea 
+                rows=\"3\" 
+                style={{ 
+                  width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', 
+                  fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s',
+                  boxSizing: 'border-box'
+                }} 
+                onFocus={(e) => e.target.style.borderColor = '#4f46e5'}
+                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+                value={prompt} 
+                onChange={e => setPrompt(e.target.value)} 
+                placeholder=\"输入一条测试消息...\"\n              />
+              <button 
+                onClick={testAPI} 
+                style={{ 
+                  padding: '12px', background: '#4f46e5', color: 'white', border: 'none', 
+                  borderRadius: '12px', fontWeight: '600', cursor: 'pointer', 
+                  transition: 'background 0.2s', boxShadow: '0 4px 6px -1px rgba(79, 70, 229, 0.3)'\n                }}\n                onMouseEnter={(e) => e.target.style.background = '#4338ca'}\n                onMouseLeave={(e) => e.target.style.background = '#4f46e5'}\n              >\n                发送测试请求\n              </button>
+              {testResult && (
+                <pre style={{ 
+                  background: '#1e293b', color: '#e2e8f0', padding: '1rem', 
+                  borderRadius: '12px', marginTop: '1rem', overflowX: 'auto', 
+                  fontSize: '0.8rem', lineHeight: '1.4', maxHeight: '200px'
+                }}>\n                  {testResult}\n                </pre>\n              )}\n            </div>\n          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={cardTitleStyle}>配置概览</h3>
+              <div style={{ fontSize: '1.5rem' }}>📄</div>
+            </div>
+            <pre style={{ 
+              background: '#f1f5f9', padding: '1rem', borderRadius: '12px', 
+              fontSize: '0.85rem', color: '#475569', overflowX: 'auto', 
+              border: '1px solid #e2e8f0'
+            }}>\n              {config ? JSON.stringify(config, null, 2) : '加载中...'}\n            </pre>
+          </div>\n        </div>\n\n        <footer style={{ marginTop: '3rem', textAlign: 'center', paddingBottom: '2rem' }}>\n          <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', fontSize: '0.95rem' }}>\n            <a href=\"https://ai.google.dev/gemini-api/docs\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>🌐 官方文档</a>\n            <a href=\"https://github.com/JE668/gemini-transparent-proxy\" target=\"_blank\" rel=\"noopener noreferrer\" style={linkStyle}>💻 GitHub 仓库</a>\n          </div>\n          <p style={{ marginTop: '1.5rem', color: '#94a3b8', fontSize: '0.85rem' }}>\n            &copy; {new Date().getFullYear()} Gemini Transparent Proxy | Powered by Vercel Edge\n          </p>\n        </footer>\n      </div>\n    </div>\n  );\n}\n\nconst cardStyle = {\n  backgroundColor: 'white',\n  padding: '1.5rem',\n  borderRadius: '20px',\n  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02)',\n  border: '1px solid #f1f5f9',\n};\n\nconst cardTitleStyle = {\n  fontSize: '1.1rem',\n  fontWeight: '700',
+  color: '#475569',\n  margin: 0,\n};\n\nconst linkStyle = {\n  color: '#4f46e5',\n  textDecoration: 'none',\n  fontWeight: '500',\n  transition: 'color 0.2s',\n};\nEOF

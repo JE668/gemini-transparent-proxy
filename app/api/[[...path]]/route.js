@@ -84,12 +84,9 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(url, options);
-      
-      // 只有 5xx 错误才触发重试
       if (response.status >= 500 && response.status <= 599) {
         console.warn(`[Proxy] Attempt ${attempt} failed with status ${response.status}. Retrying...`);
         if (attempt < maxAttempts) {
-          // 指数退避: 1s, 2s
           await new Promise(resolve => setTimeout(resolve, attempt * 1000));
           continue;
         }
@@ -149,13 +146,12 @@ async function handleRequest(req) {
       } catch (e) {}
     }
     if (modelId === 'unknown') {
-      const modelMatch = targetUrl.match(/\\/models\\/([^\\/:]+)/);
+      const modelMatch = targetUrl.match(/\/models\/([^\/:]+)/);
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
       }
     }
 
-    // 使用智能重试机制发起请求
     const response = await fetchWithRetry(targetUrl, {
       method: req.method,
       headers: headers,
@@ -167,14 +163,11 @@ async function handleRequest(req) {
     const date = getQuotaDate();
     const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
 
-    // 异步记录详细遥测数据
     Promise.all([
       redis.incr(`quota:${date}:${finalModelId}`),
       redis.incr(`quota:global:${date}`),
       redis.incr(`proxy:heartbeat`),
-      // 记录状态码分布
       redis.incr(`status:${date}:${response.status}`),
-      // 记录延迟 (使用 Redis 列表存储最近 100 次延迟，用于计算平均值)
       redis.lpush(`latency:${finalModelId}`, latency),
       redis.ltrim(`latency:${finalModelId}`, 0, 99),
     ]).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
@@ -205,7 +198,6 @@ async function handleRequest(req) {
 }
 
 export const runtime = 'edge';
-
 export async function GET(req) { return handleRequest(req); }
 export async function POST(req) { return handleRequest(req); }
 export async function PUT(req) { return handleRequest(req); }
