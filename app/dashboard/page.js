@@ -56,7 +56,8 @@ function shortModel(id) {
 }
 
 // ---- SVG 折线图 ----
-function SparklineChart({ data, width = 700, height = 140 }) {
+function SparklineChart({ data, width = 700, height = 160 }) {
+  const [hovered, setHovered] = useState(null);
   if (!data || data.length === 0) return null;
   const maxVal = Math.max(...data.map(d => d.count), 1);
   const padX = 40, padY = 20;
@@ -67,6 +68,11 @@ function SparklineChart({ data, width = 700, height = 140 }) {
   const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
   const areaPath = `${linePath} L${points[points.length - 1].x},${padY + chartH} L${points[0].x},${padY + chartH} Z`;
   const currentBjHour = (new Date().getUTCHours() + 8) % 24;
+
+  // Tooltip 定位
+  const tipW = 130, tipH = 48, tipR = 8;
+  const tipX = hovered != null ? Math.min(Math.max(points[hovered].x - tipW / 2, 4), width - tipW - 4) : 0;
+  const tipY = hovered != null ? Math.max(points[hovered].y - tipH - 16, 2) : 0;
 
   return (
     <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
@@ -82,18 +88,44 @@ function SparklineChart({ data, width = 700, height = 140 }) {
       <path d={areaPath} fill="url(#areaGrad)" opacity="0.3" />
       <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6366f1" /><stop offset="100%" stopColor="#6366f1" stopOpacity="0" /></linearGradient></defs>
       <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
+      {/* 悬浮垂直辅助线 */}
+      {hovered != null && (
+        <line x1={points[hovered].x} y1={padY} x2={points[hovered].x} y2={padY + chartH} stroke="#6366f1" strokeWidth="1" strokeDasharray="4 3" opacity="0.5" />
+      )}
+
+      {/* 数据点 */}
       {points.map((p, i) => {
         const isCurrent = p.hour === currentBjHour;
+        const isHovered = hovered === i;
         return (
-          <g key={i}>
-            <circle cx={p.x} cy={p.y} r={isCurrent ? 4.5 : 3} fill={isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isCurrent ? 2.5 : 2} />
+          <g key={i}
+            onMouseEnter={() => setHovered(i)}
+            onMouseLeave={() => setHovered(null)}
+            style={{ cursor: 'pointer' }}
+          >
+            {/* 不可见的加大点击区域 */}
+            <circle cx={p.x} cy={p.y} r={12} fill="transparent" />
+            <circle cx={p.x} cy={p.y} r={isHovered ? 6 : isCurrent ? 4.5 : 3} fill={isHovered ? '#4f46e5' : isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isHovered ? 3 : isCurrent ? 2.5 : 2} style={{ transition: 'r 0.15s ease' }} />
             {(i % 3 === 0 || i === data.length - 1) && (
               <text x={p.x} y={height - 2} textAnchor="middle" fill="#94a3b8" fontSize="10" fontFamily="monospace">{p.label}</text>
             )}
-            {isCurrent && <text x={p.x} y={p.y - 10} textAnchor="middle" fill="#6366f1" fontSize="11" fontWeight="700" fontFamily="monospace">{p.count}</text>}
           </g>
         );
       })}
+
+      {/* Tooltip */}
+      {hovered != null && (
+        <g>
+          <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={tipR} fill="#1e293b" opacity="0.92" />
+          <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle" fill="#e2e8f0" fontSize="12" fontWeight="600">
+            {points[hovered].label}
+          </text>
+          <text x={tipX + tipW / 2} y={tipY + 36} textAnchor="middle" fill="#a5b4fc" fontSize="14" fontWeight="700" fontFamily="monospace">
+            {points[hovered].count} 次请求
+          </text>
+        </g>
+      )}
     </svg>
   );
 }
