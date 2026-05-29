@@ -63,17 +63,34 @@ function buildTargetUrl(pathname, search) {
   return `${GOOGLE_API_BASE}${targetPath}`;
 }
 
-function buildResponseHeaders(response) {
-  const headers = new Headers();
-  for (const [key, value] of response.headers.entries()) {
-    if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      headers.set(key, value);
-    }
-  }
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', '*');
-  return headers;
+// CORS 来源控制：配置 CORS_ALLOWED_ORIGINS 环境变量后仅允许白名单域名
+// 未配置时保持向后兼容，允许所有来源（*）
+function getCorsHeaders(req) {
+ const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+ const reqOrigin = req.headers.get('origin') || '';
+ let allowOrigin = '*';
+ if (allowedOrigins.length > 0 && reqOrigin) {
+ allowOrigin = allowedOrigins.includes(reqOrigin) ? reqOrigin : allowedOrigins[0];
+ }
+ return {
+ 'Access-Control-Allow-Origin': allowOrigin,
+ 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+ 'Access-Control-Allow-Headers': '*',
+ };
+}
+
+function buildResponseHeaders(response, req) {
+ const headers = new Headers();
+ for (const [key, value] of response.headers.entries()) {
+ if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
+ headers.set(key, value);
+ }
+ }
+ const cors = getCorsHeaders(req);
+ for (const [k, v] of Object.entries(cors)) {
+ headers.set(k, v);
+ }
+ return headers;
 }
 
 async function fetchWithRetry(url, options, maxAttempts = 3) {
@@ -111,13 +128,11 @@ async function handleRequest(req) {
 
     if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
       return new Response(JSON.stringify({ object: 'list', data: HIGH_QUOTA_MODELS }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': '*',
-        }
+      status: 200,
+      headers: {
+      'Content-Type': 'application/json',
+      ...getCorsHeaders(req),
+      }
       });
     }
 
@@ -166,7 +181,7 @@ async function handleRequest(req) {
     headers: {
     'Content-Type': 'application/json',
     'Retry-After': '60',
-    'Access-Control-Allow-Origin': '*',
+    ...getCorsHeaders(req),
     }
     });
     }
@@ -267,24 +282,22 @@ async function handleRequest(req) {
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
-      headers: buildResponseHeaders(response),
+      headers: buildResponseHeaders(response, req),
     });
   } catch (error) {
     console.error('[Proxy] Error:', error);
     return new Response(JSON.stringify({
-      error: {
-        message: `Proxy Error: ${error.message}`,
-        type: 'proxy_error',
-        code: 502
-      }
+    error: {
+    message: `Proxy Error: ${error.message}`,
+    type: 'proxy_error',
+    code: 502
+    }
     }), {
-      status: 502,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
-      }
+    status: 502,
+    headers: {
+    'Content-Type': 'application/json',
+    ...getCorsHeaders(req),
+    }
     });
   }
 }
@@ -295,12 +308,8 @@ export async function POST(req) { return handleRequest(req); }
 export async function PUT(req) { return handleRequest(req); }
 export async function DELETE(req) { return handleRequest(req); }
 export async function OPTIONS(req) {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-    },
-  });
+ return new Response(null, {
+ status: 204,
+ headers: getCorsHeaders(req),
+ });
 }
