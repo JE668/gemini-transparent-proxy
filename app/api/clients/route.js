@@ -40,6 +40,6 @@ export async function GET() {
     });
   } catch (err) {
     console.error('Clients API Error:', err);
-    return Response.json({ error: err.message }, { status: 500 });
+    return Response.json({ error: '获取客户端统计失败' }, { status: 500 });
   }
 }

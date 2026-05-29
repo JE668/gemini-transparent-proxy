@@ -38,6 +38,6 @@ export async function GET() {
     });
   } catch (err) {
     console.error('Timeline API Error:', err);
-    return Response.json({ error: err.message }, { status: 500 });
+    return Response.json({ error: '获取时间线数据失败' }, { status: 500 });
   }
 }

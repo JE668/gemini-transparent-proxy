@@ -12,7 +12,7 @@ async function checkGeminiAPI(apiKey) {
       return { status: 'error', latency, message: `HTTP ${res.status}` };
     }
   } catch (err) {
-    return { status: 'error', latency: Date.now() - start, message: err.message };
+  return { status: 'error', latency: Date.now() - start, message: '连接失败' };
   }
 }
 

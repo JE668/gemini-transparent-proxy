@@ -26,7 +26,7 @@ export async function GET() {
       errors,
     });
   } catch (err) {
-    console.error('Errors API Error:', err);
-    return Response.json({ error: err.message }, { status: 500 });
+  console.error('Errors API Error:', err);
+  return Response.json({ error: '获取错误日志失败' }, { status: 500 });
   }
 }

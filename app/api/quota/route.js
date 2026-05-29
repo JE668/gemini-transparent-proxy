@@ -50,7 +50,7 @@ export async function GET() {
   } catch (err) {
     console.error('Quota API Error:', err);
     return Response.json({
-      error: '获取 Redis 数据失败: ' + err.message
+    error: '获取配额数据失败'
     }, { status: 500 });
   }
 }

@@ -285,20 +285,25 @@ async function handleRequest(req) {
       headers: buildResponseHeaders(response, req),
     });
   } catch (error) {
-    console.error('[Proxy] Error:', error);
-    return new Response(JSON.stringify({
-    error: {
-    message: `Proxy Error: ${error.message}`,
-    type: 'proxy_error',
-    code: 502
-    }
-    }), {
-    status: 502,
-    headers: {
-    'Content-Type': 'application/json',
-    ...getCorsHeaders(req),
-    }
-    });
+  console.error('[Proxy] Error:', error);
+  // 生产环境脱敏：不暴露内部错误细节，仅返回通用信息
+  const isDev = process.env.NODE_ENV === 'development';
+  const userMessage = isDev
+  ? `Proxy Error: ${error.message}`
+  : '代理请求失败，请稍后重试';
+  return new Response(JSON.stringify({
+  error: {
+  message: userMessage,
+  type: 'proxy_error',
+  code: 502
+  }
+  }), {
+  status: 502,
+  headers: {
+  'Content-Type': 'application/json',
+  ...getCorsHeaders(req),
+  }
+  });
   }
 }
 
