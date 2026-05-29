@@ -126,14 +126,50 @@ async function handleRequest(req) {
 
     const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
     const authHeader = req.headers.get('authorization') || '';
+    let clientFingerprint = 'anon';
     if (authHeader.startsWith('Bearer ')) {
-      const apiKey = authHeader.slice(7).trim();
-      const urlWithKey = new URL(targetUrl);
-      urlWithKey.searchParams.set('key', apiKey);
-      targetUrl = urlWithKey.toString();
-      if (!isOpenAICompat) {
-        headers.delete('authorization');
-      }
+    const apiKey = authHeader.slice(7).trim();
+    const urlWithKey = new URL(targetUrl);
+    urlWithKey.searchParams.set('key', apiKey);
+    targetUrl = urlWithKey.toString();
+    if (!isOpenAICompat) {
+    headers.delete('authorization');
+    }
+    // 来源指纹（提前计算，限流也用）
+    try {
+    const keyData = new TextEncoder().encode(apiKey);
+    const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
+    const hashArr = Array.from(new Uint8Array(hashBuf));
+    clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {}
+    }
+
+    // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
+    const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '10', 10);
+    if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon') {
+    const now = Math.floor(Date.now() / 1000);
+    const windowKey = `ratelimit:${clientFingerprint}:${now}`;
+    const count = await redis.incr(windowKey);
+    if (count === 1) {
+    await redis.expire(windowKey, 120); // 最多保留 2 分钟
+    }
+    if (count > RATE_LIMIT_RPM) {
+    console.warn(`[Rate Limit] ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (current: ${count})`);
+    return new Response(JSON.stringify({
+    error: {
+    message: `请求过于频繁，每分钟最多 ${RATE_LIMIT_RPM} 次，请稍后重试`,
+    type: 'rate_limit_exceeded',
+    code: 429
+    }
+    }), {
+    status: 429,
+    headers: {
+    'Content-Type': 'application/json',
+    'Retry-After': '60',
+    'Access-Control-Allow-Origin': '*',
+    }
+    });
+    }
     }
 
     const body = await getRequestBody(req);
@@ -166,16 +202,7 @@ async function handleRequest(req) {
   // 北京时间整点小时 (0-23)，用于时间线分桶
   const bjHour = (new Date().getUTCHours() + 8) % 24;
 
-  // 来源统计：API Key fingerprint (SHA-1 前8位)
-  let clientFingerprint = 'anon';
-  if (authHeader.startsWith('Bearer ')) {
-    try {
-      const keyData = new TextEncoder().encode(authHeader.slice(7).trim());
-      const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
-      const hashArr = Array.from(new Uint8Array(hashBuf));
-      clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch {}
-  }
+  // 来源统计：clientFingerprint 已在上方限流逻辑中计算
 
   // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
   const TTL = 48 * 60 * 60; // 48 小时（秒）
