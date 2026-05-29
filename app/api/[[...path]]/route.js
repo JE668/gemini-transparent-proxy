@@ -177,56 +177,65 @@ async function handleRequest(req) {
     } catch {}
   }
 
-  const telemetryOps = [
-    redis.incr(`quota:${date}:${finalModelId}`),
-    redis.incr(`quota:global:${date}`),
-    redis.incr('proxy:heartbeat'),
-    redis.incr(`status:${date}:${response.status}`),
-    redis.lpush(`latency:${finalModelId}`, latency),
-    redis.ltrim(`latency:${finalModelId}`, 0, 99),
-    // 时间线分桶
-    redis.incr(`timeline:${date}:h${bjHour}`),
-    redis.sadd(`timeline:${date}:hours`, `h${bjHour}`),
-    // 来源统计
-    redis.incr(`clients:${date}:${clientFingerprint}`),
-    redis.sadd(`clients:${date}:keys`, clientFingerprint),
-  ];
+  // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
+  const TTL = 48 * 60 * 60; // 48 小时（秒）
+
+  const pipeline = redis.pipeline();
+  pipeline.incr(`quota:${date}:${finalModelId}`);
+  pipeline.expire(`quota:${date}:${finalModelId}`, TTL);
+  pipeline.incr(`quota:global:${date}`);
+  pipeline.expire(`quota:global:${date}`, TTL);
+  pipeline.incr('proxy:heartbeat');
+  pipeline.incr(`status:${date}:${response.status}`);
+  pipeline.expire(`status:${date}:${response.status}`, TTL);
+  pipeline.lpush(`latency:${finalModelId}`, latency);
+  pipeline.ltrim(`latency:${finalModelId}`, 0, 99);
+  pipeline.expire(`latency:${finalModelId}`, TTL);
+  // 时间线分桶
+  pipeline.incr(`timeline:${date}:h${bjHour}`);
+  pipeline.expire(`timeline:${date}:h${bjHour}`, TTL);
+  pipeline.sadd(`timeline:${date}:hours`, `h${bjHour}`);
+  pipeline.expire(`timeline:${date}:hours`, TTL);
+  // 来源统计
+  pipeline.incr(`clients:${date}:${clientFingerprint}`);
+  pipeline.expire(`clients:${date}:${clientFingerprint}`, TTL);
+  pipeline.sadd(`clients:${date}:keys`, clientFingerprint);
+  pipeline.expire(`clients:${date}:keys`, TTL);
 
   // 重试计数
   const retries = response._retries || 0;
   if (retries > 0) {
-    telemetryOps.push(redis.incr(`retries:${date}`));
+  pipeline.incr(`retries:${date}`);
+  pipeline.expire(`retries:${date}`, TTL);
   }
 
   // 最近请求摘要
   const recentEntry = JSON.stringify({
-    ts: new Date().toISOString(),
-    model: finalModelId,
-    status: response.status,
-    latency: latency,
-    retries: retries,
-    client: clientFingerprint,
+  ts: new Date().toISOString(),
+  model: finalModelId,
+  status: response.status,
+  latency: latency,
+  retries: retries,
+  client: clientFingerprint,
   });
-  telemetryOps.push(
-    redis.lpush(`recent:${date}`, recentEntry),
-    redis.ltrim(`recent:${date}`, 0, 49),
-  );
+  pipeline.lpush(`recent:${date}`, recentEntry);
+  pipeline.ltrim(`recent:${date}`, 0, 49);
+  pipeline.expire(`recent:${date}`, TTL);
 
   // 错误日志：4xx/5xx 写入 Redis List
   if (response.status >= 400) {
-    const errorEntry = JSON.stringify({
-      ts: new Date().toISOString(),
-      model: finalModelId,
-      status: response.status,
-      latency: latency,
-    });
-    telemetryOps.push(
-      redis.lpush(`errors:${date}`, errorEntry),
-      redis.ltrim(`errors:${date}`, 0, 99),
-    );
+  const errorEntry = JSON.stringify({
+  ts: new Date().toISOString(),
+  model: finalModelId,
+  status: response.status,
+  latency: latency,
+  });
+  pipeline.lpush(`errors:${date}`, errorEntry);
+  pipeline.ltrim(`errors:${date}`, 0, 99);
+  pipeline.expire(`errors:${date}`, TTL);
   }
 
-  Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+  pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     return new Response(response.body, {
       status: response.status,
