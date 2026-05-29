@@ -3,6 +3,24 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 
 const REFRESH_INTERVAL = 30000;
 
+// ---- HTTP 状态码中文解释 ----
+const HTTP_STATUS_DESC = {
+  400: '请求格式错误',
+  401: '认证失败/密钥无效',
+  403: '权限不足/访问被拒',
+  404: '资源不存在',
+  408: '请求超时',
+  429: '请求过于频繁(限流)',
+  500: '服务器内部错误',
+  502: '网关错误(上游异常)',
+  503: '服务暂不可用',
+  504: '网关超时(上游无响应)',
+};
+
+function getStatusDesc(code) {
+  return HTTP_STATUS_DESC[code] || '';
+}
+
 // ---- 配额重置倒计时 ----
 function getTimeUntilReset() {
   const now = new Date();
@@ -169,7 +187,7 @@ export default function DashboardPage() {
       <div style={pageStyle}>
         <div style={centerStyle}>
           <div style={spinnerStyle} />
-          <p style={{ color: '#64748b', marginTop: '16px' }}>Loading Dashboard...</p>
+          <p style={{ color: '#64748b', marginTop: '16px' }}>正在加载控制台...</p>
         </div>
       </div>
     );
@@ -193,29 +211,29 @@ export default function DashboardPage() {
         {/* Header */}
         <header style={headerStyle}>
           <div>
-            <h1 style={titleStyle}>Gemini Proxy <span style={{ color: '#6366f1' }}>Dashboard</span></h1>
+            <h1 style={titleStyle}>Gemini 代理 <span style={{ color: '#6366f1' }}>控制台</span></h1>
             <p style={subtitleStyle}>
               {lastUpdate
-                ? `Last updated: ${lastUpdate.toLocaleTimeString()} | Auto-refresh: ${REFRESH_INTERVAL / 1000}s`
-                : 'Monitoring your proxy status and quota usage'}
+                ? `最近更新: ${lastUpdate.toLocaleTimeString('zh-CN', { hour12: false })} | 自动刷新: ${REFRESH_INTERVAL / 1000}秒`
+                : '监控代理状态与配额使用情况'}
             </p>
           </div>
-          <button onClick={fetchData} style={refreshBtnStyle} title="Refresh now">&#x21bb;</button>
+          <button onClick={fetchData} style={refreshBtnStyle} title="立即刷新">&#x21bb;</button>
         </header>
 
         {/* Global Status Bar */}
         <div style={statusBarStyle}>
-          <StatusDot label="System" ok={systemOk} okText="Online" failText="Offline" />
+          <StatusDot label="系统状态" ok={systemOk} okText="在线" failText="离线" />
           <div style={statusDividerStyle} />
-          <StatusEmoji emoji="&#x1F4C8;" label="Total Requests" value={(quota?.globalRequests || 0).toLocaleString()} />
+          <StatusEmoji emoji="&#x1F4C8;" label="总请求数" value={(quota?.globalRequests || 0).toLocaleString()} />
           <div style={statusDividerStyle} />
-          <StatusEmoji emoji="&#x23F1;" label="Avg Latency" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : 'N/A'} />
+          <StatusEmoji emoji="&#x23F1;" label="平均延迟" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : '暂无'} />
           <div style={statusDividerStyle} />
-          <StatusEmoji emoji="&#x26A0;" label="Error Rate" value={globalStats ? `${globalStats.errorRate}%` : 'N/A'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
+          <StatusEmoji emoji="&#x26A0;" label="错误率" value={globalStats ? `${globalStats.errorRate}%` : '暂无'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
           <div style={statusDividerStyle} />
-          <StatusEmoji emoji="&#x1F504;" label="Retries" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
+          <StatusEmoji emoji="&#x1F504;" label="重试次数" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
           <div style={statusDividerStyle} />
-          <StatusEmoji emoji="&#x23F0;" label="Quota Reset" value={formatCountdown(countdown)} mono />
+          <StatusEmoji emoji="&#x23F0;" label="配额重置" value={formatCountdown(countdown)} mono />
         </div>
 
         {/* Model Cards */}
@@ -230,11 +248,11 @@ export default function DashboardPage() {
             <div style={sectionCardStyle}>
               <div style={sectionHeaderStyle}>
                 <h2 style={sectionTitleStyle}>
-                  <span style={{ marginRight: '8px' }}>&#x1F4CA;</span>Request Timeline
+                  <span style={{ marginRight: '8px' }}>&#x1F4CA;</span>请求时间线
                   <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>UTC+8 {timeline.date}</span>
                 </h2>
                 {peakHour && peakHour.count > 0 && (
-                  <span style={peakBadge}>Peak: {peakHour.label} ({peakHour.count})</span>
+                  <span style={peakBadge}>峰值: {peakHour.label} ({peakHour.count})</span>
                 )}
               </div>
               <SparklineChart data={timeline.timeline} />
@@ -246,10 +264,10 @@ export default function DashboardPage() {
             <div style={sectionCardStyle}>
               <div style={sectionHeaderStyle}>
                 <h2 style={sectionTitleStyle}>
-                  <span style={{ marginRight: '8px' }}>&#x1F4CB;</span>Model Distribution
-                  <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>Today</span>
+                  <span style={{ marginRight: '8px' }}>&#x1F4CB;</span>模型路由分布
+                  <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>今日</span>
                 </h2>
-                <span style={peakBadge}>{quota.data.reduce((s, d) => s + d.used, 0).toLocaleString()} total</span>
+                <span style={peakBadge}>{quota.data.reduce((s, d) => s + d.used, 0).toLocaleString()} 次总计</span>
               </div>
               {modelDistribution.map((d, i) => (
                 <HorizontalBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} />
@@ -264,13 +282,13 @@ export default function DashboardPage() {
           <div style={sectionCardStyle}>
             <div style={sectionHeaderStyle}>
               <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F511;</span>Client Sources
+                <span style={{ marginRight: '8px' }}>&#x1F511;</span>来源统计
                 <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>
-                  {clients?.totalClients || 0} keys
+                  {clients?.totalClients || 0} 个密钥
                 </span>
               </h2>
               {clients?.totalRequests > 0 && (
-                <span style={peakBadge}>{clients.totalRequests.toLocaleString()} reqs</span>
+                <span style={peakBadge}>{clients.totalRequests.toLocaleString()} 次请求</span>
               )}
             </div>
             {hasClients ? (
@@ -284,7 +302,7 @@ export default function DashboardPage() {
                 />
               ))
             ) : (
-              <EmptyState emoji="&#x1F512;" text="No client data yet" />
+              <EmptyState emoji="&#x1F512;" text="暂无来源数据" />
             )}
           </div>
 
@@ -292,7 +310,7 @@ export default function DashboardPage() {
           <div style={sectionCardStyle}>
             <div style={sectionHeaderStyle}>
               <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F504;</span>Retry Events
+                <span style={{ marginRight: '8px' }}>&#x1F504;</span>重试事件追踪
               </h2>
               <span style={{
                 ...badgeBase,
@@ -300,21 +318,21 @@ export default function DashboardPage() {
                 color: totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669',
                 border: `1px solid ${totalRetries > 10 ? '#fecaca' : totalRetries > 0 ? '#fde68a' : '#bbf7d0'}`,
               }}>
-                {totalRetries} today
+                今日 {totalRetries} 次
               </span>
             </div>
 
-            {/* Retry摘要 */}
+            {/* 重试摘要 */}
             <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-              <MiniStat label="Total Retries" value={totalRetries} color={totalRetries > 0 ? '#d97706' : '#059669'} />
-              <MiniStat label="Retry Rate" value={quota?.globalRequests > 0 ? `${((totalRetries / quota.globalRequests) * 100).toFixed(2)}%` : '0%'} color="#6366f1" />
-              <MiniStat label="Status" value={totalRetries > 10 ? 'Degraded' : totalRetries > 0 ? 'Warning' : 'Healthy'} color={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669'} />
+              <MiniStat label="总重试次数" value={totalRetries} color={totalRetries > 0 ? '#d97706' : '#059669'} />
+              <MiniStat label="重试率" value={quota?.globalRequests > 0 ? `${((totalRetries / quota.globalRequests) * 100).toFixed(2)}%` : '0%'} color="#6366f1" />
+              <MiniStat label="状态" value={totalRetries > 10 ? '性能下降' : totalRetries > 0 ? '需关注' : '正常'} color={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669'} />
             </div>
 
             {/* 最近有重试的请求 */}
             {hasRecent && (
               <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '8px', fontWeight: '600' }}>
-                Recent Retried Requests
+                最近重试请求
               </div>
             )}
             <div style={errorListStyle}>
@@ -325,7 +343,7 @@ export default function DashboardPage() {
                   <div key={i} style={errorRowStyle}>
                     <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
                     <span style={{ ...errorStatusBadgeStyle, backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
-                      {r.retries}R
+                      {r.retries}次重试
                     </span>
                     <span style={errorModelStyle}>{shortModel(r.model)}</span>
                     <span style={errorLatencyStyle}>{r.latency}ms</span>
@@ -333,7 +351,7 @@ export default function DashboardPage() {
                 ))
               }
               {recent.recent.filter(r => r.retries > 0).length === 0 && (
-                <EmptyState emoji="&#x2705;" text="No retries today" />
+                <EmptyState emoji="&#x2705;" text="今日无重试" />
               )}
             </div>
           </div>
@@ -345,9 +363,9 @@ export default function DashboardPage() {
           <div style={sectionCardStyle}>
             <div style={sectionHeaderStyle}>
               <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F534;</span>Error Stream
+                <span style={{ marginRight: '8px' }}>&#x1F534;</span>实时错误日志
               </h2>
-              {errors?.count > 0 && <span style={errorCountBadge}>{errors.count} today</span>}
+              {errors?.count > 0 && <span style={errorCountBadge}>今日 {errors.count} 条</span>}
             </div>
             {hasErrors ? (
               <div style={errorListStyle}>
@@ -360,13 +378,18 @@ export default function DashboardPage() {
                       color: entry.status >= 500 ? '#dc2626' : '#d97706',
                       border: `1px solid ${entry.status >= 500 ? '#fecaca' : '#fde68a'}`,
                     }}>{entry.status}</span>
+                    {getStatusDesc(entry.status) && (
+                      <span style={{ fontSize: '12px', color: entry.status >= 500 ? '#b91c1c' : '#92400e', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={getStatusDesc(entry.status)}>
+                        {getStatusDesc(entry.status)}
+                      </span>
+                    )}
                     <span style={errorModelStyle}>{shortModel(entry.model)}</span>
                     <span style={errorLatencyStyle}>{entry.latency}ms</span>
                   </div>
                 ))}
               </div>
             ) : (
-              <EmptyState emoji="&#x2705;" text="No errors today" />
+              <EmptyState emoji="&#x2705;" text="今日无错误" />
             )}
           </div>
 
@@ -374,9 +397,9 @@ export default function DashboardPage() {
           <div style={sectionCardStyle}>
             <div style={sectionHeaderStyle}>
               <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F4E5;</span>Recent Requests
+                <span style={{ marginRight: '8px' }}>&#x1F4E5;</span>最近请求快照
               </h2>
-              <span style={peakBadge}>Last 30</span>
+              <span style={peakBadge}>最近 30 条</span>
             </div>
             {hasRecent ? (
               <div style={errorListStyle}>
@@ -389,19 +412,52 @@ export default function DashboardPage() {
                       color: r.status >= 400 ? '#dc2626' : '#059669',
                       border: `1px solid ${r.status >= 400 ? '#fecaca' : '#bbf7d0'}`,
                     }}>{r.status}</span>
+                    {r.status >= 400 && getStatusDesc(r.status) && (
+                      <span style={{ fontSize: '12px', color: r.status >= 500 ? '#b91c1c' : '#92400e', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={getStatusDesc(r.status)}>
+                        {getStatusDesc(r.status)}
+                      </span>
+                    )}
                     <span style={errorModelStyle}>{shortModel(r.model)}</span>
                     <span style={errorLatencyStyle}>{r.latency}ms</span>
                     {r.retries > 0 && (
                       <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '4px', backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
-                        {r.retries}R
+                        {r.retries}次重试
                       </span>
                     )}
                   </div>
                 ))}
               </div>
             ) : (
-              <EmptyState emoji="&#x1F4ED;" text="No requests yet" />
+              <EmptyState emoji="&#x1F4ED;" text="暂无请求记录" />
             )}
+          </div>
+        </div>
+
+        {/* HTTP 状态码速查表 */}
+        <div style={sectionCardStyle}>
+          <div style={sectionHeaderStyle}>
+            <h2 style={sectionTitleStyle}>
+              <span style={{ marginRight: '8px' }}>&#x1F4D6;</span>HTTP 状态码速查
+            </h2>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+            {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => (
+              <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
+                <span style={{
+                  padding: '2px 10px',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  fontWeight: '700',
+                  fontFamily: 'monospace',
+                  minWidth: '36px',
+                  textAlign: 'center',
+                  backgroundColor: parseInt(code) >= 500 ? '#fef2f2' : parseInt(code) >= 400 ? '#fffbeb' : '#f0fdf4',
+                  color: parseInt(code) >= 500 ? '#dc2626' : parseInt(code) >= 400 ? '#d97706' : '#059669',
+                  border: `1px solid ${parseInt(code) >= 500 ? '#fecaca' : parseInt(code) >= 400 ? '#fde68a' : '#bbf7d0'}`,
+                }}>{code}</span>
+                <span style={{ fontSize: '13px', color: '#475569' }}>{desc}</span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -409,7 +465,7 @@ export default function DashboardPage() {
         <footer style={footerStyle}>
           <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>GitHub</a>
           <span style={{ color: '#cbd5e1' }}>|</span>
-          <span style={{ color: '#94a3b8', fontSize: '13px' }}>Gemini Transparent Proxy &middot; Vercel Edge</span>
+          <span style={{ color: '#94a3b8', fontSize: '13px' }}>Gemini 透明代理 &middot; Vercel Edge</span>
         </footer>
       </div>
     </div>
@@ -462,12 +518,12 @@ function ModelCard({ item }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', marginBottom: '14px' }}>
         <span style={{ fontSize: '13px', fontWeight: '600', color: barColor }}>{percent.toFixed(1)}%</span>
         <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-          {item.limit - item.used > 0 ? `${(item.limit - item.used).toLocaleString()} remaining` : 'Quota exhausted'}
+          {item.limit - item.used > 0 ? `剩余 ${(item.limit - item.used).toLocaleString()}` : '配额已耗尽'}
         </span>
       </div>
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        <Tag label="Latency" value={item.avgLatency != null ? `${item.avgLatency}ms` : 'N/A'} color={item.avgLatency != null && item.avgLatency > 3000 ? '#dc2626' : item.avgLatency != null && item.avgLatency > 1500 ? '#d97706' : '#059669'} />
-        <Tag label="Errors" value={item.errorRate != null ? `${item.errorRate}%` : '0%'} color={(item.errorRate || 0) > 5 ? '#dc2626' : (item.errorRate || 0) > 1 ? '#d97706' : '#059669'} />
+        <Tag label="延迟" value={item.avgLatency != null ? `${item.avgLatency}ms` : '暂无'} color={item.avgLatency != null && item.avgLatency > 3000 ? '#dc2626' : item.avgLatency != null && item.avgLatency > 1500 ? '#d97706' : '#059669'} />
+        <Tag label="错误率" value={item.errorRate != null ? `${item.errorRate}%` : '0%'} color={(item.errorRate || 0) > 5 ? '#dc2626' : (item.errorRate || 0) > 1 ? '#d97706' : '#059669'} />
       </div>
     </div>
   );
@@ -502,7 +558,7 @@ function EmptyState({ emoji, text }) {
 
 // ===================== Styles =====================
 
-const pageStyle = { backgroundColor: '#f1f5f9', minHeight: '100vh', padding: '32px 20px', fontFamily: 'Inter, system-ui, -apple-system, sans-serif', color: '#1e293b' };
+const pageStyle = { backgroundColor: '#f1f5f9', minHeight: '100vh', padding: '32px 20px', fontFamily: 'Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif', color: '#1e293b' };
 const centerStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' };
 const spinnerStyle = { width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' };
 const headerStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' };
@@ -515,7 +571,7 @@ const statusItemStyle = { display: 'flex', alignItems: 'center', gap: '12px', pa
 const statusDotStyle = { width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0 };
 const statusEmojiStyle = { fontSize: '20px', flexShrink: 0 };
 const statusDividerStyle = { width: '1px', height: '36px', backgroundColor: '#e2e8f0', flexShrink: 0 };
-const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.05em' };
+const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', letterSpacing: '0.05em' };
 const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
 
 const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px', marginBottom: '28px' };
