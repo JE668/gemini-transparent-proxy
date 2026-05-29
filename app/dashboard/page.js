@@ -75,7 +75,18 @@ function SparklineChart({ data, width = 700, height = 160 }) {
   const tipY = hovered != null ? Math.max(points[hovered].y - tipH - 16, 2) : 0;
 
   return (
-    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+  <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', cursor: 'crosshair' }}
+  onMouseMove={(e) => {
+  const svg = e.currentTarget;
+  const rect = svg.getBoundingClientRect();
+  const scaleX = width / rect.width;
+  const mx = (e.clientX - rect.left) * scaleX;
+  let closest = 0, minDist = Infinity;
+  points.forEach((p, i) => { const d = Math.abs(p.x - mx); if (d < minDist) { minDist = d; closest = i; } });
+  if (hovered !== closest) setHovered(closest);
+  }}
+  onMouseLeave={() => setHovered(null)}
+  >
       {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
         const y = padY + chartH - ratio * chartH;
         return (
@@ -96,27 +107,21 @@ function SparklineChart({ data, width = 700, height = 160 }) {
 
       {/* 数据点 */}
       {points.map((p, i) => {
-        const isCurrent = p.hour === currentBjHour;
-        const isHovered = hovered === i;
-        return (
-          <g key={i}
-            onMouseEnter={() => setHovered(i)}
-            onMouseLeave={() => setHovered(null)}
-            style={{ cursor: 'pointer' }}
-          >
-            {/* 不可见的加大点击区域 */}
-            <circle cx={p.x} cy={p.y} r={12} fill="transparent" />
-            <circle cx={p.x} cy={p.y} r={isHovered ? 6 : isCurrent ? 4.5 : 3} fill={isHovered ? '#4f46e5' : isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isHovered ? 3 : isCurrent ? 2.5 : 2} style={{ transition: 'r 0.15s ease' }} />
-            {(i % 3 === 0 || i === data.length - 1) && (
-              <text x={p.x} y={height - 2} textAnchor="middle" fill="#94a3b8" fontSize="10" fontFamily="monospace">{p.label}</text>
-            )}
-          </g>
-        );
+      const isCurrent = p.hour === currentBjHour;
+      const isHovered = hovered === i;
+      return (
+      <g key={i}>
+      <circle cx={p.x} cy={p.y} r={isHovered ? 6 : isCurrent ? 4.5 : 3} fill={isHovered ? '#4f46e5' : isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isHovered ? 3 : isCurrent ? 2.5 : 2} style={{ transition: 'r 0.15s ease' }} />
+      {(i % 3 === 0 || i === data.length - 1) && (
+      <text x={p.x} y={height - 2} textAnchor="middle" fill="#94a3b8" fontSize="10" fontFamily="monospace">{p.label}</text>
+      )}
+      </g>
+      );
       })}
 
       {/* Tooltip */}
       {hovered != null && (
-        <g>
+      <g pointerEvents="none">
           <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={tipR} fill="#1e293b" opacity="0.92" />
           <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle" fill="#e2e8f0" fontSize="12" fontWeight="600">
             {points[hovered].label}
