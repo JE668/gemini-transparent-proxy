@@ -1,13 +1,8 @@
 // app/api/[[...path]]/route.js
 // Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
-import { Redis } from '@upstash/redis';
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+import redis from '../../../lib/redis';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
