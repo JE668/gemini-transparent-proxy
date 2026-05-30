@@ -153,15 +153,63 @@ function HorizontalBar({ label, value, max, color = '#6366f1' }) {
 }
 
 export default function DashboardPage() {
-  const [quota, setQuota] = useState(null);
-  const [health, setHealth] = useState(null);
-  const [errors, setErrors] = useState(null);
-  const [timeline, setTimeline] = useState(null);
-  const [clients, setClients] = useState(null);
-  const [recent, setRecent] = useState(null);
-  const [lastUpdate, setLastUpdate] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [countdown, setCountdown] = useState(getTimeUntilReset());
+ const [quota, setQuota] = useState(null);
+ const [health, setHealth] = useState(null);
+ const [errors, setErrors] = useState(null);
+ const [timeline, setTimeline] = useState(null);
+ const [clients, setClients] = useState(null);
+ const [recent, setRecent] = useState(null);
+ const [lastUpdate, setLastUpdate] = useState(null);
+ const [loading, setLoading] = useState(true);
+ const [countdown, setCountdown] = useState(getTimeUntilReset());
+ // 认证状态
+ const [authed, setAuthed] = useState(false);
+ const [password, setPassword] = useState('');
+ const [authError, setAuthError] = useState('');
+
+ // 从 localStorage 恢复密码
+ useEffect(() => {
+ const saved = localStorage.getItem('dashboard_token');
+ if (saved) {
+ setPassword(saved);
+ setAuthed(true);
+ }
+ }, []);
+
+ const handleLogin = async (e) => {
+ e?.preventDefault();
+ setAuthError('');
+ try {
+ const res = await fetch('/api/quota', {
+ headers: { 'Authorization': `Bearer ${password}` }
+ });
+ if (res.status === 401) {
+ setAuthError('密码错误，请重新输入');
+ return;
+ }
+ // 认证成功
+ localStorage.setItem('dashboard_token', password);
+ setAuthed(true);
+ } catch {
+ setAuthError('连接失败，请检查网络');
+ }
+ };
+
+ // 带认证的 fetch 封装
+ const authFetch = useCallback(async (url) => {
+ const res = await fetch(url, {
+ headers: { 'Authorization': `Bearer ${password}` }
+ });
+ if (res.status === 401) {
+ // 密码失效，退回登录
+ localStorage.removeItem('dashboard_token');
+ setAuthed(false);
+ setPassword('');
+ setAuthError('认证已过期，请重新输入密码');
+ return null;
+ }
+ return res;
+ }, [password]);
 
   useEffect(() => {
     const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
@@ -169,28 +217,31 @@ export default function DashboardPage() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    try {
-      const [quotaRes, healthRes, errorsRes, timelineRes, clientsRes, recentRes] = await Promise.all([
-        fetch('/api/quota').then(r => r.json()),
-        fetch('/api/health').then(r => r.json()).catch(() => null),
-        fetch('/api/errors').then(r => r.json()).catch(() => null),
-        fetch('/api/timeline').then(r => r.json()).catch(() => null),
-        fetch('/api/clients').then(r => r.json()).catch(() => null),
-        fetch('/api/recent').then(r => r.json()).catch(() => null),
-      ]);
-      setQuota(quotaRes);
-      setHealth(healthRes);
-      setErrors(errorsRes);
-      setTimeline(timelineRes);
-      setClients(clientsRes);
-      setRecent(recentRes);
-      setLastUpdate(new Date());
-    } catch (e) {
-      console.error('Fetch error:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  if (!authed) return;
+  try {
+  const [quotaRes, healthRes, errorsRes, timelineRes, clientsRes, recentRes] = await Promise.all([
+  authFetch('/api/quota').then(r => r?.json()),
+  authFetch('/api/health').then(r => r?.json()).catch(() => null),
+  authFetch('/api/errors').then(r => r?.json()).catch(() => null),
+  authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
+  authFetch('/api/clients').then(r => r?.json()).catch(() => null),
+  authFetch('/api/recent').then(r => r?.json()).catch(() => null),
+  ]);
+  // 任一返回 null 说明 401 已处理
+  if (!quotaRes && !healthRes && !errorsRes && !timelineRes && !clientsRes && !recentRes) return;
+  setQuota(quotaRes);
+  setHealth(healthRes);
+  setErrors(errorsRes);
+  setTimeline(timelineRes);
+  setClients(clientsRes);
+  setRecent(recentRes);
+  setLastUpdate(new Date());
+  } catch (e) {
+  console.error('Fetch error:', e);
+  } finally {
+  setLoading(false);
+  }
+  }, [authed, authFetch]);
 
   useEffect(() => {
     fetchData();
@@ -220,7 +271,67 @@ export default function DashboardPage() {
     ? Math.round(globalStats.latencies.reduce((a, b) => a + b, 0) / globalStats.latencies.length)
     : null;
 
-  if (loading) {
+  // 未认证：显示密码输入框
+ if (!authed) {
+ return (
+ <div style={pageStyle}>
+ <div style={centerStyle}>
+ <div style={{ textAlign: 'center', maxWidth: '360px', width: '100%' }}>
+ <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#x1F512;</div>
+ <h2 style={{ color: '#1e293b', marginBottom: '8px', fontSize: '22px' }}>Dashboard 认证</h2>
+ <p style={{ color: '#64748b', marginBottom: '24px', fontSize: '14px' }}>请输入访问密码</p>
+ <form onSubmit={handleLogin}>
+ <input
+ type="password"
+ value={password}
+ onChange={e => setPassword(e.target.value)}
+ placeholder="输入密码"
+ autoFocus
+ style={{
+ width: '100%',
+ padding: '12px 16px',
+ border: '2px solid #e2e8f0',
+ borderRadius: '8px',
+ fontSize: '15px',
+ outline: 'none',
+ boxSizing: 'border-box',
+ transition: 'border-color 0.2s',
+ borderColor: authError ? '#ef4444' : '#e2e8f0',
+ }}
+ onFocus={e => e.target.style.borderColor = '#6366f1'}
+ onBlur={e => e.target.style.borderColor = authError ? '#ef4444' : '#e2e8f0'}
+ />
+ {authError && (
+ <p style={{ color: '#ef4444', fontSize: '13px', marginTop: '8px' }}>{authError}</p>
+ )}
+ <button
+ type="submit"
+ style={{
+ width: '100%',
+ marginTop: '16px',
+ padding: '12px',
+ backgroundColor: '#6366f1',
+ color: '#fff',
+ border: 'none',
+ borderRadius: '8px',
+ fontSize: '15px',
+ fontWeight: '600',
+ cursor: 'pointer',
+ transition: 'background-color 0.2s',
+ }}
+ onMouseOver={e => e.target.style.backgroundColor = '#4f46e5'}
+ onMouseOut={e => e.target.style.backgroundColor = '#6366f1'}
+ >
+ 登 录
+ </button>
+ </form>
+ </div>
+ </div>
+ </div>
+ );
+ }
+
+ if (loading) {
     return (
       <div style={pageStyle}>
         <div style={centerStyle}>

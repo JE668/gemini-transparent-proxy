@@ -1,6 +1,7 @@
 // middleware.js
-// Dashboard 与内部 API 端点的 Basic Auth 认证保护
-// 代理路由 /api/v1/*, /v1/*, /api/chat* 等不受影响
+// Dashboard API 端点的 Bearer Token 认证保护
+// 代理路由 /api/v1/*, /v1/* 等不受影响
+// /dashboard 页面本身不拦截，由前端密码框 + API 401 处理认证
 
 import { NextResponse } from 'next/server';
 
@@ -12,9 +13,8 @@ const PUBLIC_PREFIXES = [
   '/api/completions',
 ];
 
-// 需要认证的路由前缀
-const PROTECTED_PREFIXES = [
-  '/dashboard',
+// 需要认证的 API 路由前缀（不含 /dashboard 页面本身）
+const PROTECTED_API_PREFIXES = [
   '/api/quota',
   '/api/health',
   '/api/errors',
@@ -28,8 +28,8 @@ function isPublic(pathname) {
   return PUBLIC_PREFIXES.some(prefix => pathname.startsWith(prefix));
 }
 
-function isProtected(pathname) {
-  return PROTECTED_PREFIXES.some(prefix => pathname.startsWith(prefix));
+function isProtectedAPI(pathname) {
+  return PROTECTED_API_PREFIXES.some(prefix => pathname.startsWith(prefix));
 }
 
 export function middleware(request) {
@@ -40,8 +40,8 @@ export function middleware(request) {
     return NextResponse.next();
   }
 
-  // 非保护路由直接放行（静态资源等）
-  if (!isProtected(pathname)) {
+  // 只拦截需要认证的 API 路由，/dashboard 页面放行
+  if (!isProtectedAPI(pathname)) {
     return NextResponse.next();
   }
 
@@ -51,38 +51,23 @@ export function middleware(request) {
     return NextResponse.next();
   }
 
-  // 校验 Basic Auth
-  const authHeader = request.headers.get('authorization');
-  if (authHeader) {
-    const encoded = authHeader.replace(/^Basic\s+/i, '');
-    try {
-      const decoded = atob(encoded);
-      // 格式: admin:password
-      const colonIndex = decoded.indexOf(':');
-      if (colonIndex !== -1) {
-        const providedPassword = decoded.slice(colonIndex + 1);
-        if (providedPassword === password) {
-          return NextResponse.next();
-        }
-      }
-    } catch {
-      // base64 解码失败，继续返回 401
-    }
+  // 校验 Bearer Token：Authorization: Bearer <password>
+  const authHeader = request.headers.get('authorization') || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+  if (token && token === password) {
+    return NextResponse.next();
   }
 
-  // 返回 401，浏览器弹出 Basic Auth 对话框
-  return new NextResponse('Unauthorized', {
-    status: 401,
-    headers: {
-      'WWW-Authenticate': 'Basic realm="Gemini Proxy Dashboard", charset="UTF-8"',
-      'Content-Type': 'text/plain',
-    },
-  });
+  // 返回 401，前端密码框会捕获并提示重新输入
+  return NextResponse.json(
+    { status: 'error', message: '未授权访问，请提供正确的密码' },
+    { status: 401 }
+  );
 }
 
 export const config = {
   matcher: [
-    '/dashboard/:path*',
     '/api/quota/:path*',
     '/api/health/:path*',
     '/api/errors/:path*',
