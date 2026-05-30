@@ -272,7 +272,22 @@ async function handleRequest(req) {
   pipeline.expire(`errors:${date}`, TTL);
   }
 
-  pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+  // 增量更新平均延迟（在 pipeline 外单独处理，避免依赖 pipeline 索引）
+ redis.get(`avgLatency:${date}:${finalModelId}`).then(existing => {
+ let count = 0, avg = latency;
+ if (existing && typeof existing === 'string') {
+ const parts = existing.split(':');
+ const prevCount = parseInt(parts[0]) || 0;
+ const prevAvg = parseInt(parts[1]) || latency;
+ count = prevCount + 1;
+ avg = Math.round((prevAvg * prevCount + latency) / count);
+ } else {
+ count = 1;
+ }
+ redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL }).catch(() => {});
+ }).catch(() => {});
+
+ pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     return new Response(response.body, {
       status: response.status,
