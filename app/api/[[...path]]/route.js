@@ -74,7 +74,7 @@ function getCorsHeaders(req) {
  };
 }
 
-function buildResponseHeaders(response, req) {
+function buildResponseHeaders(response, req, reqId = '') {
  const headers = new Headers();
  for (const [key, value] of response.headers.entries()) {
  if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
@@ -85,6 +85,7 @@ function buildResponseHeaders(response, req) {
  for (const [k, v] of Object.entries(cors)) {
  headers.set(k, v);
  }
+ if (reqId) headers.set('X-Request-Id', reqId);
  return headers;
 }
 
@@ -95,7 +96,7 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
     try {
       const response = await fetch(url, options);
       if (response.status >= 500 && response.status <= 599) {
-        console.warn(`[Proxy] Attempt ${attempt} failed with status ${response.status}. Retrying...`);
+        console.warn(`[${reqId}] Attempt ${attempt} failed with status ${response.status}. Retrying...`);
         retries++;
         if (attempt < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, attempt * 1000));
@@ -116,8 +117,10 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
 }
 
 async function handleRequest(req) {
-  const startTime = Date.now();
-  try {
+ const startTime = Date.now();
+ // 请求级日志 ID：8 位 hex，方便追踪单次请求全链路
+ const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
+ try {
     const url = new URL(req.url);
     const { pathname, search } = url;
 
@@ -164,7 +167,7 @@ async function handleRequest(req) {
     await redis.expire(windowKey, 120); // 最多保留 2 分钟
     }
     if (count > RATE_LIMIT_RPM) {
-    console.warn(`[Rate Limit] ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (current: ${count})`);
+    console.warn(`[${reqId}] Rate Limit: ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (current: ${count})`);
     return new Response(JSON.stringify({
     error: {
     message: `请求过于频繁，每分钟最多 ${RATE_LIMIT_RPM} 次，请稍后重试`,
@@ -249,6 +252,7 @@ async function handleRequest(req) {
   // 最近请求摘要
   const recentEntry = JSON.stringify({
   ts: new Date().toISOString(),
+  reqId,
   model: finalModelId,
   status: response.status,
   latency: latency,
@@ -263,6 +267,7 @@ async function handleRequest(req) {
   if (response.status >= 400) {
   const errorEntry = JSON.stringify({
   ts: new Date().toISOString(),
+  reqId,
   model: finalModelId,
   status: response.status,
   latency: latency,
@@ -289,13 +294,48 @@ async function handleRequest(req) {
 
  pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: buildResponseHeaders(response, req),
+    // 流式响应：检测客户端断线，中止上游读取
+    const upstreamBody = response.body;
+    if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
+    // SSE 流式：包装 ReadableStream，监听客户端断线
+    const transformed = new ReadableStream({
+    start(controller) {
+    const reader = upstreamBody.getReader();
+    const pump = () => {
+    reader.read().then(({ done, value }) => {
+    if (done) { controller.close(); return; }
+    controller.enqueue(value);
+    pump();
+    }).catch(err => {
+    // 上游读取错误（如服务端断线）
+    console.error(`[${reqId}] Upstream read error: ${err.message}`);
+    controller.error(err);
+    });
+    };
+    pump();
+
+    // 客户端断线时中止上游读取
+    req.signal.addEventListener('abort', () => {
+    console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
+    reader.cancel().catch(() => {});
+    controller.close();
+    });
+    },
+    });
+    return new Response(transformed, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: buildResponseHeaders(response, req, reqId),
+    });
+    }
+
+    return new Response(upstreamBody || null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: buildResponseHeaders(response, req, reqId),
     });
   } catch (error) {
-  console.error('[Proxy] Error:', error);
+  console.error(`[${reqId}] Proxy Error:`, error);
   // 生产环境脱敏：不暴露内部错误细节，仅返回通用信息
   const isDev = process.env.NODE_ENV === 'development';
   const userMessage = isDev
@@ -305,12 +345,14 @@ async function handleRequest(req) {
   error: {
   message: userMessage,
   type: 'proxy_error',
-  code: 502
+  code: 502,
+  reqId
   }
   }), {
   status: 502,
   headers: {
   'Content-Type': 'application/json',
+  'X-Request-Id': reqId,
   ...getCorsHeaders(req),
   }
   });

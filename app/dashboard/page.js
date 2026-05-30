@@ -23,21 +23,22 @@ function getStatusDesc(code) {
 
 // ---- 配额重置倒计时 ----
 function getTimeUntilReset() {
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  const utcM = now.getUTCMinutes();
-  const utcS = now.getUTCSeconds();
-  let hoursLeft = 7 - utcH;
-  let minutesLeft = 60 - utcM;
-  let secondsLeft = 60 - utcS;
-  if (utcM === 0) minutesLeft = 0;
-  if (utcS === 0) secondsLeft = 0;
-  if (secondsLeft === 60) secondsLeft = 0;
-  else minutesLeft -= 1;
-  if (minutesLeft < 0) { minutesLeft += 60; hoursLeft -= 1; }
-  if (minutesLeft === 60) minutesLeft = 0;
-  if (hoursLeft < 0) hoursLeft += 24;
-  return { hours: hoursLeft, minutes: minutesLeft, seconds: secondsLeft };
+ // Gemini API 配额在太平洋时间午夜重置（即 UTC 07:00 PST / UTC 08:00 PDT）
+ // 简化处理：固定以 UTC 07:00 为重置点（PST），夏令时期间偏差 1h 可接受
+ const now = new Date();
+ // 计算下一个重置时刻（UTC 07:00）
+ const reset = new Date(now);
+ reset.setUTCHours(7, 0, 0, 0);
+ // 如果当前已过今天的重置点，则目标为明天
+ if (now >= reset) {
+ reset.setUTCDate(reset.getUTCDate() + 1);
+ }
+ const diffMs = reset - now;
+ const totalSeconds = Math.floor(diffMs / 1000);
+ const hours = Math.floor(totalSeconds / 3600);
+ const minutes = Math.floor((totalSeconds % 3600) / 60);
+ const seconds = totalSeconds % 60;
+ return { hours, minutes, seconds };
 }
 
 function formatCountdown(cd) {
@@ -230,7 +231,9 @@ export default function DashboardPage() {
     );
   }
 
-  const systemOk = health?.status === 'ok';
+  const systemOk = health?.status === 'ok' || health?.status === 'degraded';
+ const geminiOk = health?.gemini?.status === 'ok';
+ const redisOk = health?.redis?.status === 'ok' || health?.redis?.status === 'warn';
   const hasErrors = errors?.errors?.length > 0;
   const hasTimeline = timeline?.timeline?.length > 0;
   const hasClients = clients?.clients?.length > 0;
@@ -260,17 +263,21 @@ export default function DashboardPage() {
 
         {/* Global Status Bar */}
         <div style={statusBarStyle} className="dashboard-status-bar">
-          <StatusDot label="系统状态" ok={systemOk} okText="在线" failText="离线" />
-          <div style={statusDividerStyle} className="dashboard-status-divider" />
-          <StatusEmoji emoji="&#x1F4C8;" label="总请求数" value={(quota?.globalRequests || 0).toLocaleString()} />
-          <div style={statusDividerStyle} className="dashboard-status-divider" />
-          <StatusEmoji emoji="&#x23F1;" label="平均延迟" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : '暂无'} />
-          <div style={statusDividerStyle} className="dashboard-status-divider" />
-          <StatusEmoji emoji="&#x26A0;" label="错误率" value={globalStats ? `${globalStats.errorRate}%` : '暂无'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
-          <div style={statusDividerStyle} className="dashboard-status-divider" />
-          <StatusEmoji emoji="&#x1F504;" label="重试次数" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
-          <div style={statusDividerStyle} className="dashboard-status-divider" />
-          <StatusEmoji emoji="&#x23F0;" label="配额重置" value={formatCountdown(countdown)} mono />
+        <StatusDot label="系统状态" ok={systemOk} okText="在线" failText="离线" />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x1F4C8;" label="总请求数" value={(quota?.globalRequests || 0).toLocaleString()} />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x23F1;" label="平均延迟" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : '暂无'} />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x26A0;" label="错误率" value={globalStats ? `${globalStats.errorRate}%` : '暂无'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x1F504;" label="重试次数" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x23F0;" label="配额重置" value={formatCountdown(countdown)} mono />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x1F916;" label="Gemini" value={geminiOk ? '正常' : '异常'} valueColor={geminiOk ? '#166534' : '#dc2626'} />
+        <div style={statusDividerStyle} className="dashboard-status-divider" />
+        <StatusEmoji emoji="&#x1F5C4;" label="Redis" value={redisOk ? '正常' : '异常'} valueColor={redisOk ? '#166534' : '#dc2626'} />
         </div>
 
         {/* Model Cards */}
