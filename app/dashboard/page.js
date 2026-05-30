@@ -242,14 +242,14 @@ export default function DashboardPage() {
   const clientMax = hasClients ? Math.max(...clients.clients.map(c => c.requests), 1) : 1;
 
   return (
-    <div style={pageStyle}>
-      <div style={{ maxWidth: '1120px', margin: '0 auto' }}>
+    <div style={pageStyle} className="dashboard-page">
+    <div style={{ maxWidth: '1120px', margin: '0 auto' }} className="dashboard-container">
 
-        {/* Header */}
-        <header style={headerStyle}>
+    {/* Header */}
+    <header style={headerStyle} className="dashboard-header">
           <div>
-            <h1 style={titleStyle}>Gemini 代理 <span style={{ color: '#6366f1' }}>控制台</span></h1>
-            <p style={subtitleStyle}>
+            <h1 style={titleStyle} className="dashboard-title">Gemini 代理 <span style={{ color: '#6366f1' }}>控制台</span></h1>
+            <p style={subtitleStyle} className="dashboard-subtitle">
               {lastUpdate
                 ? `最近更新: ${lastUpdate.toLocaleTimeString('zh-CN', { hour12: false })} | 自动刷新: ${REFRESH_INTERVAL / 1000}秒`
                 : '监控代理状态与配额使用情况'}
@@ -259,37 +259,37 @@ export default function DashboardPage() {
         </header>
 
         {/* Global Status Bar */}
-        <div style={statusBarStyle}>
+        <div style={statusBarStyle} className="dashboard-status-bar">
           <StatusDot label="系统状态" ok={systemOk} okText="在线" failText="离线" />
-          <div style={statusDividerStyle} />
+          <div style={statusDividerStyle} className="dashboard-status-divider" />
           <StatusEmoji emoji="&#x1F4C8;" label="总请求数" value={(quota?.globalRequests || 0).toLocaleString()} />
-          <div style={statusDividerStyle} />
+          <div style={statusDividerStyle} className="dashboard-status-divider" />
           <StatusEmoji emoji="&#x23F1;" label="平均延迟" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : '暂无'} />
-          <div style={statusDividerStyle} />
+          <div style={statusDividerStyle} className="dashboard-status-divider" />
           <StatusEmoji emoji="&#x26A0;" label="错误率" value={globalStats ? `${globalStats.errorRate}%` : '暂无'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
-          <div style={statusDividerStyle} />
+          <div style={statusDividerStyle} className="dashboard-status-divider" />
           <StatusEmoji emoji="&#x1F504;" label="重试次数" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
-          <div style={statusDividerStyle} />
+          <div style={statusDividerStyle} className="dashboard-status-divider" />
           <StatusEmoji emoji="&#x23F0;" label="配额重置" value={formatCountdown(countdown)} mono />
         </div>
 
         {/* Model Cards */}
-        <div style={modelGridStyle}>
+        <div style={modelGridStyle} className="dashboard-model-grid">
           {quota?.data?.map((item, i) => <ModelCard key={i} item={item} />)}
         </div>
 
         {/* Row: Timeline + Model Distribution */}
-        <div style={twoColStyle}>
+        <div style={twoColStyle} className="dashboard-two-col">
           {/* Request Timeline */}
           {hasTimeline && (
-            <div style={sectionCardStyle}>
-              <div style={sectionHeaderStyle}>
+            <div style={sectionCardStyle} className="dashboard-section">
+              <div style={sectionHeaderStyle} className="dashboard-section-header">
                 <h2 style={sectionTitleStyle}>
                   <span style={{ marginRight: '8px' }}>&#x1F4CA;</span>请求时间线
                   <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>UTC+8 {timeline.date}</span>
                 </h2>
                 {peakHour && peakHour.count > 0 && (
-                  <span style={peakBadge}>峰值: {peakHour.label} ({peakHour.count})</span>
+                  <span style={peakBadge} className="dashboard-peak-badge">峰值: {peakHour.label} ({peakHour.count})</span>
                 )}
               </div>
               <SparklineChart data={timeline.timeline} />
@@ -298,13 +298,13 @@ export default function DashboardPage() {
 
           {/* Model Distribution */}
           {modelDistribution.length > 0 && (
-            <div style={sectionCardStyle}>
-              <div style={sectionHeaderStyle}>
+            <div style={sectionCardStyle} className="dashboard-section">
+              <div style={sectionHeaderStyle} className="dashboard-section-header">
                 <h2 style={sectionTitleStyle}>
                   <span style={{ marginRight: '8px' }}>&#x1F4CB;</span>模型路由分布
                   <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>今日</span>
                 </h2>
-                <span style={peakBadge}>{quota.data.reduce((s, d) => s + d.used, 0).toLocaleString()} 次总计</span>
+                <span style={peakBadge} className="dashboard-peak-badge">{quota.data.reduce((s, d) => s + d.used, 0).toLocaleString()} 次总计</span>
               </div>
               {modelDistribution.map((d, i) => (
                 <HorizontalBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} />
@@ -314,10 +314,10 @@ export default function DashboardPage() {
         </div>
 
         {/* Row: Clients + Retries */}
-        <div style={twoColStyle}>
+        <div style={twoColStyle} className="dashboard-two-col">
           {/* Client Source Top 10 */}
-          <div style={sectionCardStyle}>
-            <div style={sectionHeaderStyle}>
+          <div style={sectionCardStyle} className="dashboard-section">
+            <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F511;</span>来源统计
                 <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>
@@ -325,7 +325,7 @@ export default function DashboardPage() {
                 </span>
               </h2>
               {clients?.totalRequests > 0 && (
-                <span style={peakBadge}>{clients.totalRequests.toLocaleString()} 次请求</span>
+                <span style={peakBadge} className="dashboard-peak-badge">{clients.totalRequests.toLocaleString()} 次请求</span>
               )}
             </div>
             {hasClients ? (
@@ -344,8 +344,8 @@ export default function DashboardPage() {
           </div>
 
           {/* Retry Events */}
-          <div style={sectionCardStyle}>
-            <div style={sectionHeaderStyle}>
+          <div style={sectionCardStyle} className="dashboard-section">
+            <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F504;</span>重试事件追踪
               </h2>
@@ -360,7 +360,7 @@ export default function DashboardPage() {
             </div>
 
             {/* 重试摘要 */}
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }} className="dashboard-retry-stats">
               <MiniStat label="总重试次数" value={totalRetries} color={totalRetries > 0 ? '#d97706' : '#059669'} />
               <MiniStat label="重试率" value={quota?.globalRequests > 0 ? `${((totalRetries / quota.globalRequests) * 100).toFixed(2)}%` : '0%'} color="#6366f1" />
               <MiniStat label="状态" value={totalRetries > 10 ? '性能下降' : totalRetries > 0 ? '需关注' : '正常'} color={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669'} />
@@ -377,7 +377,7 @@ export default function DashboardPage() {
                 .filter(r => r.retries > 0)
                 .slice(0, 10)
                 .map((r, i) => (
-                  <div key={i} style={errorRowStyle}>
+                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
                     <span style={{ ...errorStatusBadgeStyle, backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
                       {r.retries}次重试
@@ -395,10 +395,10 @@ export default function DashboardPage() {
         </div>
 
         {/* Row: Error Stream + Recent Requests */}
-        <div style={twoColStyle}>
+        <div style={twoColStyle} className="dashboard-two-col">
           {/* Error Stream */}
-          <div style={sectionCardStyle}>
-            <div style={sectionHeaderStyle}>
+          <div style={sectionCardStyle} className="dashboard-section">
+            <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F534;</span>实时错误日志
               </h2>
@@ -407,7 +407,7 @@ export default function DashboardPage() {
             {hasErrors ? (
               <div style={errorListStyle}>
                 {errors.errors.slice(0, 15).map((entry, i) => (
-                  <div key={i} style={errorRowStyle}>
+                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(entry.ts)}</span>
                     <span style={{
                       ...errorStatusBadgeStyle,
@@ -431,17 +431,17 @@ export default function DashboardPage() {
           </div>
 
           {/* Recent Requests */}
-          <div style={sectionCardStyle}>
-            <div style={sectionHeaderStyle}>
+          <div style={sectionCardStyle} className="dashboard-section">
+            <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F4E5;</span>最近请求快照
               </h2>
-              <span style={peakBadge}>最近 30 条</span>
+              <span style={peakBadge} className="dashboard-peak-badge">最近 30 条</span>
             </div>
             {hasRecent ? (
               <div style={errorListStyle}>
                 {recent.recent.slice(0, 20).map((r, i) => (
-                  <div key={i} style={errorRowStyle}>
+                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
                     <span style={{
                       ...errorStatusBadgeStyle,
@@ -471,13 +471,13 @@ export default function DashboardPage() {
         </div>
 
         {/* HTTP 状态码速查表 */}
-        <div style={sectionCardStyle}>
-          <div style={sectionHeaderStyle}>
+        <div style={sectionCardStyle} className="dashboard-section">
+          <div style={sectionHeaderStyle} className="dashboard-section-header">
             <h2 style={sectionTitleStyle}>
               <span style={{ marginRight: '8px' }}>&#x1F4D6;</span>HTTP 状态码速查
             </h2>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }} className="dashboard-http-grid">
             {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => (
               <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
                 <span style={{
@@ -500,39 +500,72 @@ export default function DashboardPage() {
 
         {/* Footer */}
         <footer style={footerStyle}>
-          <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>GitHub</a>
-          <span style={{ color: '#cbd5e1' }}>|</span>
-          <span style={{ color: '#94a3b8', fontSize: '13px' }}>Gemini 透明代理 &middot; Vercel Edge</span>
+        <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>GitHub</a>
+        <span style={{ color: '#cbd5e1' }}>|</span>
+        <span style={{ color: '#94a3b8', fontSize: '13px' }}>Gemini 透明代理 &middot; Vercel Edge</span>
         </footer>
-      </div>
-    </div>
-  );
+        </div>
+
+        {/* 移动端响应式媒体查询 — 注入全局 CSS */}
+        <style>{`
+        @media (max-width: 768px) {
+        .dashboard-page { padding: 16px 10px !important; }
+        .dashboard-container { max-width: 100% !important; }
+        .dashboard-status-bar { padding: 14px 12px !important; gap: 4px !important; }
+        .dashboard-status-item { padding: 4px 8px !important; }
+        .dashboard-status-divider { display: none !important; }
+        .dashboard-status-value { font-size: 14px !important; }
+        .dashboard-title { font-size: 22px !important; }
+        .dashboard-subtitle { font-size: 12px !important; }
+        .dashboard-two-col { grid-template-columns: 1fr !important; }
+        .dashboard-model-grid { grid-template-columns: 1fr !important; }
+        .dashboard-card { padding: 16px !important; }
+        .dashboard-section { padding: 16px !important; }
+        .dashboard-error-row { flex-wrap: wrap !important; gap: 6px !important; }
+        .dashboard-error-time { min-width: auto !important; }
+        .dashboard-error-model { flex: 0 0 auto !important; max-width: 120px !important; }
+        .dashboard-section-header { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
+        .dashboard-retry-stats { flex-wrap: wrap !important; }
+        .dashboard-http-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important; }
+        .dashboard-header { margin-bottom: 16px !important; }
+        .dashboard-peak-badge { font-size: 11px !important; padding: 3px 8px !important; }
+        }
+        @media (max-width: 480px) {
+        .dashboard-status-bar { flex-direction: column !important; align-items: flex-start !important; }
+        .dashboard-status-item { width: 100% !important; padding: 6px 8px !important; }
+        .dashboard-title { font-size: 20px !important; }
+        .dashboard-model-grid { gap: 10px !important; }
+        .dashboard-http-grid { grid-template-columns: 1fr !important; }
+        }
+        `}</style>
+        </div>
+        );
 }
 
 // ---- Sub-Components ----
 
 function StatusDot({ label, ok, okText, failText }) {
-  return (
-    <div style={statusItemStyle}>
-      <div style={{ ...statusDotStyle, backgroundColor: ok ? '#22c55e' : '#ef4444', boxShadow: ok ? '0 0 8px rgba(34,197,94,0.5)' : '0 0 8px rgba(239,68,68,0.5)' }} />
-      <div>
-        <div style={statusLabelStyle}>{label}</div>
-        <div style={{ ...statusValueStyle, color: ok ? '#166534' : '#991b1b' }}>{ok ? okText : failText}</div>
-      </div>
-    </div>
-  );
+ return (
+ <div style={statusItemStyle} className="dashboard-status-item">
+ <div style={{ ...statusDotStyle, backgroundColor: ok ? '#22c55e' : '#ef4444', boxShadow: ok ? '0 0 8px rgba(34,197,94,0.5)' : '0 0 8px rgba(239,68,68,0.5)' }} />
+ <div>
+ <div style={statusLabelStyle}>{label}</div>
+ <div style={{ ...statusValueStyle, color: ok ? '#166534' : '#991b1b' }} className="dashboard-status-value">{ok ? okText : failText}</div>
+ </div>
+ </div>
+ );
 }
 
 function StatusEmoji({ emoji, label, value, valueColor, mono }) {
-  return (
-    <div style={statusItemStyle}>
-      <div style={statusEmojiStyle}>{emoji}</div>
-      <div>
-        <div style={statusLabelStyle}>{label}</div>
-        <div style={{ ...statusValueStyle, color: valueColor || '#0f172a', fontFamily: mono ? 'monospace' : undefined, fontSize: mono ? '16px' : undefined, letterSpacing: mono ? '0.05em' : undefined }}>{value}</div>
-      </div>
-    </div>
-  );
+ return (
+ <div style={statusItemStyle} className="dashboard-status-item">
+ <div style={statusEmojiStyle}>{emoji}</div>
+ <div>
+ <div style={statusLabelStyle}>{label}</div>
+ <div style={{ ...statusValueStyle, color: valueColor || '#0f172a', fontFamily: mono ? 'monospace' : undefined, fontSize: mono ? '16px' : undefined, letterSpacing: mono ? '0.05em' : undefined }} className="dashboard-status-value">{value}</div>
+ </div>
+ </div>
+ );
 }
 
 function ModelCard({ item }) {
@@ -542,7 +575,7 @@ function ModelCard({ item }) {
   const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : '#6366f1';
 
   return (
-    <div style={cardStyle}>
+    <div style={cardStyle} className="dashboard-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
         <h3 style={cardModelNameStyle}>{item.model}</h3>
         <span style={cardUsageStyle}>
