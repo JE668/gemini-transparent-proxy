@@ -499,8 +499,7 @@ export default function DashboardPage() {
                     <span style={errorModelStyle}>{r.model}</span>
                      <span style={errorLatencyStyle}>{r.latency}ms</span>
                      </div>
-                     ))
-                    )}
+                     ))}
                     {recent.recent.filter(r => r.retries > 0).length === 0 && (
                 <EmptyState emoji="&#x2705;" text="今日无重试" />
               )}
