@@ -221,87 +221,83 @@ async function handleRequest(req) {
   // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
   const TTL = 48 * 60 * 60; // 48 小时（秒）
 
-  const pipeline = redis.pipeline();
-  pipeline.incr(`quota:${date}:${finalModelId}`);
-  pipeline.expire(`quota:${date}:${finalModelId}`, TTL);
-  pipeline.incr(`quota:global:${date}`);
-  pipeline.expire(`quota:global:${date}`, TTL);
-  pipeline.incr('proxy:heartbeat');
-  pipeline.incr(`status:${date}:${response.status}`);
-  pipeline.expire(`status:${date}:${response.status}`, TTL);
-  pipeline.lpush(`latency:${finalModelId}`, latency);
-  pipeline.ltrim(`latency:${finalModelId}`, 0, 99);
-  pipeline.expire(`latency:${finalModelId}`, TTL);
-  // 时间线分桶
-  pipeline.incr(`timeline:${date}:h${bjHour}`);
-  pipeline.expire(`timeline:${date}:h${bjHour}`, TTL);
-  pipeline.sadd(`timeline:${date}:hours`, `h${bjHour}`);
-  pipeline.expire(`timeline:${date}:hours`, TTL);
-  // 来源统计
-  pipeline.incr(`clients:${date}:${clientFingerprint}`);
-  pipeline.expire(`clients:${date}:${clientFingerprint}`, TTL);
-  pipeline.sadd(`clients:${date}:keys`, clientFingerprint);
-  pipeline.expire(`clients:${date}:keys`, TTL);
+    // 将遥测写入从 pipeline 改为 Promise.all 单独写入
+    // Upstash Redis 的 auto-pipelining 会自动合并这些请求
+    const telemetryOps = [
+      redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
+      redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
+      redis.incr('proxy:heartbeat'),
+      redis.incr(`status:${date}:${response.status}`).then(() => redis.expire(`status:${date}:${response.status}`, TTL)),
+      redis.lpush(`latency:${finalModelId}`, latency).then(() => redis.ltrim(`latency:${finalModelId}`, 0, 99)).then(() => redis.expire(`latency:${finalModelId}`, TTL)),
+      redis.incr(`timeline:${date}:h${bjHour}`).then(() => redis.expire(`timeline:${date}:h${bjHour}`, TTL)),
+      redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
+      redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
+      redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
+    ];
 
-  // 重试计数
-  const retries = response._retries || 0;
-  if (retries > 0) {
-  pipeline.incr(`retries:${date}`);
-  pipeline.expire(`retries:${date}`, TTL);
-  }
+    // 重试计数
+    const retries = response._retries || 0;
+    if (retries > 0) {
+    telemetryOps.push(redis.incr(`retries:${date}`).then(() => redis.expire(`retries:${date}`, TTL)));
+    }
 
-  // 最近请求摘要
-  const recentEntry = JSON.stringify({
-  ts: new Date().toISOString(),
-  reqId,
-  model: finalModelId,
-  status: response.status,
-  latency: latency,
-  retries: retries,
-  client: clientFingerprint,
-  });
-  pipeline.lpush(`recent:${date}`, recentEntry);
-  pipeline.ltrim(`recent:${date}`, 0, 49);
-  pipeline.expire(`recent:${date}`, TTL);
+    // 最近请求摘要
+    const recentEntry = JSON.stringify({
+    ts: new Date().toISOString(),
+    reqId,
+    model: finalModelId,
+    status: response.status,
+    latency: latency,
+    retries: retries,
+    client: clientFingerprint,
+    });
+    telemetryOps.push(
+    redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
+    );
 
-  // 错误日志：4xx/5xx 写入 Redis List
-  if (response.status >= 400) {
-  const errorEntry = JSON.stringify({
-  ts: new Date().toISOString(),
-  reqId,
-  model: finalModelId,
-  status: response.status,
-  latency: latency,
-  });
-  pipeline.lpush(`errors:${date}`, errorEntry);
-  pipeline.ltrim(`errors:${date}`, 0, 99);
-  pipeline.expire(`errors:${date}`, TTL);
-  }
+    // 错误日志：4xx/5xx 写入 Redis List
+    if (response.status >= 400) {
+    const errorEntry = JSON.stringify({
+    ts: new Date().toISOString(),
+    reqId,
+    model: finalModelId,
+    status: response.status,
+    latency: latency,
+    });
+    telemetryOps.push(
+    redis.lpush(`errors:${date}`, errorEntry).then(() => redis.ltrim(`errors:${date}`, 0, 99)).then(() => redis.expire(`errors:${date}`, TTL))
+    );
+    }
 
-  // 增量更新平均延迟（在 pipeline 外单独处理，避免依赖 pipeline 索引）
- redis.get(`avgLatency:${date}:${finalModelId}`).then(existing => {
- let count = 0, avg = latency;
- if (existing && typeof existing === 'string') {
- const parts = existing.split(':');
- const prevCount = parseInt(parts[0]) || 0;
- const prevAvg = parseInt(parts[1]) || latency;
- count = prevCount + 1;
- avg = Math.round((prevAvg * prevCount + latency) / count);
- } else {
- count = 1;
- }
- redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL }).catch(() => {});
- }).catch(() => {});
+    // 增量更新平均延迟
+    (async () => {
+    try {
+    const existing = await redis.get(`avgLatency:${date}:${finalModelId}`);
+    let count = 0, avg = latency;
+    if (existing && typeof existing === 'string') {
+    const parts = existing.split(':');
+    const prevCount = parseInt(parts[0]) || 0;
+    const prevAvg = parseInt(parts[1]) || latency;
+    count = prevCount + 1;
+    avg = Math.round((prevAvg * prevCount + latency) / count);
+    } else {
+    count = 1;
+    }
+    await redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL });
+    } catch (e) {
+    console.error(`[AvgLatency Error] ${e}`);
+    }
+    })();
 
- // 在所有 return 路径之前执行 pipeline（非流式响应在此 await，流式响应在下方处理）
+ // 在所有 return 路径之前等待遥测写入完成
  // Edge Function 在 return Response 后可能被立即冻结，所以不能 fire-and-forget
- const pipelinePromise = pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+ const telemetryPromise = Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     // 流式响应：检测客户端断线，中止上游读取
     const upstreamBody = response.body;
     if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
     // SSE 流式：先 await 遥测写入，再返回流（避免 Edge Runtime 冻结）
-    await pipelinePromise;
+    await telemetryPromise;
     const transformed = new ReadableStream({
     start(controller) {
     const reader = upstreamBody.getReader();
@@ -334,7 +330,7 @@ async function handleRequest(req) {
     }
 
     // 非流式响应：返回前 await 遥测写入
-    await pipelinePromise;
+    await telemetryPromise;
     return new Response(upstreamBody || null, {
     status: response.status,
     statusText: response.statusText,
