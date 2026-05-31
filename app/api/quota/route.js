@@ -9,23 +9,28 @@ export async function GET() {
     const globalUsed = await redis.get(`quota:global:${date}`) || 0;
 
     // 动态扫描 Redis 中所有 quota:{date}:* 的 key，发现实际使用的所有模型
-    // 这样即使客户端请求了不在 HIGH_QUOTA_MODELS 中的模型，也能被统计到
-    const quotaKeys = await redis.keys(`quota:${date}:*`);
+    // Upstash Redis 不支持 keys()，必须用 scan()
     const discoveredModels = new Set();
 
     // 1) 从 HIGH_QUOTA_MODELS 获取已知模型（带 limit 信息）
     for (const model of HIGH_QUOTA_MODELS) {
-      discoveredModels.add(model.id);
+    discoveredModels.add(model.id);
     }
 
-    // 2) 从 Redis 中发现实际使用过的模型（可能包含未知模型）
-    for (const key of quotaKeys) {
-      // key 格式: quota:{date}:{modelId}
-      const modelId = key.replace(`quota:${date}:`, '');
-      if (modelId && modelId !== 'global') {
-        discoveredModels.add(modelId);
-      }
+    // 2) 用 scan 从 Redis 中发现实际使用过的模型（可能包含未知模型）
+    // Upstash scan 返回 [cursor: string, keys: string[]]，cursor 为 "0" 时扫描完成
+    let cursor = "0";
+    do {
+    const [nextCursor, keys] = await redis.scan(cursor, { match: `quota:${date}:*`, count: 100 });
+    cursor = nextCursor;
+    for (const key of keys) {
+    // key 格式: quota:{date}:{modelId}
+    const modelId = key.replace(`quota:${date}:`, '');
+    if (modelId && modelId !== 'global') {
+    discoveredModels.add(modelId);
     }
+    }
+    } while (cursor !== "0");
 
     const allModelIds = Array.from(discoveredModels);
 
