@@ -12,10 +12,17 @@ const HOP_BY_HOP_HEADERS = [
   'upgrade', 'content-length'
 ];
 
-const BLOCKED_RESPONSE_HEADERS = [
-  'content-encoding', 'transfer-encoding', 'connection',
-  'keep-alive', 'strict-transport-security'
-];
+const MODEL_MAPPING = {
+  'gemma-3-27b-it': 'gemma-3-27b',
+  'gemma-3-12b-it': 'gemma-3-12b',
+  'gemini-2.5-flash-exp': 'gemini-2.5-flash',
+  'gemini-2.5-pro-1p-freebie': 'gemini-2.5-pro',
+};
+
+function mapModelId(modelId) {
+  return MODEL_MAPPING[modelId] || modelId;
+}
+
 
 async function getRequestBody(req) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return undefined;
@@ -185,13 +192,21 @@ async function handleRequest(req) {
     }
     }
 
-    const body = await getRequestBody(req);
+    let body = await getRequestBody(req);
 
     let modelId = 'unknown';
     if (body) {
       try {
         const json = JSON.parse(body);
-        if (json.model) modelId = json.model;
+        if (json.model) {
+          const originalModel = json.model;
+          const mappedModel = mapModelId(originalModel);
+          if (originalModel !== mappedModel) {
+            json.model = mappedModel;
+            body = JSON.stringify(json);
+          }
+        }
+        modelId = json.model || 'unknown';
       } catch (e) {}
     }
     if (modelId === 'unknown') {
