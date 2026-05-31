@@ -20,7 +20,7 @@ const MODEL_MAPPING = {
 };
 
 // 需要通过原生 generateContent API 调用的模型（OpenAI 兼容端点不支持）
-const NATIVE_API_MODELS = ['gemma-3-27b-it', 'gemma-3-12b-it'];
+const NATIVE_API_MODELS = ['gemma-3-27b-it', 'gemma-3-12b-it', 'gemma-3-27b', 'gemma-3-12b'];
 
 function mapModelId(modelId) {
   return MODEL_MAPPING[modelId] || modelId;
@@ -29,6 +29,9 @@ function mapModelId(modelId) {
 function isNativeApiModel(modelId) {
   return NATIVE_API_MODELS.includes(modelId);
 }
+
+// 在 body 被修改前判断是否走原生 API，保存原始模型 ID
+let pendingNativeModelId = null;
 
 const BLOCKED_RESPONSE_HEADERS = [
   'content-encoding', 'transfer-encoding', 'connection',
@@ -292,13 +295,18 @@ async function handleRequest(req) {
     let body = await getRequestBody(req);
 
     let modelId = 'unknown';
+    let originalModelId = 'unknown';
     if (body) {
       try {
         const json = JSON.parse(body);
         if (json.model) {
-          const originalModel = json.model;
-          const mappedModel = mapModelId(originalModel);
-          if (originalModel !== mappedModel) {
+          originalModelId = json.model;
+          // 在映射前检查是否要走后门
+          if (apiKey && isNativeApiModel(originalModelId)) {
+            return await callNativeGeminiApi(targetUrl, originalModelId, body, apiKey, req, reqId);
+          }
+          const mappedModel = mapModelId(originalModelId);
+          if (originalModelId !== mappedModel) {
             json.model = mappedModel;
             body = JSON.stringify(json);
           }
@@ -311,11 +319,6 @@ async function handleRequest(req) {
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
       }
-    }
-
-    // 对于 OpenAI 兼容端点不支持的模型（如 Gemma 3），走原生 API
-    if (apiKey && isNativeApiModel(modelId)) {
-      return await callNativeGeminiApi(targetUrl, modelId, body, apiKey, req, reqId);
     }
 
     const response = await fetchWithRetry(targetUrl, {
