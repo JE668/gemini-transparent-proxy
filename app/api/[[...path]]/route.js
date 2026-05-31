@@ -19,8 +19,15 @@ const MODEL_MAPPING = {
   'gemini-2.5-pro-1p-freebie': 'gemini-2.5-pro',
 };
 
+// 需要通过原生 generateContent API 调用的模型（OpenAI 兼容端点不支持）
+const NATIVE_API_MODELS = ['gemma-3-27b-it', 'gemma-3-12b-it'];
+
 function mapModelId(modelId) {
   return MODEL_MAPPING[modelId] || modelId;
+}
+
+function isNativeApiModel(modelId) {
+  return NATIVE_API_MODELS.includes(modelId);
 }
 
 const BLOCKED_RESPONSE_HEADERS = [
@@ -101,6 +108,90 @@ function buildResponseHeaders(response, req, reqId = '') {
  return headers;
 }
 
+// 将 OpenAI chat/completions 请求体转换为 Google 原生 generateContent 格式
+function openaiToGeminiFormat(openaiBody, modelId) {
+  const { messages, max_tokens, temperature, stream } = openaiBody;
+  const contents = [];
+  for (const msg of messages || []) {
+    contents.push({
+      role: msg.role === 'assistant' ? 'model' : msg.role,
+      parts: [{ text: msg.content }]
+    });
+  }
+  const generationConfig = {};
+  if (max_tokens) generationConfig.maxOutputTokens = max_tokens;
+  if (temperature) generationConfig.temperature = temperature;
+  return {
+    contents,
+    generationConfig,
+  };
+}
+
+// 将 Google 原生 generateContent 响应体转换为 OpenAI chat/completions 格式
+function geminiToOpenAIFormat(geminiBody, modelId) {
+  const text = geminiBody?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return {
+    id: `chatcmpl-${Date.now().toString(36)}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: modelId,
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: text,
+      },
+      finish_reason: 'stop',
+    }],
+    usage: {
+      prompt_tokens: geminiBody?.usageMetadata?.promptTokenCount || 0,
+      completion_tokens: geminiBody?.usageMetadata?.candidatesTokenCount || 0,
+      total_tokens: geminiBody?.usageMetadata?.totalTokenCount || 0,
+    },
+  };
+}
+
+// 通过 Google 原生 API 调用模型（针对 OpenAI 兼容端点不支持的模型）
+async function callNativeGeminiApi(targetUrl, modelId, body, apiKey, req, reqId) {
+  const nativeModelId = mapModelId(modelId); // gemma-3-27b-it -> gemma-3-27b
+  let reqBody;
+  try {
+    const parsed = JSON.parse(body);
+    reqBody = openaiToGeminiFormat(parsed, nativeModelId);
+  } catch {
+    reqBody = { contents: [{ role: 'user', parts: [{ text: body }] }] };
+  }
+
+  const nativeUrl = `${GOOGLE_API_BASE}/v1beta/models/${nativeModelId}:generateContent?key=${apiKey}`;
+  
+  const response = await fetchWithRetry(nativeUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reqBody),
+    cache: 'no-store',
+  });
+
+  const responseBody = await response.text();
+  
+  // 将原生响应转换为 OpenAI 兼容格式
+  let openaiResponse;
+  try {
+    const geminiJson = JSON.parse(responseBody);
+    openaiResponse = geminiToOpenAIFormat(geminiJson, modelId);
+  } catch {
+    openaiResponse = { error: { message: responseBody.slice(0, 500) } };
+  }
+
+  return new Response(JSON.stringify(openaiResponse), {
+    status: response.ok ? 200 : response.status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...getCorsHeaders(req),
+      'X-Request-Id': reqId,
+    },
+  });
+}
+
 async function fetchWithRetry(url, options, maxAttempts = 3) {
   let lastError;
   let retries = 0;
@@ -152,8 +243,9 @@ async function handleRequest(req) {
     const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
     const authHeader = req.headers.get('authorization') || '';
     let clientFingerprint = 'anon';
+    let apiKey = '';
     if (authHeader.startsWith('Bearer ')) {
-    const apiKey = authHeader.slice(7).trim();
+    apiKey = authHeader.slice(7).trim();
     const urlWithKey = new URL(targetUrl);
     urlWithKey.searchParams.set('key', apiKey);
     targetUrl = urlWithKey.toString();
@@ -219,6 +311,11 @@ async function handleRequest(req) {
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
       }
+    }
+
+    // 对于 OpenAI 兼容端点不支持的模型（如 Gemma 3），走原生 API
+    if (apiKey && isNativeApiModel(modelId)) {
+      return await callNativeGeminiApi(targetUrl, modelId, body, apiKey, req, reqId);
     }
 
     const response = await fetchWithRetry(targetUrl, {
