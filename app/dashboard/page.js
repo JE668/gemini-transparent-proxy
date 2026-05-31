@@ -52,10 +52,6 @@ function formatTime(iso) {
   } catch { return iso; }
 }
 
-function shortModel(id) {
-  return id.replace('models/', '').replace('gemini-', 'g-').replace('gemma-', 'gem-');
-}
-
 // ---- SVG 折线图 ----
 function SparklineChart({ data, width = 700, height = 160 }) {
   const [hovered, setHovered] = useState(null);
@@ -255,7 +251,7 @@ export default function DashboardPage() {
     const maxUsed = Math.max(...quota.data.map(d => d.used), 1);
     const colors = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8'];
     return quota.data
-      .map((d, i) => ({ label: shortModel(d.model), value: d.used, max: maxUsed, color: colors[i % colors.length] }))
+      .map((d, i) => ({ label: d.model, value: d.used, max: maxUsed, color: colors[i % colors.length] }))
       .sort((a, b) => b.value - a.value);
   }, [quota]);
 
@@ -357,7 +353,7 @@ export default function DashboardPage() {
 
   return (
     <div style={pageStyle} className="dashboard-page">
-    <div style={{ maxWidth: '1120px', margin: '0 auto' }} className="dashboard-container">
+    <div style={{ maxWidth: '1440px', margin: '0 auto' }} className="dashboard-container">
 
     {/* Header */}
     <header style={headerStyle} className="dashboard-header">
@@ -500,12 +496,12 @@ export default function DashboardPage() {
                     <span style={{ ...errorStatusBadgeStyle, backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
                       {r.retries}次重试
                     </span>
-                    <span style={errorModelStyle}>{shortModel(r.model)}</span>
-                    <span style={errorLatencyStyle}>{r.latency}ms</span>
-                  </div>
-                ))
-              }
-              {recent.recent.filter(r => r.retries > 0).length === 0 && (
+                    <span style={errorModelStyle}>{r.model}</span>
+                     <span style={errorLatencyStyle}>{r.latency}ms</span>
+                     </div>
+                     ))
+                    )}
+                    {recent.recent.filter(r => r.retries > 0).length === 0 && (
                 <EmptyState emoji="&#x2705;" text="今日无重试" />
               )}
             </div>
@@ -538,7 +534,7 @@ export default function DashboardPage() {
                         {getStatusDesc(entry.status)}
                       </span>
                     )}
-                    <span style={errorModelStyle}>{shortModel(entry.model)}</span>
+                    <span style={errorModelStyle}>{entry.model}</span>
                     <span style={errorLatencyStyle}>{entry.latency}ms</span>
                   </div>
                 ))}
@@ -572,9 +568,9 @@ export default function DashboardPage() {
                         {getStatusDesc(r.status)}
                       </span>
                     )}
-                    <span style={errorModelStyle}>{shortModel(r.model)}</span>
-                    <span style={errorLatencyStyle}>{r.latency}ms</span>
-                    {r.retries > 0 && (
+                    <span style={errorModelStyle}>{r.model}</span>
+                     <span style={errorLatencyStyle}>{r.latency}ms</span>
+                     {r.retries > 0 && (
                       <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '4px', backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
                         {r.retries}次重试
                       </span>
@@ -640,8 +636,7 @@ export default function DashboardPage() {
         .dashboard-card { padding: 16px !important; }
         .dashboard-section { padding: 16px !important; }
         .dashboard-error-row { flex-wrap: wrap !important; gap: 6px !important; }
-        .dashboard-error-time { min-width: auto !important; }
-        .dashboard-error-model { flex: 0 0 auto !important; max-width: 120px !important; }
+         .dashboard-error-time { min-width: auto !important; }
         .dashboard-section-header { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
         .dashboard-retry-stats { flex-wrap: wrap !important; }
         .dashboard-http-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important; }
@@ -762,7 +757,7 @@ const statusDividerStyle = { width: '1px', height: '36px', backgroundColor: '#e2
 const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', letterSpacing: '0.05em' };
 const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
 
-const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px', marginBottom: '28px' };
+const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '16px', marginBottom: '28px' };
 const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' };
 
 const cardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
@@ -782,7 +777,7 @@ const errorListStyle = { display: 'flex', flexDirection: 'column', gap: '8px' };
 const errorRowStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', fontFamily: 'monospace', fontSize: '13px' };
 const errorTimeStyle = { color: '#94a3b8', fontSize: '12px', minWidth: '70px' };
 const errorStatusBadgeStyle = { padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', minWidth: '40px', textAlign: 'center' };
-const errorModelStyle = { color: '#475569', fontWeight: '600', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+const errorModelStyle = { color: '#475569', fontWeight: '600', whiteSpace: 'nowrap' };
 const errorLatencyStyle = { color: '#94a3b8', fontSize: '12px', textAlign: 'right', minWidth: '60px' };
 
 const emptyStateStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', gap: '8px' };

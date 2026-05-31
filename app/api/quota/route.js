@@ -4,73 +4,103 @@ import { getQuotaDate } from '../../../lib/utils';
 import redis from '../../../lib/redis';
 
 export async function GET() {
- try {
- const date = getQuotaDate();
- const globalUsed = await redis.get(`quota:global:${date}`) || 0;
+  try {
+    const date = getQuotaDate();
+    const globalUsed = await redis.get(`quota:global:${date}`) || 0;
 
- // Pipeline 批量获取所有模型的配额和平均延迟
- const pipeline = redis.pipeline();
- for (const model of HIGH_QUOTA_MODELS) {
- pipeline.get(`quota:${date}:${model.id}`);
- pipeline.get(`avgLatency:${date}:${model.id}`);
- }
- // 批量获取状态码计数
- const statusCodes = [200, 400, 401, 403, 404, 429, 500, 502, 503];
- for (const code of statusCodes) {
- pipeline.get(`status:${date}:${code}`);
- }
+    // 动态扫描 Redis 中所有 quota:{date}:* 的 key，发现实际使用的所有模型
+    // 这样即使客户端请求了不在 HIGH_QUOTA_MODELS 中的模型，也能被统计到
+    const quotaKeys = await redis.keys(`quota:${date}:*`);
+    const discoveredModels = new Set();
 
- const results = await pipeline.exec();
+    // 1) 从 HIGH_QUOTA_MODELS 获取已知模型（带 limit 信息）
+    for (const model of HIGH_QUOTA_MODELS) {
+      discoveredModels.add(model.id);
+    }
 
- const quotaData = [];
- for (let i = 0; i < HIGH_QUOTA_MODELS.length; i++) {
- const model = HIGH_QUOTA_MODELS[i];
- const used = results[i * 2]?.[1] || 0;
- const avgLatencyRaw = results[i * 2 + 1]?.[1];
- const limit = model.limit || 1000;
- const percent = parseFloat(((used / limit) * 100).toFixed(2));
+    // 2) 从 Redis 中发现实际使用过的模型（可能包含未知模型）
+    for (const key of quotaKeys) {
+      // key 格式: quota:{date}:{modelId}
+      const modelId = key.replace(`quota:${date}:`, '');
+      if (modelId && modelId !== 'global') {
+        discoveredModels.add(modelId);
+      }
+    }
 
- // 从 avgLatency key 读取: "count:avg" 格式
- let avgLatency = null;
- if (avgLatencyRaw && typeof avgLatencyRaw === 'string') {
- const parts = avgLatencyRaw.split(':');
- avgLatency = parseInt(parts[1]) || null;
- }
+    const allModelIds = Array.from(discoveredModels);
 
- quotaData.push({
- model: model.id,
- limit: limit,
- used: parseInt(used),
- percent: percent,
- avgLatency: avgLatency,
- });
- }
+    // 构建 limit 查找表
+    const limitMap = {};
+    for (const model of HIGH_QUOTA_MODELS) {
+      limitMap[model.id] = model.limit || 1000;
+    }
 
- // 计算全局错误率
- const statusOffset = HIGH_QUOTA_MODELS.length * 2;
- let totalRequests = 0;
- let totalErrors = 0;
- for (let i = 0; i < statusCodes.length; i++) {
- const count = parseInt(results[statusOffset + i]?.[1]) || 0;
- totalRequests += count;
- if (statusCodes[i] >= 400) {
- totalErrors += count;
- }
- }
- const globalErrorRate = totalRequests > 0
- ? parseFloat(((totalErrors / totalRequests) * 100).toFixed(2))
- : 0;
+    // Pipeline 批量获取所有模型的配额和平均延迟
+    const pipeline = redis.pipeline();
+    for (const modelId of allModelIds) {
+      pipeline.get(`quota:${date}:${modelId}`);
+      pipeline.get(`avgLatency:${date}:${modelId}`);
+    }
+    // 批量获取状态码计数
+    const statusCodes = [200, 400, 401, 403, 404, 429, 500, 502, 503];
+    for (const code of statusCodes) {
+      pipeline.get(`status:${date}:${code}`);
+    }
 
- return Response.json({
- globalRequests: parseInt(globalUsed),
- globalErrorRate,
- data: quotaData,
- timestamp: new Date().toISOString()
- });
- } catch (err) {
- console.error('Quota API Error:', err);
- return Response.json({
- error: '获取配额数据失败'
- }, { status: 500 });
- }
+    const results = await pipeline.exec();
+
+    const quotaData = [];
+    for (let i = 0; i < allModelIds.length; i++) {
+      const modelId = allModelIds[i];
+      const used = results[i * 2]?.[1] || 0;
+      const avgLatencyRaw = results[i * 2 + 1]?.[1];
+      const limit = limitMap[modelId] || 1500;
+      const percent = parseFloat(((used / limit) * 100).toFixed(2));
+
+      // 从 avgLatency key 读取: "count:avg" 格式
+      let avgLatency = null;
+      if (avgLatencyRaw && typeof avgLatencyRaw === 'string') {
+        const parts = avgLatencyRaw.split(':');
+        avgLatency = parseInt(parts[1]) || null;
+      }
+
+      quotaData.push({
+        model: modelId,
+        limit: limit,
+        used: parseInt(used),
+        percent: percent,
+        avgLatency: avgLatency,
+      });
+    }
+
+    // 按用量降序排列
+    quotaData.sort((a, b) => b.used - a.used);
+
+    // 计算全局错误率
+    const statusOffset = allModelIds.length * 2;
+    let totalRequests = 0;
+    let totalErrors = 0;
+    for (let i = 0; i < statusCodes.length; i++) {
+      const count = parseInt(results[statusOffset + i]?.[1]) || 0;
+      totalRequests += count;
+      if (statusCodes[i] >= 400) {
+        totalErrors += count;
+      }
+    }
+    const globalErrorRate = totalRequests > 0
+      ? parseFloat(((totalErrors / totalRequests) * 100).toFixed(2))
+      : 0;
+
+    return Response.json({
+      globalRequests: parseInt(globalUsed),
+      globalErrorRate,
+      data: quotaData,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Quota API Error:', err);
+    return Response.json({
+      error: '获取配额数据失败'
+    }, { status: 500 });
+  }
 }
