@@ -293,12 +293,15 @@ async function handleRequest(req) {
  redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL }).catch(() => {});
  }).catch(() => {});
 
- pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+ // 在所有 return 路径之前执行 pipeline（非流式响应在此 await，流式响应在下方处理）
+ // Edge Function 在 return Response 后可能被立即冻结，所以不能 fire-and-forget
+ const pipelinePromise = pipeline.exec().catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     // 流式响应：检测客户端断线，中止上游读取
     const upstreamBody = response.body;
     if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
-    // SSE 流式：包装 ReadableStream，监听客户端断线
+    // SSE 流式：先 await 遥测写入，再返回流（避免 Edge Runtime 冻结）
+    await pipelinePromise;
     const transformed = new ReadableStream({
     start(controller) {
     const reader = upstreamBody.getReader();
@@ -330,6 +333,8 @@ async function handleRequest(req) {
     });
     }
 
+    // 非流式响应：返回前 await 遥测写入
+    await pipelinePromise;
     return new Response(upstreamBody || null, {
     status: response.status,
     statusText: response.statusText,
