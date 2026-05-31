@@ -23,6 +23,11 @@ function mapModelId(modelId) {
   return MODEL_MAPPING[modelId] || modelId;
 }
 
+const BLOCKED_RESPONSE_HEADERS = [
+  'content-encoding', 'transfer-encoding', 'connection',
+  'keep-alive', 'strict-transport-security'
+];
+
 
 async function getRequestBody(req) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return undefined;
