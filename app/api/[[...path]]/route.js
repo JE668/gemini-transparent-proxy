@@ -1,13 +1,8 @@
 // app/api/[[...path]]/route.js
 // Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
-import { Redis } from '@upstash/redis';
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+import redis from '../../../lib/redis';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -63,17 +58,35 @@ function buildTargetUrl(pathname, search) {
   return `${GOOGLE_API_BASE}${targetPath}`;
 }
 
-function buildResponseHeaders(response) {
-  const headers = new Headers();
-  for (const [key, value] of response.headers.entries()) {
-    if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      headers.set(key, value);
-    }
-  }
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', '*');
-  return headers;
+// CORS 来源控制：配置 CORS_ALLOWED_ORIGINS 环境变量后仅允许白名单域名
+// 未配置时保持向后兼容，允许所有来源（*）
+function getCorsHeaders(req) {
+ const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+ const reqOrigin = req.headers.get('origin') || '';
+ let allowOrigin = '*';
+ if (allowedOrigins.length > 0 && reqOrigin) {
+ allowOrigin = allowedOrigins.includes(reqOrigin) ? reqOrigin : allowedOrigins[0];
+ }
+ return {
+ 'Access-Control-Allow-Origin': allowOrigin,
+ 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+ 'Access-Control-Allow-Headers': '*',
+ };
+}
+
+function buildResponseHeaders(response, req, reqId = '') {
+ const headers = new Headers();
+ for (const [key, value] of response.headers.entries()) {
+ if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
+ headers.set(key, value);
+ }
+ }
+ const cors = getCorsHeaders(req);
+ for (const [k, v] of Object.entries(cors)) {
+ headers.set(k, v);
+ }
+ if (reqId) headers.set('X-Request-Id', reqId);
+ return headers;
 }
 
 async function fetchWithRetry(url, options, maxAttempts = 3) {
@@ -83,7 +96,7 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
     try {
       const response = await fetch(url, options);
       if (response.status >= 500 && response.status <= 599) {
-        console.warn(`[Proxy] Attempt ${attempt} failed with status ${response.status}. Retrying...`);
+        console.warn(`Attempt ${attempt} failed with status ${response.status}. Retrying...`);
         retries++;
         if (attempt < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, attempt * 1000));
@@ -104,20 +117,20 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
 }
 
 async function handleRequest(req) {
-  const startTime = Date.now();
-  try {
+ const startTime = Date.now();
+ // 请求级日志 ID：8 位 hex，方便追踪单次请求全链路
+ const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
+ try {
     const url = new URL(req.url);
     const { pathname, search } = url;
 
     if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
       return new Response(JSON.stringify({ object: 'list', data: HIGH_QUOTA_MODELS }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': '*',
-        }
+      status: 200,
+      headers: {
+      'Content-Type': 'application/json',
+      ...getCorsHeaders(req),
+      }
       });
     }
 
@@ -126,14 +139,51 @@ async function handleRequest(req) {
 
     const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
     const authHeader = req.headers.get('authorization') || '';
+    let clientFingerprint = 'anon';
+    let apiKey = '';
     if (authHeader.startsWith('Bearer ')) {
-      const apiKey = authHeader.slice(7).trim();
-      const urlWithKey = new URL(targetUrl);
-      urlWithKey.searchParams.set('key', apiKey);
-      targetUrl = urlWithKey.toString();
-      if (!isOpenAICompat) {
-        headers.delete('authorization');
-      }
+    apiKey = authHeader.slice(7).trim();
+    const urlWithKey = new URL(targetUrl);
+    urlWithKey.searchParams.set('key', apiKey);
+    targetUrl = urlWithKey.toString();
+    if (!isOpenAICompat) {
+    headers.delete('authorization');
+    }
+    // 来源指纹（提前计算，限流也用）
+    try {
+    const keyData = new TextEncoder().encode(apiKey);
+    const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
+    const hashArr = Array.from(new Uint8Array(hashBuf));
+    clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {}
+    }
+
+    // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
+    const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '10', 10);
+    if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon') {
+    const now = Math.floor(Date.now() / 1000);
+    const windowKey = `ratelimit:${clientFingerprint}:${now}`;
+    const count = await redis.incr(windowKey);
+    if (count === 1) {
+    await redis.expire(windowKey, 120); // 最多保留 2 分钟
+    }
+    if (count > RATE_LIMIT_RPM) {
+    console.warn(`[${reqId}] Rate Limit: ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (current: ${count})`);
+    return new Response(JSON.stringify({
+    error: {
+    message: `请求过于频繁，每分钟最多 ${RATE_LIMIT_RPM} 次，请稍后重试`,
+    type: 'rate_limit_exceeded',
+    code: 429
+    }
+    }), {
+    status: 429,
+    headers: {
+    'Content-Type': 'application/json',
+    'Retry-After': '60',
+    ...getCorsHeaders(req),
+    }
+    });
+    }
     }
 
     const body = await getRequestBody(req);
@@ -166,90 +216,148 @@ async function handleRequest(req) {
   // 北京时间整点小时 (0-23)，用于时间线分桶
   const bjHour = (new Date().getUTCHours() + 8) % 24;
 
-  // 来源统计：API Key fingerprint (SHA-1 前8位)
-  let clientFingerprint = 'anon';
-  if (authHeader.startsWith('Bearer ')) {
-    try {
-      const keyData = new TextEncoder().encode(authHeader.slice(7).trim());
-      const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
-      const hashArr = Array.from(new Uint8Array(hashBuf));
-      clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch {}
-  }
+  // 来源统计：clientFingerprint 已在上方限流逻辑中计算
 
-  const telemetryOps = [
-    redis.incr(`quota:${date}:${finalModelId}`),
-    redis.incr(`quota:global:${date}`),
-    redis.incr('proxy:heartbeat'),
-    redis.incr(`status:${date}:${response.status}`),
-    redis.lpush(`latency:${finalModelId}`, latency),
-    redis.ltrim(`latency:${finalModelId}`, 0, 99),
-    // 时间线分桶
-    redis.incr(`timeline:${date}:h${bjHour}`),
-    redis.sadd(`timeline:${date}:hours`, `h${bjHour}`),
-    // 来源统计
-    redis.incr(`clients:${date}:${clientFingerprint}`),
-    redis.sadd(`clients:${date}:keys`, clientFingerprint),
-  ];
+  // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
+  const TTL = 48 * 60 * 60; // 48 小时（秒）
 
-  // 重试计数
-  const retries = response._retries || 0;
-  if (retries > 0) {
-    telemetryOps.push(redis.incr(`retries:${date}`));
-  }
+    // 将遥测写入从 pipeline 改为 Promise.all 单独写入
+    // Upstash Redis 的 auto-pipelining 会自动合并这些请求
+    const telemetryOps = [
+      redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
+      redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
+      redis.incr('proxy:heartbeat'),
+      redis.incr(`status:${date}:${response.status}`).then(() => redis.expire(`status:${date}:${response.status}`, TTL)),
+      redis.lpush(`latency:${finalModelId}`, latency).then(() => redis.ltrim(`latency:${finalModelId}`, 0, 99)).then(() => redis.expire(`latency:${finalModelId}`, TTL)),
+      redis.incr(`timeline:${date}:h${bjHour}`).then(() => redis.expire(`timeline:${date}:h${bjHour}`, TTL)),
+      redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
+      redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
+      redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
+    ];
 
-  // 最近请求摘要
-  const recentEntry = JSON.stringify({
+    // 重试计数
+    const retries = response._retries || 0;
+    if (retries > 0) {
+    telemetryOps.push(redis.incr(`retries:${date}`).then(() => redis.expire(`retries:${date}`, TTL)));
+    }
+
+    // 最近请求摘要
+    const recentEntry = JSON.stringify({
     ts: new Date().toISOString(),
+    reqId,
     model: finalModelId,
     status: response.status,
     latency: latency,
     retries: retries,
     client: clientFingerprint,
-  });
-  telemetryOps.push(
-    redis.lpush(`recent:${date}`, recentEntry),
-    redis.ltrim(`recent:${date}`, 0, 49),
-  );
-
-  // 错误日志：4xx/5xx 写入 Redis List
-  if (response.status >= 400) {
-    const errorEntry = JSON.stringify({
-      ts: new Date().toISOString(),
-      model: finalModelId,
-      status: response.status,
-      latency: latency,
     });
     telemetryOps.push(
-      redis.lpush(`errors:${date}`, errorEntry),
-      redis.ltrim(`errors:${date}`, 0, 99),
+    redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
     );
-  }
 
-  Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+    // 错误日志：4xx/5xx 写入 Redis List
+    if (response.status >= 400) {
+    const errorEntry = JSON.stringify({
+    ts: new Date().toISOString(),
+    reqId,
+    model: finalModelId,
+    status: response.status,
+    latency: latency,
+    });
+    telemetryOps.push(
+    redis.lpush(`errors:${date}`, errorEntry).then(() => redis.ltrim(`errors:${date}`, 0, 99)).then(() => redis.expire(`errors:${date}`, TTL))
+    );
+    }
 
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: buildResponseHeaders(response),
+    // 增量更新平均延迟
+    (async () => {
+    try {
+    const existing = await redis.get(`avgLatency:${date}:${finalModelId}`);
+    let count = 0, avg = latency;
+    if (existing && typeof existing === 'string') {
+    const parts = existing.split(':');
+    const prevCount = parseInt(parts[0]) || 0;
+    const prevAvg = parseInt(parts[1]) || latency;
+    count = prevCount + 1;
+    avg = Math.round((prevAvg * prevCount + latency) / count);
+    } else {
+    count = 1;
+    }
+    await redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL });
+    } catch (e) {
+    console.error(`[AvgLatency Error] ${e}`);
+    }
+    })();
+
+ // 在所有 return 路径之前等待遥测写入完成
+ // Edge Function 在 return Response 后可能被立即冻结，所以不能 fire-and-forget
+ const telemetryPromise = Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+
+    // 流式响应：检测客户端断线，中止上游读取
+    const upstreamBody = response.body;
+    if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
+    // SSE 流式：先 await 遥测写入，再返回流（避免 Edge Runtime 冻结）
+    await telemetryPromise;
+    const transformed = new ReadableStream({
+    start(controller) {
+    const reader = upstreamBody.getReader();
+    const pump = () => {
+    reader.read().then(({ done, value }) => {
+    if (done) { controller.close(); return; }
+    controller.enqueue(value);
+    pump();
+    }).catch(err => {
+    // 上游读取错误（如服务端断线）
+    console.error(`[${reqId}] Upstream read error: ${err.message}`);
+    controller.error(err);
+    });
+    };
+    pump();
+
+    // 客户端断线时中止上游读取
+    req.signal.addEventListener('abort', () => {
+    console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
+    reader.cancel().catch(() => {});
+    controller.close();
+    });
+    },
+    });
+    return new Response(transformed, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: buildResponseHeaders(response, req, reqId),
+    });
+    }
+
+    // 非流式响应：返回前 await 遥测写入
+    await telemetryPromise;
+    return new Response(upstreamBody || null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: buildResponseHeaders(response, req, reqId),
     });
   } catch (error) {
-    console.error('[Proxy] Error:', error);
-    return new Response(JSON.stringify({
-      error: {
-        message: `Proxy Error: ${error.message}`,
-        type: 'proxy_error',
-        code: 502
-      }
-    }), {
-      status: 502,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
-      }
-    });
+  console.error(`[${reqId}] Proxy Error:`, error);
+  // 生产环境脱敏：不暴露内部错误细节，仅返回通用信息
+  const isDev = process.env.NODE_ENV === 'development';
+  const userMessage = isDev
+  ? `Proxy Error: ${error.message}`
+  : '代理请求失败，请稍后重试';
+  return new Response(JSON.stringify({
+  error: {
+  message: userMessage,
+  type: 'proxy_error',
+  code: 502,
+  reqId
+  }
+  }), {
+  status: 502,
+  headers: {
+  'Content-Type': 'application/json',
+  'X-Request-Id': reqId,
+  ...getCorsHeaders(req),
+  }
+  });
   }
 }
 
@@ -259,12 +367,8 @@ export async function POST(req) { return handleRequest(req); }
 export async function PUT(req) { return handleRequest(req); }
 export async function DELETE(req) { return handleRequest(req); }
 export async function OPTIONS(req) {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-    },
-  });
+ return new Response(null, {
+ status: 204,
+ headers: getCorsHeaders(req),
+ });
 }

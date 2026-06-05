@@ -1,11 +1,6 @@
 // app/api/clients/route.js
-import { Redis } from '@upstash/redis';
 import { getQuotaDate } from '../../../lib/utils';
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+import redis from '../../../lib/redis';
 
 export async function GET() {
   try {
@@ -40,6 +35,6 @@ export async function GET() {
     });
   } catch (err) {
     console.error('Clients API Error:', err);
-    return Response.json({ error: err.message }, { status: 500 });
+    return Response.json({ error: '获取客户端统计失败' }, { status: 500 });
   }
 }
