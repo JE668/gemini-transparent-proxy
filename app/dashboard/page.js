@@ -1,6 +1,42 @@
 'use client';
 import { useEffect, useState, useCallback, useMemo } from 'react';
 
+// ---- 样式定义中心 ----
+const pageStyle = { backgroundColor: '#f1f5f9', minHeight: '100vh', padding: '32px 20px', fontFamily: 'Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif', color: '#1e293b' };
+const centerStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' };
+const spinnerStyle = { width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' };
+const headerStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' };
+const titleStyle = { fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.025em' };
+const subtitleStyle = { color: '#64748b', fontSize: '14px', marginTop: '4px', margin: 0 };
+const refreshBtnStyle = { width: '40px', height: '40px', borderRadius: '12px', border: '1px solid #e2e8f0', backgroundColor: 'white', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1', transition: 'all 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' };
+const statusBarStyle = { display: 'flex', alignItems: 'center', backgroundColor: 'white', borderRadius: '16px', padding: '20px 28px', marginBottom: '28px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', flexWrap: 'wrap' };
+const statusItemStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 20px' };
+const statusDotStyle = { width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0 };
+const statusEmojiStyle = { fontSize: '20px', flexShrink: 0 };
+const statusDividerStyle = { width: '1px', height: '36px', backgroundColor: '#e2e8f0', flexShrink: 0 };
+const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', letterSpacing: '0.05em' };
+const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
+const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '16px', marginBottom: '28px' };
+const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' };
+const cardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
+const cardModelNameStyle = { fontSize: '15px', fontWeight: '700', color: '#1e293b', margin: 0, fontFamily: 'monospace' };
+const cardUsageStyle = { fontSize: '16px', fontWeight: '700', color: '#6366f1' };
+const progressTrackStyle = { backgroundColor: '#f1f5f9', height: '8px', borderRadius: '4px', overflow: 'hidden' };
+const progressFillStyle = { height: '100%', borderRadius: '4px', transition: 'width 0.6s ease' };
+const sectionCardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
+const sectionHeaderStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' };
+const sectionTitleStyle = { fontSize: '18px', fontWeight: '700', color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center' };
+const errorListStyle = { display: 'flex', flexDirection: 'column', gap: '8px' };
+const errorRowStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', fontFamily: 'monospace', fontSize: '13px' };
+const errorTimeStyle = { color: '#94a3b8', fontSize: '12px', minWidth: '70px' };
+const errorStatusBadgeStyle = { padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', minWidth: '40px', textAlign: 'center' };
+const errorModelStyle = { color: '#475569', fontWeight: '600', whiteSpace: 'nowrap' };
+const errorLatencyStyle = { color: '#94a3b8', fontSize: '12px', textAlign: 'right', minWidth: '60px' };
+const emptyStateStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', gap: '8px' };
+const footerStyle = { display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', paddingTop: '20px', borderTop: '1px solid #e2e8f0' };
+const footerLinkStyle = { color: '#6366f1', textDecoration: 'none', fontSize: '13px', fontWeight: '500' };
+
+
 const REFRESH_INTERVAL = 30000;
 
 // ---- HTTP 状态码中文解释 ----
@@ -873,45 +909,45 @@ function EmptyState({ emoji, text }) {
 
 // ===================== Styles =====================
 
-const pageStyle = { backgroundColor: '#f1f5f9', minHeight: '100vh', padding: '32px 20px', fontFamily: 'Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif', color: '#1e293b' };
-const centerStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' };
-const spinnerStyle = { width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' };
-const headerStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' };
-const titleStyle = { fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.025em' };
-const subtitleStyle = { color: '#64748b', fontSize: '14px', marginTop: '4px', margin: 0 };
-const refreshBtnStyle = { width: '40px', height: '40px', borderRadius: '12px', border: '1px solid #e2e8f0', backgroundColor: 'white', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1', transition: 'all 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' };
 
-const statusBarStyle = { display: 'flex', alignItems: 'center', backgroundColor: 'white', borderRadius: '16px', padding: '20px 28px', marginBottom: '28px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', flexWrap: 'wrap' };
-const statusItemStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 20px' };
-const statusDotStyle = { width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0 };
-const statusEmojiStyle = { fontSize: '20px', flexShrink: 0 };
-const statusDividerStyle = { width: '1px', height: '36px', backgroundColor: '#e2e8f0', flexShrink: 0 };
-const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', letterSpacing: '0.05em' };
-const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
 
-const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '16px', marginBottom: '28px' };
-const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' };
 
-const cardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
-const cardModelNameStyle = { fontSize: '15px', fontWeight: '700', color: '#1e293b', margin: 0, fontFamily: 'monospace' };
-const cardUsageStyle = { fontSize: '16px', fontWeight: '700', color: '#6366f1' };
-const progressTrackStyle = { backgroundColor: '#f1f5f9', height: '8px', borderRadius: '4px', overflow: 'hidden' };
-const progressFillStyle = { height: '100%', borderRadius: '4px', transition: 'width 0.6s ease' };
 
-const sectionCardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
-const sectionHeaderStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' };
-const sectionTitleStyle = { fontSize: '18px', fontWeight: '700', color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center' };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const peakBadge = { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: '20px', backgroundColor: '#eef2ff', color: '#6366f1', fontSize: '13px', fontWeight: '600', border: '1px solid #c7d2fe' };
 const badgeBase = { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: '600' };
 
 const errorCountBadge = { ...badgeBase, backgroundColor: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' };
-const errorListStyle = { display: 'flex', flexDirection: 'column', gap: '8px' };
-const errorRowStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', fontFamily: 'monospace', fontSize: '13px' };
-const errorTimeStyle = { color: '#94a3b8', fontSize: '12px', minWidth: '70px' };
-const errorStatusBadgeStyle = { padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', minWidth: '40px', textAlign: 'center' };
-const errorModelStyle = { color: '#475569', fontWeight: '600', whiteSpace: 'nowrap' };
-const errorLatencyStyle = { color: '#94a3b8', fontSize: '12px', textAlign: 'right', minWidth: '60px' };
 
-const emptyStateStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', gap: '8px' };
-const footerStyle = { display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', paddingTop: '20px', borderTop: '1px solid #e2e8f0' };
-const footerLinkStyle = { color: '#6366f1', textDecoration: 'none', fontSize: '13px', fontWeight: '500' };
+
+
+
+
+
+
+
+
+
