@@ -52,8 +52,23 @@ function formatTime(iso) {
   } catch { return iso; }
 }
 
+// ---- 颜色中心：确保所有组件使用统一的模型颜色 ----
+const MODEL_COLORS = {
+  'gemma-4-31b-it': '#6366f1', // Indigo
+  'gemma-4-26b-a4b-it': '#8b5cf6', // Violet
+  'gemini-1.5-pro': '#ec4899', // Pink
+  'gemini-1.5-flash': '#10b981', // Emerald
+  'default': '#6366f1'
+};
+
+function getModelColor(modelId) {
+  return MODEL_COLORS[modelId] || MODEL_COLORS.default;
+}
+
 // ---- SVG 折线图 ----
 function SparklineChart({ data, width = 700, height = 160 }) {
+// ... (rest of SparklineChart)
+
   const [hovered, setHovered] = useState(null);
   if (!data || data.length === 0) return null;
   const maxVal = Math.max(...data.map(d => d.count), 1);
@@ -158,6 +173,10 @@ export default function DashboardPage() {
  const [lastUpdate, setLastUpdate] = useState(null);
  const [loading, setLoading] = useState(true);
  const [countdown, setCountdown] = useState(getTimeUntilReset());
+ // 联动过滤状态
+ const [selectedModel, setSelectedModel] = useState(null);
+ // 状态码表展开状态
+ const [showStatusTable, setShowStatusTable] = useState(false);
  // 认证状态
  const [authed, setAuthed] = useState(false);
  const [password, setPassword] = useState('');
@@ -353,6 +372,17 @@ export default function DashboardPage() {
     : null;
   const clientMax = hasClients ? Math.max(...clients.clients.map(c => c.requests), 1) : 1;
 
+  // 联动过滤数据处理
+  const filteredRecent = useMemo(() => {
+    if (!selectedModel || !recent?.recent) return recent?.recent || [];
+    return recent.recent.filter(r => r.model === selectedModel);
+  }, [selectedModel, recent]);
+
+  const filteredErrors = useMemo(() => {
+    if (!selectedModel || !errors?.errors) return errors?.errors || [];
+    return errors.errors.filter(e => e.model === selectedModel);
+  }, [selectedModel, errors]);
+
   return (
     <div style={pageStyle} className="dashboard-page">
     <div style={{ maxWidth: '1440px', margin: '0 auto' }} className="dashboard-container">
@@ -391,7 +421,20 @@ export default function DashboardPage() {
 
         {/* Model Cards */}
         <div style={modelGridStyle} className="dashboard-model-grid">
-          {quota?.data?.filter(item => item.model && item.used > 0).map((item, i) => <ModelCard key={i} item={item} />)}
+          {quota?.data?.filter(item => item.model && item.used > 0).map((item, i) => (
+            <div 
+              key={i} 
+              onClick={() => setSelectedModel(selectedModel === item.model ? null : item.model)}
+              style={{ cursor: 'pointer', borderRadius: '16px', transition: 'transform 0.2s' }}
+              onMouseOver={e => e.currentTarget.style.transform = 'translateY(-4px)'}
+              onMouseOut={e => e.currentTarget.style.transform = 'translateY(0)'}
+            >
+              <ModelCard 
+                item={item} 
+                isSelected={selectedModel === item.model} 
+              />
+            </div>
+          ))}
         </div>
 
         {/* Row: Timeline + Model Distribution */}
@@ -521,7 +564,7 @@ export default function DashboardPage() {
             </div>
             {hasErrors ? (
               <div style={errorListStyle}>
-                {errors.errors.slice(0, 15).map((entry, i) => (
+                {filteredErrors.slice(0, 15).map((entry, i) => (
                   <div key={i} style={errorRowStyle} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(entry.ts)}</span>
                     <span style={{
@@ -555,7 +598,7 @@ export default function DashboardPage() {
             </div>
             {hasRecent ? (
               <div style={errorListStyle}>
-                {recent.recent.slice(0, 20).map((r, i) => (
+                {filteredRecent.slice(0, 20).map((r, i) => (
                   <div key={i} style={errorRowStyle} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
                     <span style={{
@@ -587,30 +630,53 @@ export default function DashboardPage() {
 
         {/* HTTP 状态码速查表 */}
         <div style={sectionCardStyle} className="dashboard-section">
-          <div style={sectionHeaderStyle} className="dashboard-section-header">
+          <div 
+            style={{ 
+              ...sectionHeaderStyle, 
+              cursor: 'pointer', 
+              userSelect: 'none' 
+            }} 
+            onClick={() => setShowStatusTable(!showStatusTable)}
+          >
             <h2 style={sectionTitleStyle}>
               <span style={{ marginRight: '8px' }}>&#x1F4D6;</span>HTTP 状态码速查
+              <span style={{ 
+                fontSize: '12px', 
+                marginLeft: '8px', 
+                transition: 'transform 0.3s', 
+                transform: showStatusTable ? 'rotate(180deg)' : 'rotate(0deg)',
+                color: '#94a3b8'
+              }}>▼</span>
             </h2>
+            <span style={{ fontSize: '12px', color: '#94a3b8' }}>{showStatusTable ? '收起' : '展开'}</span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }} className="dashboard-http-grid">
-            {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => (
-              <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
-                <span style={{
-                  padding: '2px 10px',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  fontWeight: '700',
-                  fontFamily: 'monospace',
-                  minWidth: '36px',
-                  textAlign: 'center',
-                  backgroundColor: parseInt(code) >= 500 ? '#fef2f2' : parseInt(code) >= 400 ? '#fffbeb' : '#f0fdf4',
-                  color: parseInt(code) >= 500 ? '#dc2626' : parseInt(code) >= 400 ? '#d97706' : '#059669',
-                  border: `1px solid ${parseInt(code) >= 500 ? '#fecaca' : parseInt(code) >= 400 ? '#fde68a' : '#bbf7d0'}`,
-                }}>{code}</span>
-                <span style={{ fontSize: '13px', color: '#475569' }}>{desc}</span>
-              </div>
-            ))}
-          </div>
+          
+          {showStatusTable && (
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
+              gap: '10px',
+              animation: 'slideDown 0.3s ease-out'
+            }}>
+              {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => (
+                <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
+                  <span style={{
+                    padding: '2px 10px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '700',
+                    fontFamily: 'monospace',
+                    minWidth: '36px',
+                    textAlign: 'center',
+                    backgroundColor: parseInt(code) >= 500 ? '#fef2f2' : parseInt(code) >= 400 ? '#fffbeb' : '#f0fdf4',
+                    color: parseInt(code) >= 500 ? '#dc2626' : parseInt(code) >= 400 ? '#d97706' : '#059669',
+                    border: `1px solid ${parseInt(code) >= 500 ? '#fecaca' : parseInt(code) >= 400 ? '#fde68a' : '#bbf7d0'}`,
+                  }}>{code}</span>
+                  <span style={{ fontSize: '13px', color: '#475569' }}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -623,6 +689,10 @@ export default function DashboardPage() {
 
         {/* 移动端响应式媒体查询 — 注入全局 CSS */}
         <style>{`
+        @keyframes slideDown {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
         @media (max-width: 768px) {
         .dashboard-page { padding: 16px 10px !important; }
         .dashboard-container { max-width: 100% !important; }
@@ -682,22 +752,28 @@ function StatusEmoji({ emoji, label, value, valueColor, mono }) {
  );
 }
 
-function ModelCard({ item }) {
+function ModelCard({ item, isSelected }) {
+  const color = getModelColor(item.model);
   const percent = Math.min(item.percent, 100);
   const isHigh = percent > 90;
   const isMedium = percent > 70;
-  const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : '#6366f1';
+  const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color;
 
   return (
-    <div style={cardStyle} className="dashboard-card">
+    <div style={{ 
+      ...cardStyle, 
+      border: isSelected ? `2px solid ${color}` : '1px solid #e2e8f0',
+      boxShadow: isSelected ? `0 0 15px ${color}33` : '0 1px 3px rgba(0,0,0,0.06)',
+      transform: isSelected ? 'scale(1.02)' : 'scale(1)'
+    }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
-        <h3 style={cardModelNameStyle}>{item.model}</h3>
+        <h3 style={{ ...cardModelNameStyle, color: isSelected ? color : '#1e293b' }}>{item.model}</h3>
         <span style={cardUsageStyle}>
           {item.used.toLocaleString()} <span style={{ color: '#94a3b8' }}>/ {item.limit.toLocaleString()}</span>
         </span>
       </div>
       <div style={progressTrackStyle}>
-        <div style={{ ...progressFillStyle, width: `${percent}%`, background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : '#818cf8'})` }} />
+        <div style={{ ...progressFillStyle, width: `${percent}%`, background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : color})` }} />
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', marginBottom: '14px' }}>
         <span style={{ fontSize: '13px', fontWeight: '600', color: barColor }}>{percent.toFixed(1)}%</span>
