@@ -57,8 +57,8 @@ export async function GET() {
     const quotaData = [];
     for (let i = 0; i < allModelIds.length; i++) {
       const modelId = allModelIds[i];
-      const used = results[i * 2]?.[1] || 0;
-      const avgLatencyRaw = results[i * 2 + 1]?.[1];
+      const used = results[i * 2] || 0;
+      const avgLatencyRaw = results[i * 2 + 1];
       const limit = limitMap[modelId] || 1500;
       const percent = parseFloat(((used / limit) * 100).toFixed(2));
 
@@ -86,7 +86,7 @@ export async function GET() {
     let totalRequests = 0;
     let totalErrors = 0;
     for (let i = 0; i < statusCodes.length; i++) {
-      const count = parseInt(results[statusOffset + i]?.[1]) || 0;
+      const count = parseInt(results[statusOffset + i]) || 0;
       totalRequests += count;
       if (statusCodes[i] >= 400) {
         totalErrors += count;
