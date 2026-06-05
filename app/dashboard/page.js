@@ -77,13 +77,6 @@ const getTheme = (darkMode) => ({
 
 
 // ---- 主题配置中心 ----
-const getTheme = (darkMode) => ({
-  page: { backgroundColor: darkMode ? '#0f172a' : '#f1f5f9', color: darkMode ? '#f1f5f9' : '#1e293b' },
-  card: { backgroundColor: darkMode ? '#1e293b' : 'white', border: darkMode ? '1px solid #334155' : '1px solid #e2e8f0', boxShadow: darkMode ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 1px 3px rgba(0,0,0,0.06)' },
-  text: { main: darkMode ? '#f8fafc' : '#0f172a', sub: darkMode ? '#94a3b8' : '#64748b', muted: darkMode ? '#64748b' : '#94a3b8' },
-  bgAlt: { backgroundColor: darkMode ? '#0f172a' : '#f8fafc', border: darkMode ? '1px solid #334155' : '1px solid #f1f5f9', color: darkMode ? '#cbd5e1' : '#475569' },
-  statusBar: { backgroundColor: darkMode ? '#1e293b' : 'white', border: darkMode ? '1px solid #334155' : '1px solid #e2e8f0' }
-});
 
 // ---- SVG 折线图 ----
 function SparklineChart({ data, width = 700, height = 160, theme }) {
