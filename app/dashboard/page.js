@@ -251,8 +251,8 @@ export default function DashboardPage() {
     const maxUsed = Math.max(...quota.data.map(d => d.used), 1);
     const colors = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8'];
     return quota.data
-      // 只显示 Gemma 4 系列模型
-      .filter(d => d.model && d.model.startsWith('gemma-4'))
+      // 显示所有有实际用量的模型，不再硬编码 gemma-4
+      .filter(d => d.model && d.used > 0)
       .map((d, i) => ({ label: d.model, value: d.used, max: maxUsed, color: colors[i % colors.length] }))
       .sort((a, b) => b.value - a.value);
   }, [quota]);
@@ -391,7 +391,7 @@ export default function DashboardPage() {
 
         {/* Model Cards */}
         <div style={modelGridStyle} className="dashboard-model-grid">
-          {quota?.data?.filter(item => item.model && item.model.startsWith('gemma-4')).map((item, i) => <ModelCard key={i} item={item} />)}
+          {quota?.data?.filter(item => item.model && item.used > 0).map((item, i) => <ModelCard key={i} item={item} />)}
         </div>
 
         {/* Row: Timeline + Model Distribution */}
