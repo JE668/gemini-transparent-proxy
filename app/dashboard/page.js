@@ -177,6 +177,9 @@ export default function DashboardPage() {
  const [selectedModel, setSelectedModel] = useState(null);
  // 状态码表展开状态
  const [showStatusTable, setShowStatusTable] = useState(false);
+ const [darkMode, setDarkMode] = useState(false);
+ const [darkMode, setDarkMode] = useState(false); // 主题状态
+ const [darkMode, setDarkMode] = useState(false);
  // 认证状态
  const [authed, setAuthed] = useState(false);
  const [password, setPassword] = useState('');
@@ -397,7 +400,37 @@ export default function DashboardPage() {
                 : '监控代理状态与配额使用情况'}
             </p>
           </div>
-          <button onClick={fetchData} style={refreshBtnStyle} title="立即刷新">&#x21bb;</button>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <button 
+              onClick={() => setDarkMode(!darkMode)} 
+              style={{ 
+                ...refreshBtnStyle, 
+                fontSize: '16px', 
+                backgroundColor: darkMode ? '#334155' : 'white',
+                color: darkMode ? '#f1f5f9' : '#6366f1',
+                borderColor: darkMode ? '#475569' : '#e2e8f0'
+              }} 
+              title="切换主题"
+            >
+              {darkMode ? '☀️' : '🌙'}
+            </button>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <button 
+              onClick={() => setDarkMode(!darkMode)} 
+              style={{ 
+                ...refreshBtnStyle, 
+                fontSize: '16px', 
+                backgroundColor: darkMode ? '#334155' : 'white',
+                color: darkMode ? '#f1f5f9' : '#6366f1',
+                borderColor: darkMode ? '#475569' : '#e2e8f0'
+              }} 
+              title="切换主题"
+            >
+              {darkMode ? '☀️' : '🌙'}
+            </button>
+            <button onClick={fetchData} style={refreshBtnStyle} title="立即刷新">&#x21bb;</button>
+          </div>
+          </div>
         </header>
 
         {/* Global Status Bar */}
