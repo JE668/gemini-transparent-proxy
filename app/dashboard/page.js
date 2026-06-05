@@ -177,9 +177,7 @@ export default function DashboardPage() {
  const [selectedModel, setSelectedModel] = useState(null);
  // 状态码表展开状态
  const [showStatusTable, setShowStatusTable] = useState(false);
- const [darkMode, setDarkMode] = useState(false);
  const [darkMode, setDarkMode] = useState(false); // 主题状态
- const [darkMode, setDarkMode] = useState(false);
  // 认证状态
  const [authed, setAuthed] = useState(false);
  const [password, setPassword] = useState('');
