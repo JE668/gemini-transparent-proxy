@@ -65,10 +65,21 @@ function getModelColor(modelId) {
   return MODEL_COLORS[modelId] || MODEL_COLORS.default;
 }
 
+
+// ---- 主题配置中心 ----
+const getTheme = (darkMode) => ({
+  page: { backgroundColor: darkMode ? '#0f172a' : '#f1f5f9', color: darkMode ? '#f1f5f9' : '#1e293b' },
+  card: { backgroundColor: darkMode ? '#1e293b' : 'white', border: darkMode ? '1px solid #334155' : '1px solid #e2e8f0', boxShadow: darkMode ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 1px 3px rgba(0,0,0,0.06)' },
+  text: { main: darkMode ? '#f8fafc' : '#0f172a', sub: darkMode ? '#94a3b8' : '#64748b', muted: darkMode ? '#64748b' : '#94a3b8' },
+  bgAlt: { backgroundColor: darkMode ? '#0f172a' : '#f8fafc', border: darkMode ? '1px solid #334155' : '1px solid #f1f5f9', color: darkMode ? '#cbd5e1' : '#475569' },
+  statusBar: { backgroundColor: darkMode ? '#1e293b' : 'white', border: darkMode ? '1px solid #334155' : '1px solid #e2e8f0' }
+});
+
 // ---- SVG 折线图 ----
-function SparklineChart({ data, width = 700, height = 160 }) {
+function SparklineChart({ data, width = 700, height = 160, darkMode }) {
 // ... (rest of SparklineChart)
 
+  const theme = getTheme(darkMode);
   const [hovered, setHovered] = useState(null);
   if (!data || data.length === 0) return null;
   const maxVal = Math.max(...data.map(d => d.count), 1);
@@ -86,6 +97,7 @@ function SparklineChart({ data, width = 700, height = 160 }) {
   const tipX = hovered != null ? Math.min(Math.max(points[hovered].x - tipW / 2, 4), width - tipW - 4) : 0;
   const tipY = hovered != null ? Math.max(points[hovered].y - tipH - 16, 2) : 0;
 
+  const theme = getTheme(darkMode);
   return (
   <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', cursor: 'crosshair' }}
   onMouseMove={(e) => {
@@ -101,10 +113,11 @@ function SparklineChart({ data, width = 700, height = 160 }) {
   >
       {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
         const y = padY + chartH - ratio * chartH;
-        return (
+        const theme = getTheme(darkMode);
+  return (
           <g key={i}>
-            <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#f1f5f9" strokeWidth="1" />
-            <text x={padX - 8} y={y + 4} textAnchor="end" fill="#94a3b8" fontSize="10" fontFamily="monospace">{Math.round(maxVal * ratio)}</text>
+            <line x1={padX} y1={y} x2={width - padX} y2={y} stroke={darkMode ? "#334155" : "#f1f5f9"} strokeWidth="1" />
+            <text x={padX - 8} y={y + 4} textAnchor="end" fill={theme.text.muted} fontSize="10" fontFamily="monospace">{Math.round(maxVal * ratio)}</text>
           </g>
         );
       })}
@@ -121,11 +134,12 @@ function SparklineChart({ data, width = 700, height = 160 }) {
       {points.map((p, i) => {
       const isCurrent = p.hour === currentBjHour;
       const isHovered = hovered === i;
-      return (
+      const theme = getTheme(darkMode);
+  return (
       <g key={i}>
       <circle cx={p.x} cy={p.y} r={isHovered ? 6 : isCurrent ? 4.5 : 3} fill={isHovered ? '#4f46e5' : isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isHovered ? 3 : isCurrent ? 2.5 : 2} style={{ transition: 'r 0.15s ease' }} />
       {(i % 3 === 0 || i === data.length - 1) && (
-      <text x={p.x} y={height - 2} textAnchor="middle" fill="#94a3b8" fontSize="10" fontFamily="monospace">{p.label}</text>
+      <text x={p.x} y={height - 2} textAnchor="middle" fill={theme.text.muted} fontSize="10" fontFamily="monospace">{p.label}</text>
       )}
       </g>
       );
@@ -134,8 +148,8 @@ function SparklineChart({ data, width = 700, height = 160 }) {
       {/* Tooltip */}
       {hovered != null && (
       <g pointerEvents="none">
-          <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={tipR} fill="#1e293b" opacity="0.92" />
-          <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle" fill="#e2e8f0" fontSize="12" fontWeight="600">
+          <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={tipR} fill={darkMode ? "#0f172a" : "#1e293b"} opacity="0.92" />
+          <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle" fill={darkMode ? "#f1f5f9" : "#e2e8f0"} fontSize="12" fontWeight="600">
             {points[hovered].label}
           </text>
           <text x={tipX + tipW / 2} y={tipY + 36} textAnchor="middle" fill="#a5b4fc" fontSize="14" fontWeight="700" fontFamily="monospace">
@@ -150,6 +164,7 @@ function SparklineChart({ data, width = 700, height = 160 }) {
 // ---- 水平条形图 ----
 function HorizontalBar({ label, value, max, color = '#6366f1' }) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  const theme = getTheme(darkMode);
   return (
     <div style={{ marginBottom: '10px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '13px' }}>
@@ -229,7 +244,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
-    return () => clearInterval(timer);
+    const theme = getTheme(darkMode);
+  return () => clearInterval(timer);
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -262,7 +278,8 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
     const timer = setInterval(fetchData, REFRESH_INTERVAL);
-    return () => clearInterval(timer);
+    const theme = getTheme(darkMode);
+  return () => clearInterval(timer);
   }, [fetchData]);
 
   // 模型分布：从 quota 数据聚合
@@ -350,7 +367,8 @@ export default function DashboardPage() {
  }
 
  if (loading) {
-    return (
+    const theme = getTheme(darkMode);
+  return (
       <div style={pageStyle}>
         <div style={centerStyle}>
           <div style={spinnerStyle} />
@@ -384,15 +402,16 @@ export default function DashboardPage() {
     return errors.errors.filter(e => e.model === selectedModel);
   }, [selectedModel, errors]);
 
+  const theme = getTheme(darkMode);
   return (
-    <div style={pageStyle} className="dashboard-page">
+    <div style={{ ...pageStyle, ...theme.page }} className="dashboard-page">
     <div style={{ maxWidth: '1440px', margin: '0 auto' }} className="dashboard-container">
 
     {/* Header */}
     <header style={headerStyle} className="dashboard-header">
           <div>
-            <h1 style={titleStyle} className="dashboard-title">Gemini 代理 <span style={{ color: '#6366f1' }}>控制台</span></h1>
-            <p style={subtitleStyle} className="dashboard-subtitle">
+            <h1 style={{ ...titleStyle, color: theme.text.main }} className="dashboard-title">Gemini 代理 <span style={{ color: '#6366f1' }}>控制台</span></h1>
+            <p style={{ ...subtitleStyle, color: theme.text.sub }} className="dashboard-subtitle">
               {lastUpdate
                 ? `最近更新: ${lastUpdate.toLocaleTimeString('zh-CN', { hour12: false })} | 自动刷新: ${REFRESH_INTERVAL / 1000}秒`
                 : '监控代理状态与配额使用情况'}
@@ -432,7 +451,7 @@ export default function DashboardPage() {
         </header>
 
         {/* Global Status Bar */}
-        <div style={statusBarStyle} className="dashboard-status-bar">
+        <div style={{ ...statusBarStyle, ...theme.statusBar }} className="dashboard-status-bar">
         <StatusDot label="系统状态" ok={systemOk} okText="在线" failText="离线" />
         <div style={statusDividerStyle} className="dashboard-status-divider" />
         <StatusEmoji emoji="&#x1F4C8;" label="总请求数" value={(quota?.globalRequests || 0).toLocaleString()} />
@@ -472,7 +491,7 @@ export default function DashboardPage() {
         <div style={twoColStyle} className="dashboard-two-col">
           {/* Request Timeline */}
           {hasTimeline && (
-            <div style={sectionCardStyle} className="dashboard-section">
+            <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
               <div style={sectionHeaderStyle} className="dashboard-section-header">
                 <h2 style={sectionTitleStyle}>
                   <span style={{ marginRight: '8px' }}>&#x1F4CA;</span>请求时间线
@@ -482,13 +501,13 @@ export default function DashboardPage() {
                   <span style={peakBadge} className="dashboard-peak-badge">峰值: {peakHour.label} ({peakHour.count})</span>
                 )}
               </div>
-              <SparklineChart data={timeline.timeline} />
+              <SparklineChart data={timeline.timeline} darkMode={darkMode} />
             </div>
           )}
 
           {/* Model Distribution */}
           {modelDistribution.length > 0 && (
-            <div style={sectionCardStyle} className="dashboard-section">
+            <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
               <div style={sectionHeaderStyle} className="dashboard-section-header">
                 <h2 style={sectionTitleStyle}>
                   <span style={{ marginRight: '8px' }}>&#x1F4CB;</span>模型路由分布
@@ -506,7 +525,7 @@ export default function DashboardPage() {
         {/* Row: Clients + Retries */}
         <div style={twoColStyle} className="dashboard-two-col">
           {/* Client Source Top 10 */}
-          <div style={sectionCardStyle} className="dashboard-section">
+          <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
             <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F511;</span>来源统计
@@ -534,7 +553,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Retry Events */}
-          <div style={sectionCardStyle} className="dashboard-section">
+          <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
             <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F504;</span>重试事件追踪
@@ -567,7 +586,7 @@ export default function DashboardPage() {
                 .filter(r => r.retries > 0)
                 .slice(0, 10)
                 .map((r, i) => (
-                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
+                  <div key={i} style={{ ...errorRowStyle, ...theme.bgAlt }} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
                     <span style={{ ...errorStatusBadgeStyle, backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
                       {r.retries}次重试
@@ -586,7 +605,7 @@ export default function DashboardPage() {
         {/* Row: Error Stream + Recent Requests */}
         <div style={twoColStyle} className="dashboard-two-col">
           {/* Error Stream */}
-          <div style={sectionCardStyle} className="dashboard-section">
+          <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
             <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F534;</span>实时错误日志
@@ -596,7 +615,7 @@ export default function DashboardPage() {
             {hasErrors ? (
               <div style={errorListStyle}>
                 {filteredErrors.slice(0, 15).map((entry, i) => (
-                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
+                  <div key={i} style={{ ...errorRowStyle, ...theme.bgAlt }} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(entry.ts)}</span>
                     <span style={{
                       ...errorStatusBadgeStyle,
@@ -620,7 +639,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Recent Requests */}
-          <div style={sectionCardStyle} className="dashboard-section">
+          <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
             <div style={sectionHeaderStyle} className="dashboard-section-header">
               <h2 style={sectionTitleStyle}>
                 <span style={{ marginRight: '8px' }}>&#x1F4E5;</span>最近请求快照
@@ -630,7 +649,7 @@ export default function DashboardPage() {
             {hasRecent ? (
               <div style={errorListStyle}>
                 {filteredRecent.slice(0, 20).map((r, i) => (
-                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
+                  <div key={i} style={{ ...errorRowStyle, ...theme.bgAlt }} className="dashboard-error-row">
                     <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
                     <span style={{
                       ...errorStatusBadgeStyle,
@@ -660,7 +679,7 @@ export default function DashboardPage() {
         </div>
 
         {/* HTTP 状态码速查表 */}
-        <div style={sectionCardStyle} className="dashboard-section">
+        <div style={{ ...sectionCardStyle, ...theme.card }} className="dashboard-section">
           <div 
             style={{ 
               ...sectionHeaderStyle, 
@@ -783,22 +802,24 @@ function StatusEmoji({ emoji, label, value, valueColor, mono }) {
  );
 }
 
-function ModelCard({ item, isSelected }) {
+function ModelCard({ item, isSelected, darkMode }) {
+  const theme = getTheme(darkMode);
   const color = getModelColor(item.model);
   const percent = Math.min(item.percent, 100);
   const isHigh = percent > 90;
   const isMedium = percent > 70;
   const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color;
 
+  const theme = getTheme(darkMode);
   return (
     <div style={{ 
-      ...cardStyle, 
-      border: isSelected ? `2px solid ${color}` : '1px solid #e2e8f0',
-      boxShadow: isSelected ? `0 0 15px ${color}33` : '0 1px 3px rgba(0,0,0,0.06)',
+      ...cardStyle, ...theme.card, 
+      border: isSelected ? `2px solid ${color}` : (darkMode ? "1px solid #334155" : "1px solid #e2e8f0"),
+      boxShadow: isSelected ? `0 0 15px ${color}33` : theme.card.boxShadow,
       transform: isSelected ? 'scale(1.02)' : 'scale(1)'
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
-        <h3 style={{ ...cardModelNameStyle, color: isSelected ? color : '#1e293b' }}>{item.model}</h3>
+        <h3 style={{ ...cardModelNameStyle, color: isSelected ? color : theme.text.main }}>{item.model}</h3>
         <span style={cardUsageStyle}>
           {item.used.toLocaleString()} <span style={{ color: '#94a3b8' }}>/ {item.limit.toLocaleString()}</span>
         </span>
@@ -821,6 +842,7 @@ function ModelCard({ item, isSelected }) {
 }
 
 function Tag({ label, value, color }) {
+  const theme = getTheme(darkMode);
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'monospace', backgroundColor: `${color}11`, color, border: `1px solid ${color}33` }}>
       <span style={{ opacity: 0.7 }}>{label}</span>
@@ -830,6 +852,7 @@ function Tag({ label, value, color }) {
 }
 
 function MiniStat({ label, value, color }) {
+  const theme = getTheme(darkMode);
   return (
     <div style={{ flex: 1, padding: '12px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', textAlign: 'center' }}>
       <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px', fontWeight: '500' }}>{label}</div>
@@ -839,6 +862,7 @@ function MiniStat({ label, value, color }) {
 }
 
 function EmptyState({ emoji, text }) {
+  const theme = getTheme(darkMode);
   return (
     <div style={emptyStateStyle}>
       <span style={{ fontSize: '24px', marginBottom: '8px' }}>{emoji}</span>
