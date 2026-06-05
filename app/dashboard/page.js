@@ -284,6 +284,8 @@ export default function DashboardPage() {
   useEffect(() => {
     const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
     
+    const theme = getTheme(darkMode);
+
   return () => clearInterval(timer);
   }, []);
 
