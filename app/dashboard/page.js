@@ -114,20 +114,21 @@ export default function DashboardPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [quotaRes, healthRes, errorsRes, timelineRes, clientsRes, recentRes] = await Promise.all([
-        fetch('/api/quota').then(r => r.json()),
-        fetch('/api/health').then(r => r.json()).catch(() => null),
-        fetch('/api/errors').then(r => r.json()).catch(() => null),
-        fetch('/api/timeline').then(r => r.json()).catch(() => null),
-        fetch('/api/clients').then(r => r.json()).catch(() => null),
-        fetch('/api/recent').then(r => r.json()).catch(() => null),
-      ]);
-      setQuota(quotaRes);
+      const res = await fetch('/api/dashboard');
+      const data = await res.json();
+      
+      if (data.error) throw new Error(data.error);
+
+      setQuota({ data: data.quota.data, globalRequests: data.globalRequests });
+      setTimeline(data.timeline);
+      setRecent({ recent: data.recent.recent, retries: data.totalRetries });
+      setClients(data.clients);
+      setErrors(data.errors);
+      
+      // we still need health as a separate check since it's usually a heartbeat
+      const healthRes = await fetch('/api/health').then(r => r.json()).catch(() => null);
       setHealth(healthRes);
-      setErrors(errorsRes);
-      setTimeline(timelineRes);
-      setClients(clientsRes);
-      setRecent(recentRes);
+      
       setLastUpdate(new Date());
     } catch (e) {
       console.error('Fetch error:', e);
@@ -519,7 +520,12 @@ const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500'
 const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
 
 const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px', marginBottom: '28px' };
-const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' };
+const twoColStyle = { 
+  display: 'grid', 
+  gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', 
+  gap: '20px', 
+  marginBottom: '28px' 
+};
 
 const cardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
 const cardModelNameStyle = { fontSize: '15px', fontWeight: '700', color: '#1e293b', margin: 0, fontFamily: 'monospace' };
