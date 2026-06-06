@@ -58,6 +58,60 @@ const formatCountdown = (cd) =>
 // 数字格式化动画辅助
 const formatNumber = (num) => num?.toLocaleString?.() ?? String(num);
 
+// 格式化时间段（如 "2 小时 30 分"）
+const formatDuration = (minutes) => {
+  if (minutes < 1) return '不到 1 分钟';
+  if (minutes < 60) return `${Math.round(minutes)}分钟`;
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (hours >= 24) {
+    const days = (hours / 24).toFixed(1);
+    return `${days}天`;
+  }
+  return mins > 0 ? `${hours}小时${mins}分` : `${hours}小时`;
+};
+
+// 计算配额耗尽预测（基于当前使用速率）
+const predictQuotaExhaustion = (used, limit, hoursElapsed) => {
+  if (!used || !limit || hoursElapsed <= 0) return null;
+  const hourlyRate = used / hoursElapsed;
+  if (hourlyRate <= 0) return null;
+  const remaining = limit - used;
+  if (remaining <= 0) return { exhausted: true, minutes: 0, rate: hourlyRate };
+  const hoursUntilExhaustion = remaining / hourlyRate;
+  const minutesUntilExhaustion = hoursUntilExhaustion * 60;
+  return {
+    exhausted: false,
+    minutes: minutesUntilExhaustion,
+    rate: hourlyRate,
+    remaining,
+  };
+};
+
+// 导出 CSV 数据
+const exportToCSV = (data, filename) => {
+  if (!data || data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  const csvContent = [
+    headers.join(','),
+    ...data.map(row => headers.map(field => {
+      const value = row[field];
+      // 处理包含逗号或引号的字符串
+      if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    }).join(','))
+  ].join('\n');
+  
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+};
+
 // =============================================================================
 // 主题
 // =============================================================================
@@ -367,6 +421,8 @@ export default function DashboardPage() {
   const [authError, setAuthError] = useState('');
   const [countdown, setCountdown] = useState(getTimeUntilReset());
   const [collapsedSections, setCollapsedSections] = useState({});
+  const [exporting, setExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   const theme = getTheme(dark);
 
@@ -433,6 +489,73 @@ export default function DashboardPage() {
     setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // 导出数据功能
+  const handleExport = useCallback((type) => {
+    setExporting(true);
+    setShowExportMenu(false);
+    
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      
+      if (type === 'quota') {
+        // 导出配额数据
+        const exportData = quota?.data?.map(d => ({
+          model: shortModel(d.model),
+          used: d.used,
+          limit: d.limit,
+          percent: d.percent.toFixed(2) + '%',
+          avgLatency: d.avgLatency ? `${d.avgLatency}ms` : 'N/A',
+        })) || [];
+        exportToCSV(exportData, `配额数据_${timestamp}.csv`);
+      } else if (type === 'timeline') {
+        // 导出时间线数据
+        const exportData = timeline?.timeline?.map(d => ({
+          hour: d.label,
+          requests: d.count,
+        })) || [];
+        exportToCSV(exportData, `时间线_${timestamp}.csv`);
+      } else if (type === 'errors') {
+        // 导出错误日志
+        const exportData = errors?.errors?.slice(0, 100).map(e => ({
+          time: formatTime(e.ts),
+          status: e.status,
+          model: shortModel(e.model),
+          message: e.message || '',
+          latency: e.latency ? `${e.latency}ms` : 'N/A',
+        })) || [];
+        exportToCSV(exportData, `错误日志_${timestamp}.csv`);
+      } else if (type === 'all') {
+        // 导出所有数据（JSON 格式）
+        const exportData = {
+          exportTime: new Date().toISOString(),
+          quotaData: quota?.data?.map(d => ({
+            model: shortModel(d.model),
+            used: d.used,
+            limit: d.limit,
+            percent: d.percent,
+            avgLatency: d.avgLatency,
+          })),
+          timelineData: timeline?.timeline,
+          errorStats: {
+            totalErrors: errors?.count,
+            errors: errors?.errors?.slice(0, 100),
+          },
+          clientStats: clients?.clients,
+        };
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `完整数据_${timestamp}.json`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+    } catch (err) {
+      console.error('导出失败:', err);
+    } finally {
+      setExporting(false);
+    }
+  }, [quota, timeline, errors, clients]);
+
   // 派生数据
   const modelDistribution = useMemo(() => {
     if (!quota?.data) return [];
@@ -440,6 +563,30 @@ export default function DashboardPage() {
       label: shortModel(d.model), value: d.used, max: Math.max(...quota.data.map(x => x.used), 1),
       color: getModelColor(d.model), rawModel: d.model, avgLatency: d.avgLatency, percent: d.percent, limit: d.limit
     })).sort((a, b) => b.value - a.value);
+  }, [quota]);
+
+  // 配额预测（基于当前使用速率）
+  const quotaPredictions = useMemo(() => {
+    if (!quota?.data) return {};
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const quotaDate = today.split('-').slice(1).join(''); // MMDD
+    // 计算从今天 00:00 到现在经过了多少小时
+    const startOfDay = new Date(today + 'T00:00:00');
+    const hoursElapsed = Math.max((now - startOfDay) / (1000 * 60 * 60), 0.5); // 至少按 0.5 小时算
+    
+    const predictions = {};
+    quota.data.forEach(d => {
+      const prediction = predictQuotaExhaustion(d.used, d.limit, hoursElapsed);
+      if (prediction) {
+        predictions[d.model] = {
+          ...prediction,
+          formatted: formatDuration(prediction.minutes),
+          exhausted: prediction.exhausted || prediction.remaining <= 0,
+        };
+      }
+    });
+    return predictions;
   }, [quota]);
 
   const filteredRecent = useMemo(() => {
@@ -700,6 +847,131 @@ export default function DashboardPage() {
                 e.currentTarget.style.boxShadow = theme.card.boxShadow;
               }}
             >⟳</button>
+            
+            {/* 导出按钮 */}
+            <div style={{ position: 'relative' }}>
+              <button 
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                disabled={exporting}
+                title="导出数据"
+                style={{
+                  width: '38px', height: '38px', borderRadius: '12px',
+                  border: theme.card.border, 
+                  backgroundColor: exporting ? theme.bar.bg : theme.card.backgroundColor,
+                  cursor: exporting ? 'not-allowed' : 'pointer', 
+                  fontSize: '18px', 
+                  display: 'flex',
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  transition: 'all 0.2s ease',
+                  boxShadow: theme.card.boxShadow,
+                  opacity: exporting ? 0.6 : 1,
+                }}
+                onMouseEnter={e => {
+                  if (!exporting) {
+                    e.currentTarget.style.transform = 'scale(1.1)';
+                    e.currentTarget.style.boxShadow = theme.glow;
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!exporting) {
+                    e.currentTarget.style.transform = 'scale(1)';
+                    e.currentTarget.style.boxShadow = theme.card.boxShadow;
+                  }
+                }}
+              >
+                {exporting ? '⏳' : '📥'}
+              </button>
+              
+              {/* 导出菜单 */}
+              {showExportMenu && (
+                <div style={{
+                  position: 'absolute',
+                  top: '48px',
+                  right: 0,
+                  zIndex: 100,
+                  minWidth: '180px',
+                  backgroundColor: theme.card.backgroundColor,
+                  border: theme.card.border,
+                  borderRadius: '12px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.2), ' + theme.glow,
+                  padding: '8px',
+                  animation: 'slide-up 0.2s ease-out',
+                }}>
+                  <div style={{ 
+                    fontSize: '11px', 
+                    fontWeight: '700', 
+                    color: theme.text.muted, 
+                    padding: '8px 12px 6px',
+                    borderBottom: `1px solid ${theme.bar.bg}`,
+                    marginBottom: '4px',
+                  }}>导出数据</div>
+                  {[
+                    { type: 'quota', label: '配额数据', icon: '📊' },
+                    { type: 'timeline', label: '时间线', icon: '📈' },
+                    { type: 'errors', label: '错误日志', icon: '⚠️' },
+                    { type: 'all', label: '完整数据 (JSON)', icon: '💾' },
+                  ].map(item => (
+                    <button
+                      key={item.type}
+                      onClick={() => handleExport(item.type)}
+                      disabled={exporting}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 12px',
+                        margin: '4px 0',
+                        border: 'none',
+                        borderRadius: '8px',
+                        backgroundColor: 'transparent',
+                        color: theme.text.main,
+                        fontSize: '13px',
+                        cursor: exporting ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s ease',
+                        textAlign: 'left',
+                      }}
+                      onMouseEnter={e => {
+                        if (!exporting) {
+                          e.currentTarget.style.backgroundColor = theme.bar.bg;
+                          e.currentTarget.style.transform = 'translateX(4px)';
+                        }
+                      }}
+                      onMouseLeave={e => {
+                        if (!exporting) {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                          e.currentTarget.style.transform = 'translateX(0)';
+                        }
+                      }}
+                    >
+                      <span style={{ fontSize: '16px' }}>{item.icon}</span>
+                      <span style={{ flex: 1 }}>{item.label}</span>
+                      {exporting && <span style={{ fontSize: '12px', color: theme.text.muted }}>⏳</span>}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setShowExportMenu(false)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      marginTop: '4px',
+                      border: 'none',
+                      borderRadius: '8px',
+                      backgroundColor: 'transparent',
+                      color: theme.text.muted,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.color = theme.text.main}
+                    onMouseLeave={e => e.currentTarget.style.color = theme.text.muted}
+                  >
+                    取消
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -896,6 +1168,59 @@ export default function DashboardPage() {
                     <span>{(item.used || 0).toLocaleString()} / {(item.limit || '∞').toLocaleString()}</span>
                     <span>{item.limit - (item.used || 0) > 0 ? `余 ${(item.limit - (item.used || 0)).toLocaleString()}` : '已耗尽'}</span>
                   </div>
+                  
+                  {/* 配额预测 */}
+                  {quotaPredictions[item.model] && !quotaPredictions[item.model].exhausted && (
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      backgroundColor: quotaPredictions[item.model].minutes < 120 
+                        ? 'rgba(239,68,68,0.1)' 
+                        : quotaPredictions[item.model].minutes < 240
+                          ? 'rgba(245,158,11,0.1)'
+                          : 'rgba(34,197,94,0.1)',
+                      border: `1px solid ${
+                        quotaPredictions[item.model].minutes < 120 
+                          ? 'rgba(239,68,68,0.3)' 
+                          : quotaPredictions[item.model].minutes < 240
+                            ? 'rgba(245,158,11,0.3)'
+                            : 'rgba(34,197,94,0.3)'
+                      }`,
+                      fontSize: '11px',
+                      color: quotaPredictions[item.model].minutes < 120 
+                        ? '#ef4444' 
+                        : quotaPredictions[item.model].minutes < 240
+                          ? '#f59e0b'
+                          : '#22c55e',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}>
+                      <span>🔮</span>
+                      <span style={{ fontWeight: '600' }}>预计耗尽:</span>
+                      <span>{quotaPredictions[item.model].formatted}</span>
+                    </div>
+                  )}
+                  {quotaPredictions[item.model]?.exhausted && (
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      backgroundColor: 'rgba(239,68,68,0.15)',
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      fontSize: '11px',
+                      color: '#ef4444',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontWeight: '700',
+                    }}>
+                      <span>⚠️</span>
+                      <span>配额已耗尽或今日无法用完</span>
+                    </div>
+                  )}
+                  
                   <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: '3px',
