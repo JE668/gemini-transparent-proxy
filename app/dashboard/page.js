@@ -583,6 +583,29 @@ function DashboardContent() {
     }
   }, [errors?.count]);
 
+  // 键盘快捷键
+  useEffect(() => {
+    if (!authed) return;
+    const handleKeyDown = (e) => {
+      // 忽略输入框中的按键
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      
+      const key = e.key.toLowerCase();
+      if (key === 'r') {
+        e.preventDefault();
+        fetchData();
+      } else if (key === 'd') {
+        e.preventDefault();
+        toggleDark();
+      } else if (key === 'e') {
+        e.preventDefault();
+        setShowExportMenu(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [authed, fetchData, toggleDark]);
+
   const toggleDark = () => {
     const next = !dark;
     setDark(next);
