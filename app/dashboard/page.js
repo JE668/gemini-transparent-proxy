@@ -583,6 +583,14 @@ function DashboardContent() {
     }
   }, [errors?.count]);
 
+  const toggleDark = useCallback(() => {
+    setDark(prev => {
+      const next = !prev;
+      localStorage.setItem('dashboard_dark', next);
+      return next;
+    });
+  }, []);
+
   // 键盘快捷键
   useEffect(() => {
     if (!authed) return;
@@ -605,12 +613,6 @@ function DashboardContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [authed, fetchData, toggleDark]);
-
-  const toggleDark = () => {
-    const next = !dark;
-    setDark(next);
-    localStorage.setItem('dashboard_dark', next);
-  };
 
   const toggleSection = (key) => {
     setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
