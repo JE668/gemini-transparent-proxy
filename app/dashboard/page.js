@@ -334,16 +334,87 @@ function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, 
       {/* 顶部装饰条 */}
       {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '16px 16px 0 0' }} />}
       
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: '24px', opacity: 0.9, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}>{icon}</span>
-        <span style={{
-          fontSize: '26px', fontWeight: '800', color, fontFamily: 'monospace', letterSpacing: '-0.03em',
-          textShadow: selected ? `0 0 20px ${color}40` : 'none',
-          transition: 'all 0.3s ease'
-        }}>{value}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '22px' }}>{icon}</span>
       </div>
-      <div style={{ marginTop: '8px', fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{label}</div>
-      {sub && <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '3px' }}>{sub}</div>}
+      <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text.main, marginBottom: '4px', letterSpacing: '-0.02em' }}>{value}</div>
+      <div style={{ fontSize: '12px', color: theme.text.muted, fontWeight: '500' }}>{sub}</div>
+    </div>
+  );
+}
+
+// 小型指标卡片
+function MetricMini({ icon, label, value, color, theme }) {
+  return (
+    <div style={{
+      padding: '12px', borderRadius: '10px',
+      backgroundColor: theme.bar.bg,
+      border: `1px solid ${color}20`,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+        <span style={{ fontSize: '16px' }}>{icon}</span>
+        <span style={{ fontSize: '10px', color: theme.text.muted, fontWeight: '500' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: '18px', fontWeight: '700', color: color }}>{value}</div>
+    </div>
+  );
+}
+
+// 迷你折线图
+function MiniChart({ data, labels, color, theme }) {
+  const maxValue = Math.max(...data);
+  const minValue = Math.min(...data);
+  const range = maxValue - minValue || 1;
+  const height = 60;
+  const width = 200;
+  const points = data.map((val, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - ((val - minValue) / range) * height;
+    return `${x},${y}`;
+  }).join(' ');
+  
+  return (
+    <div style={{ position: 'relative', height: `${height + 20}px` }}>
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
+        {/* 渐变填充 */}
+        <defs>
+          <linearGradient id={`gradient-${color}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        
+        {/* 面积图 */}
+        <polygon
+          points={`0,${height} ${points} ${width},${height}`}
+          fill={`url(#gradient-${color})`}
+        />
+        
+        {/* 折线 */}
+        <polyline
+          points={points}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        
+        {/* 数据点 */}
+        {data.map((val, i) => {
+          const x = (i / (data.length - 1)) * width;
+          const y = height - ((val - minValue) / range) * height;
+          return (
+            <circle key={i} cx={x} cy={y} r="3" fill={color} />
+          );
+        })}
+      </svg>
+      {/* X 轴标签 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '9px', color: theme.text.muted }}>
+        {labels.map((label, i) => (
+          <span key={i}>{label}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -477,6 +548,8 @@ function DashboardContent() {
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [cherry, setCherry] = useState(null);
   const [unreadErrors, setUnreadErrors] = useState(0);
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [alerts, setAlerts] = useState([]);
 
   const theme = getTheme(dark);
 
@@ -563,6 +636,29 @@ function DashboardContent() {
       ]);
       if (!q && !h && !e && !t && !c && !r && !ch) return;
       setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setClients(c); setRecent(r); setCherry(ch);
+      
+      // 检测告警
+      if (ch?.nodes) {
+        const newAlerts = [];
+        ch.nodes.forEach(node => {
+          if (node.status === 'offline') {
+            newAlerts.push({ type: 'critical', message: `${node.name} 离线`, time: new Date().toISOString() });
+          }
+          if (node.latency > 100) {
+            newAlerts.push({ type: 'warning', message: `${node.name} 高延迟 (${node.latency}ms)`, time: new Date().toISOString() });
+          }
+          if (node.cpu > 80) {
+            newAlerts.push({ type: 'warning', message: `${node.name} CPU 使用率过高 (${node.cpu}%)`, time: new Date().toISOString() });
+          }
+          if (node.memory > 80) {
+            newAlerts.push({ type: 'warning', message: `${node.name} 内存使用率过高 (${node.memory}%)`, time: new Date().toISOString() });
+          }
+          if (node.successRate < 95) {
+            newAlerts.push({ type: 'warning', message: `${node.name} 成功率过低 (${node.successRate}%)`, time: new Date().toISOString() });
+          }
+        });
+        setAlerts(newAlerts);
+      }
     } catch (err) { console.error(err); }
     finally { setRefreshing(false); setLoading(false); }
   }, [authed, authFetch]);
@@ -1594,9 +1690,19 @@ function DashboardContent() {
         {/* ====== Cherry 集群状态 ====== */}
         {cherry && (
           <div style={{ borderRadius: '16px', padding: '20px', ...theme.card, marginBottom: '20px' }}>
+            {/* 头部：标题 + 状态 + 告警数 */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🍒 Cherry 集群状态
+                {alerts.length > 0 && (
+                  <span style={{
+                    fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                    backgroundColor: '#ef4444', color: 'white',
+                    fontWeight: '700'
+                  }}>
+                    {alerts.length} 告警
+                  </span>
+                )}
               </h2>
               <span style={{
                 fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
@@ -1605,53 +1711,202 @@ function DashboardContent() {
                 border: `1px solid ${cherry.status === 'healthy' ? '#22c55e30' : '#ef444430'}`,
                 fontWeight: '600'
               }}>
-                {cherry.status === 'healthy' ? '集群健康' : '集群异常'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
+                {cherry.status === 'healthy' ? '集群健康' : cherry.status === 'degraded' ? '部分异常' : '严重故障'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
               </span>
             </div>
             
+            {/* 集群核心指标 */}
+            {cherry.metrics && (
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                gap: '12px', marginBottom: '20px'
+              }}>
+                <MetricMini icon="📊" label="24h 请求" value={formatNumber(cherry.metrics.totalRequests24h)} color="#6366f1" theme={theme} />
+                <MetricMini icon="⏱️" label="平均延迟" value={`${cherry.metrics.avgLatency}ms`} color="#f59e0b" theme={theme} />
+                <MetricMini icon="⚠️" label="错误率" value={`${cherry.metrics.errorRate}%`} color={parseFloat(cherry.metrics.errorRate) > 1 ? '#ef4444' : '#22c55e'} theme={theme} />
+                <MetricMini icon="📶" label="正常运行时间" value={`${cherry.metrics.uptime}%`} color="#22c55e" theme={theme} />
+                <MetricMini icon="🔌" label="总连接数" value={formatNumber(cherry.metrics.totalConnections || 0)} color="#8b5cf6" theme={theme} />
+                <MetricMini icon="💾" label="平均内存" value={`${cherry.metrics.avgMemory}%`} color="#ec4899" theme={theme} />
+              </div>
+            )}
+            
             {/* 节点列表 */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
-              {cherry.nodes?.map((node, i) => (
-                <div key={node.id} style={{
-                  padding: '14px', borderRadius: '10px',
-                  backgroundColor: theme.bar.bg,
-                  border: `1px solid ${node.status === 'online' ? '#22c55e30' : '#ef444430'}`
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.name}</span>
-                    <span style={{
-                      fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
-                      backgroundColor: node.status === 'online' ? '#22c55e18' : '#ef444418',
-                      color: node.status === 'online' ? '#22c55e' : '#ef4444',
-                      fontWeight: '600'
-                    }}>{node.status}</span>
+            <div style={{ marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '600', color: theme.text.main, marginBottom: '12px' }}>📡 节点详情</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px' }}>
+                {cherry.nodes?.map((node) => (
+                  <div 
+                    key={node.id} 
+                    onClick={() => setSelectedNode(selectedNode === node.id ? null : node.id)}
+                    style={{
+                      padding: '14px', borderRadius: '10px',
+                      backgroundColor: theme.bar.bg,
+                      border: `1px solid ${node.status === 'online' ? '#22c55e30' : node.status === 'degraded' ? '#f59e0b30' : '#ef444430'}`,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.15)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '14px', fontWeight: '700', color: theme.text.main }}>{node.name}</span>
+                        {selectedNode === node.id && <span>▼</span>}
+                      </div>
+                      <span style={{
+                        fontSize: '10px', padding: '2px 7px', borderRadius: '4px',
+                        backgroundColor: node.status === 'online' ? '#22c55e18' : node.status === 'degraded' ? '#f59e0b18' : '#ef444418',
+                        color: node.status === 'online' ? '#22c55e' : node.status === 'degraded' ? '#f59e0b' : '#ef4444',
+                        fontWeight: '700', textTransform: 'uppercase'
+                      }}>{node.status}</span>
+                    </div>
+                    
+                    {/* 基础指标 */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                      <div style={{ fontSize: '11px', color: theme.text.muted }}>
+                        <div style={{ marginBottom: '2px' }}>延迟</div>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: node.latency > 100 ? '#ef4444' : theme.text.main }}>
+                          {node.latency}ms
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '11px', color: theme.text.muted }}>
+                        <div style={{ marginBottom: '2px' }}>请求数</div>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.requests.toLocaleString()}</div>
+                      </div>
+                      <div style={{ fontSize: '11px', color: theme.text.muted }}>
+                        <div style={{ marginBottom: '2px' }}>成功率</div>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: node.successRate < 95 ? '#ef4444' : theme.text.main }}>
+                          {node.successRate}%
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '11px', color: theme.text.muted }}>
+                        <div style={{ marginBottom: '2px' }}>连接数</div>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.connections}</div>
+                      </div>
+                    </div>
+                    
+                    {/* 资源使用进度条 */}
+                    <div style={{ marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: theme.text.muted, marginBottom: '3px' }}>
+                        <span>CPU</span>
+                        <span style={{ color: node.cpu > 80 ? '#ef4444' : node.cpu > 50 ? '#f59e0b' : theme.text.main }}>{node.cpu}%</span>
+                      </div>
+                      <div style={{ height: '5px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ width: `${node.cpu}%`, height: '100%', backgroundColor: node.cpu > 80 ? '#ef4444' : node.cpu > 50 ? '#f59e0b' : '#22c55e' }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: theme.text.muted, marginBottom: '3px' }}>
+                        <span>内存</span>
+                        <span style={{ color: node.memory > 80 ? '#ef4444' : node.memory > 50 ? '#f59e0b' : theme.text.main }}>{node.memory}%</span>
+                      </div>
+                      <div style={{ height: '5px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ width: `${node.memory}%`, height: '100%', backgroundColor: node.memory > 80 ? '#ef4444' : node.memory > 50 ? '#f59e0b' : '#22c55e' }} />
+                      </div>
+                    </div>
+                    
+                    {/* 展开详情 */}
+                    {selectedNode === node.id && (
+                      <div style={{
+                        marginTop: '12px', paddingTop: '12px',
+                        borderTop: `1px solid ${theme.card.border}`,
+                        fontSize: '11px', color: theme.text.muted
+                      }}>
+                        <div style={{ marginBottom: '6px' }}>
+                          <span>最后活跃：</span>
+                          <span style={{ color: theme.text.main, fontFamily: 'monospace' }}>
+                            {new Date(node.lastSeen).toLocaleString('zh-CN')}
+                          </span>
+                        </div>
+                        <div>
+                          <span>节点 ID：</span>
+                          <span style={{ color: theme.text.main, fontFamily: 'monospace' }}>{node.id}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
-                    <span>延迟：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.latency}ms</span></span>
-                    <span>请求：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.requests.toLocaleString()}</span></span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
             
-            {/* 负载均衡信息 */}
+            {/* 告警列表 */}
+            {alerts.length > 0 && (
+              <div style={{
+                marginBottom: '16px', padding: '12px', borderRadius: '8px',
+                backgroundColor: '#ef444408', border: '1px solid #ef444420'
+              }}>
+                <div style={{ fontSize: '12px', fontWeight: '600', color: '#ef4444', marginBottom: '8px' }}>
+                  🚨 当前告警
+                </div>
+                {alerts.slice(0, 5).map((alert, i) => (
+                  <div key={i} style={{
+                    fontSize: '11px', color: '#ef4444',
+                    padding: '4px 0', borderBottom: i < alerts.length - 1 ? '1px solid #ef444410' : 'none',
+                    display: 'flex', alignItems: 'center', gap: '6px'
+                  }}>
+                    <span>{alert.type === 'critical' ? '🔴' : '🟡'}</span>
+                    <span>{alert.message}</span>
+                    <span style={{ marginLeft: 'auto', opacity: 0.6 }}>
+                      {new Date(alert.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            {/* 历史趋势图 */}
+            {cherry.history && cherry.history.labels.length > 0 && (
+              <div>
+                <h3 style={{ fontSize: '14px', fontWeight: '600', color: theme.text.main, marginBottom: '12px' }}>📈 24 小时趋势</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  {/* 请求量趋势 */}
+                  <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
+                    <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '8px' }}>请求量趋势</div>
+                    <MiniChart 
+                      data={cherry.history.requests} 
+                      labels={cherry.history.labels}
+                      color="#6366f1"
+                      theme={theme}
+                    />
+                  </div>
+                  {/* 延迟趋势 */}
+                  <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
+                    <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '8px' }}>平均延迟趋势</div>
+                    <MiniChart 
+                      data={cherry.history.latency} 
+                      labels={cherry.history.labels}
+                      color="#f59e0b"
+                      theme={theme}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* 负载均衡 */}
             {cherry.loadBalance && (
               <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
                 <div style={{ fontSize: '12px', color: theme.text.muted, marginBottom: '8px' }}>
-                  负载均衡：{cherry.loadBalance.algorithm} · 流量分布
+                  💽 负载均衡：{cherry.loadBalance.algorithm} · 流量分布
                 </div>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  {cherry.loadBalance.distribution?.map(( pct, i) => (
+                  {cherry.loadBalance.distribution?.map((pct, i) => (
                     <div key={i} style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>
-                        <span>Node {i + 1}</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: theme.text.muted, marginBottom: '4px' }}>
+                        <span>{cherry.nodes?.[i]?.name || `Node ${i + 1}`}</span>
                         <span style={{ color: theme.text.main, fontWeight: '600' }}>{pct}%</span>
                       </div>
                       <div style={{ height: '6px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
                         <div style={{
                           width: `${pct}%`,
                           height: '100%',
-                          background: i === 0 ? 'linear-gradient(90deg, #6366f1, #8b5cf6)' : i === 1 ? 'linear-gradient(90deg, #22c55e, #10b981)' : 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                          background: `linear-gradient(90deg, ${i === 0 ? '#6366f1' : i === 1 ? '#22c55e' : '#f59e0b'}, ${i === 0 ? '#8b5cf6' : i === 1 ? '#10b981' : '#ef4444'})`
                         }} />
                       </div>
                     </div>
