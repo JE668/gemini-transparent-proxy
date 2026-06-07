@@ -1,13 +1,13 @@
 // app/api/recent/route.js
 import { getQuotaDate } from '../../../lib/utils';
-import redis from '../../../lib/redis';
+import getRedis from '../../../lib/redis';
 
 export async function GET() {
   try {
     const date = getQuotaDate();
     const [recentRaw, retryCount] = await Promise.all([
-      redis.lrange(`recent:${date}`, 0, 29),
-      redis.get(`retries:${date}`),
+      getRedis().lrange(`recent:${date}`, 0, 29),
+      getRedis().get(`retries:${date}`),
     ]);
 
     const recent = (recentRaw || [])

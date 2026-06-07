@@ -2,7 +2,7 @@
 // Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
-import redis from '../../../lib/redis';
+import getRedis from '../../../lib/redis';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -163,9 +163,9 @@ async function handleRequest(req) {
     if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon') {
     const now = Math.floor(Date.now() / 1000);
     const windowKey = `ratelimit:${clientFingerprint}:${now}`;
-    const count = await redis.incr(windowKey);
+    const count = await getRedis().incr(windowKey);
     if (count === 1) {
-    await redis.expire(windowKey, 120); // 最多保留 2 分钟
+    await getRedis().expire(windowKey, 120); // 最多保留 2 分钟
     }
     if (count > RATE_LIMIT_RPM) {
     console.warn(`[${reqId}] Rate Limit: ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (current: ${count})`);
@@ -224,21 +224,21 @@ async function handleRequest(req) {
     // 将遥测写入从 pipeline 改为 Promise.all 单独写入
     // Upstash Redis 的 auto-pipelining 会自动合并这些请求
     const telemetryOps = [
-      redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
-      redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
-      redis.incr('proxy:heartbeat'),
-      redis.incr(`status:${date}:${response.status}`).then(() => redis.expire(`status:${date}:${response.status}`, TTL)),
-      redis.lpush(`latency:${finalModelId}`, latency).then(() => redis.ltrim(`latency:${finalModelId}`, 0, 99)).then(() => redis.expire(`latency:${finalModelId}`, TTL)),
-      redis.incr(`timeline:${date}:h${bjHour}`).then(() => redis.expire(`timeline:${date}:h${bjHour}`, TTL)),
-      redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
-      redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
-      redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
+      getRedis().incr(`quota:${date}:${finalModelId}`).then(() => getRedis().expire(`quota:${date}:${finalModelId}`, TTL)),
+      getRedis().incr(`quota:global:${date}`).then(() => getRedis().expire(`quota:global:${date}`, TTL)),
+      getRedis().incr('proxy:heartbeat'),
+      getRedis().incr(`status:${date}:${response.status}`).then(() => getRedis().expire(`status:${date}:${response.status}`, TTL)),
+      getRedis().lpush(`latency:${finalModelId}`, latency).then(() => getRedis().ltrim(`latency:${finalModelId}`, 0, 99)).then(() => getRedis().expire(`latency:${finalModelId}`, TTL)),
+      getRedis().incr(`timeline:${date}:h${bjHour}`).then(() => getRedis().expire(`timeline:${date}:h${bjHour}`, TTL)),
+      getRedis().sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => getRedis().expire(`timeline:${date}:hours`, TTL)),
+      getRedis().incr(`clients:${date}:${clientFingerprint}`).then(() => getRedis().expire(`clients:${date}:${clientFingerprint}`, TTL)),
+      getRedis().sadd(`clients:${date}:keys`, clientFingerprint).then(() => getRedis().expire(`clients:${date}:keys`, TTL)),
     ];
 
     // 重试计数
     const retries = response._retries || 0;
     if (retries > 0) {
-    telemetryOps.push(redis.incr(`retries:${date}`).then(() => redis.expire(`retries:${date}`, TTL)));
+    telemetryOps.push(getRedis().incr(`retries:${date}`).then(() => getRedis().expire(`retries:${date}`, TTL)));
     }
 
     // 最近请求摘要
@@ -252,7 +252,7 @@ async function handleRequest(req) {
     client: clientFingerprint,
     });
     telemetryOps.push(
-    redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
+    getRedis().lpush(`recent:${date}`, recentEntry).then(() => getRedis().ltrim(`recent:${date}`, 0, 49)).then(() => getRedis().expire(`recent:${date}`, TTL))
     );
 
     // 错误日志：4xx/5xx 写入 Redis List
@@ -265,14 +265,14 @@ async function handleRequest(req) {
     latency: latency,
     });
     telemetryOps.push(
-    redis.lpush(`errors:${date}`, errorEntry).then(() => redis.ltrim(`errors:${date}`, 0, 99)).then(() => redis.expire(`errors:${date}`, TTL))
+    getRedis().lpush(`errors:${date}`, errorEntry).then(() => getRedis().ltrim(`errors:${date}`, 0, 99)).then(() => getRedis().expire(`errors:${date}`, TTL))
     );
     }
 
     // 增量更新平均延迟
     (async () => {
     try {
-    const existing = await redis.get(`avgLatency:${date}:${finalModelId}`);
+    const existing = await getRedis().get(`avgLatency:${date}:${finalModelId}`);
     let count = 0, avg = latency;
     if (existing && typeof existing === 'string') {
     const parts = existing.split(':');
@@ -283,7 +283,7 @@ async function handleRequest(req) {
     } else {
     count = 1;
     }
-    await redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL });
+    await getRedis().set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL });
     } catch (e) {
     console.error(`[AvgLatency Error] ${e}`);
     }
