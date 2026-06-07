@@ -139,7 +139,7 @@ const getTheme = (dark) => ({
 // =============================================================================
 // SparklineChart — 带 tooltip 交互的折线图
 // =============================================================================
-function SparklineChart({ data, width = 700, height = 180, theme }) {
+function SparklineChart({ data, width = 700, height = 180, theme, yesterdayData }) {
   const [hover, setHover] = useState(null);
   const t = theme || { text: { sub: '#94a3b8' }, card: { backgroundColor: '#1e293b' } };
 
@@ -151,7 +151,7 @@ function SparklineChart({ data, width = 700, height = 180, theme }) {
     );
   }
 
-  const maxVal = Math.max(...data.map(d => d.count), 1);
+  const maxVal = Math.max(...data.map(d => d.count), ...((yesterdayData || []).map(d => d.yesterday || 0)), 1);
   const padX = 50, padY = 28, rPad = 20;
   const chartW = width - padX - rPad;
   const chartH = height - padY * 2;
@@ -159,6 +159,12 @@ function SparklineChart({ data, width = 700, height = 180, theme }) {
   const points = data.map((d, i) => ({
     x: padX + i * stepX, y: padY + chartH - (d.count / maxVal) * chartH, ...d
   }));
+  
+  // 昨天的数据点
+  const yesterdayPoints = (yesterdayData || []).map((d, i) => ({
+    x: padX + i * stepX, y: padY + chartH - ((d.yesterday || 0) / maxVal) * chartH
+  }));
+  const yesterdayLinePath = yesterdayPoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
 
   const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
   const areaPath = `${linePath} L${points[points.length - 1].x},${padY + chartH} L${points[0].x},${padY + chartH} Z`;
@@ -217,6 +223,12 @@ function SparklineChart({ data, width = 700, height = 180, theme }) {
         {/* 面积 */}
         <path d={areaPath} fill="url(#lineGrad)" />
 
+        {/* 昨天的对比线 */}
+        {yesterdayPoints.length > 0 && (
+          <path d={yesterdayLinePath} fill="none" stroke="#94a3b8" strokeWidth="2"
+            strokeDasharray="5 5" opacity="0.5" />
+        )}
+      
         {/* 折线 */}
         <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round" filter="url(#glowFilter)" />
@@ -1162,28 +1174,81 @@ function DashboardContent() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
           {/* 请求时间线 */}
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                📊 请求时间线
-                {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
-              </h2>
-              {peakHour && peakHour.count > 0 && (
-                <span style={{
-                  fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
-                  backgroundColor: '#6366f118', color: '#6366f1', border: '1px solid #6366f130',
-                  fontWeight: '600'
-                }}>
-                  峰值 {peakHour.label} · {peakHour.count}次
-                </span>
-              )}
-            </div>
-            <SparklineChart data={timeline?.timeline || []} theme={theme} />
-            <div style={{ display: 'flex', gap: '16px', marginTop: '12px', fontSize: '12px', color: theme.text.muted }}>
-              <span>📈 最大流量: {peakHour?.count?.toLocaleString() || 0} 次/h</span>
-              <span>📉 今日总计: {(timeline?.timeline?.reduce((s, d) => s + d.count, 0) || 0).toLocaleString()} 次</span>
-            </div>
-          </div>
+                    <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                        <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          📊 请求时间线
+                          {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
+                        </h2>
+                        {timeline?.summary && (
+                          <span style={{
+                            fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                            backgroundColor: timeline.summary.overallChange > 20 
+                              ? '#ef444418' 
+                              : timeline.summary.overallChange > 0 
+                                ? '#f59e0b18' 
+                                : '#22c55e18',
+                            color: timeline.summary.overallChange > 20 
+                              ? '#ef4444' 
+                              : timeline.summary.overallChange > 0 
+                                ? '#f59e0b' 
+                                : '#22c55e',
+                            border: `1px solid ${
+                              timeline.summary.overallChange > 20 
+                                ? '#ef444430' 
+                                : timeline.summary.overallChange > 0 
+                                  ? '#f59e0b30' 
+                                  : '#22c55e30'
+                            }`,
+                            fontWeight: '600'
+                          }}>
+                            {timeline.summary.overallChange > 0 ? '📈' : '📉'} {Math.abs(timeline.summary.overallChange)}% vs 昨天
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ position: 'relative' }}>
+                        <SparklineChart 
+                          data={(timeline?.timeline || []).map(d => ({ hour: d.hour, count: d.today }))} 
+                          yesterdayData={timeline?.timeline}
+                          theme={theme}
+                        />
+                        {/* 昨天对比线（半透明） */}
+                        <div style={{
+                          position: 'absolute',
+                          top: '10px',
+                          right: '10px',
+                          fontSize: '11px',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          backgroundColor: theme.bar?.bg || '#f1f5f9',
+                          color: theme.text?.muted || '#64748b',
+                          border: `1px solid ${theme.bar?.border || '#e2e8f0'}`,
+                        }}>
+                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50', backgroundColor: '#6366f1', marginRight: '4px' }} />今天
+                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50', backgroundColor: '#94a3b850', marginLeft: '8px', marginRight: '4px' }} />昨天
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginTop: '12px', fontSize: '12px', color: theme.text.muted }}>
+                        <div>
+                          <div style={{ fontSize: '10px', marginBottom: '2px' }}>今日总计</div>
+                          <div style={{ fontSize: '14px', fontWeight: '700', color: theme.text.main }}>
+                            {(timeline?.summary?.todayTotal || 0).toLocaleString()} 次
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10px', marginBottom: '2px' }}>昨日总计</div>
+                          <div style={{ fontSize: '14px', fontWeight: '700', color: theme.text.main }}>
+                            {(timeline?.summary?.yesterdayTotal || 0).toLocaleString()} 次
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10px', marginBottom: '2px' }}>峰值时段</div>
+                          <div style={{ fontSize: '14px', fontWeight: '700', color: '#6366f1' }}>
+                            {String(timeline?.summary?.peakHour || 0).padStart(2, '0')}:00
+                          </div>
+                        </div>
+                      </div>
+                    </div>
 
           {/* 模型分布 */}
           <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
