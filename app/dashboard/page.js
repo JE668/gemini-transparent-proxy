@@ -362,6 +362,22 @@ function MetricMini({ icon, label, value, color, theme }) {
 
 // 迷你折线图
 function MiniChart({ data, labels, color, theme }) {
+  // 空数据保护
+  if (!data || data.length === 0 || !labels || labels.length === 0) {
+    return (
+      <div style={{ 
+        height: '80px', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        color: theme.text.muted,
+        fontSize: '12px'
+      }}>
+        暂无数据
+      </div>
+    );
+  }
+  
   const maxValue = Math.max(...data);
   const minValue = Math.min(...data);
   const range = maxValue - minValue || 1;
