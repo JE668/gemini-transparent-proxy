@@ -105,6 +105,72 @@ export async function GET() {
       message: globalErrorRate > 10 ? '严重：错误率超过 10%' : globalErrorRate > 5 ? '警告：错误率超过 5%' : '正常'
     };
 
+    // Webhook 告警通知：当错误级别从正常变为警告/严重时发送
+    const webhookUrl = process.env.ERROR_WEBHOOK_URL;
+    const webhookType = process.env.ERROR_WEBHOOK_TYPE; // 'dingtalk' or 'telegram'
+    
+    if (errorAlert.level !== 'normal' && webhookUrl) {
+      // 从 Redis 读取上次告警级别
+      const redis = getRedis();
+      const lastAlertKey = `alert:last_error_level:${new Date().toDateString()}`;
+      const lastLevel = await redis?.get(lastAlertKey);
+      
+      // 只有当级别升级时才发送（避免重复通知）
+      const levelPriority = { normal: 0, warning: 1, critical: 2 };
+      const shouldNotify = !lastLevel || levelPriority[errorAlert.level] > levelPriority[lastLevel];
+      
+      if (shouldNotify && redis) {
+        // 发送 Webhook
+        try {
+          const alertBody = {
+            content: {
+              title: '🚨 Gemini 代理错误告警',
+              text: `**错误率告警**\n\n` +
+                    `当前错误率：**${globalErrorRate}%**\n` +
+                    `总请求数：${totalRequests}\n` +
+                    `失败次数：${totalErrors}\n` +
+                    `告警级别：${errorAlert.message}\n\n` +
+                    `时间：${new Date().toLocaleString('zh-CN')}\n` +
+                    `[查看 Dashboard](https://api.170909.xyz/dashboard)`
+            },
+            at: { isAtAll: true }
+          };
+          
+          if (webhookType === 'dingtalk') {
+            // 钉钉机器人格式
+            alertBody.msgtype = 'markdown';
+            await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(alertBody)
+            });
+          } else if (webhookType === 'telegram') {
+            // Telegram Bot API
+            const telegramUrl = `${webhookUrl}/sendMessage`;
+            await fetch(telegramUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: webhookUrl.split('/bot')[1]?.split('/')[0],
+                text: `🚨 **Gemini 代理错误告警**\n\n` +
+                      `当前错误率：*${globalErrorRate}%*\n` +
+                      `总请求数：${totalRequests}\n` +
+                      `失败次数：${totalErrors}\n` +
+                      `告警级别：${errorAlert.message}\n\n` +
+                      `时间：${new Date().toLocaleString('zh-CN')}`,
+                parse_mode: 'Markdown'
+              })
+            });
+          }
+        } catch (e) {
+          console.error('Webhook 通知失败:', e);
+        }
+        
+        // 更新上次告警级别
+        await redis.set(lastAlertKey, errorAlert.level, { ex: 86400 }); // 24 小时过期
+      }
+    }
+
     return Response.json({
       globalRequests: parseInt(globalUsed),
       globalErrorRate,
