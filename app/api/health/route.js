@@ -1,6 +1,6 @@
 export const runtime = 'edge';
 
-import getRedis from '../../../lib/redis';
+import redis from '../../../lib/redis';
 
 async function checkGeminiAPI(apiKey) {
   const start = Date.now();
@@ -21,7 +21,7 @@ async function checkGeminiAPI(apiKey) {
 async function checkRedis() {
   const start = Date.now();
   try {
-    const result = await getRedis().ping();
+    const result = await redis.ping();
     const latency = Date.now() - start;
     if (result === 'PONG') {
       return { status: 'ok', latency, message: 'Redis 连接正常' };

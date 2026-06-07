@@ -1,18 +1,18 @@
 // app/api/clients/route.js
 import { getQuotaDate } from '../../../lib/utils';
-import getRedis from '../../../lib/redis';
+import redis from '../../../lib/redis';
 
 export async function GET() {
   try {
     const date = getQuotaDate();
-    const keys = await getRedis().smembers(`clients:${date}:keys`);
+    const keys = await redis.smembers(`clients:${date}:keys`);
 
     if (!keys || keys.length === 0) {
       return Response.json({ date, clients: [] });
     }
 
     // Pipeline 批量获取每个 key 的计数
-    const pipeline = getRedis().pipeline();
+    const pipeline = redis.pipeline();
     keys.forEach(k => pipeline.get(`clients:${date}:${k}`));
     const counts = await pipeline.exec();
 

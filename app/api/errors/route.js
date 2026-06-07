@@ -1,11 +1,11 @@
 // app/api/errors/route.js
 import { getQuotaDate } from '../../../lib/utils';
-import getRedis from '../../../lib/redis';
+import redis from '../../../lib/redis';
 
 export async function GET() {
   try {
     const date = getQuotaDate();
-    const rawEntries = await getRedis().lrange(`errors:${date}`, 0, 19);
+    const rawEntries = await redis.lrange(`errors:${date}`, 0, 19);
 
     const errors = rawEntries.map(entry => {
       try {
