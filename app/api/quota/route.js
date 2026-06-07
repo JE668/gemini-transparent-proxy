@@ -96,9 +96,19 @@ export async function GET() {
       ? parseFloat(((totalErrors / totalRequests) * 100).toFixed(2))
       : 0;
 
+    // 错误告警：根据错误率判断严重性
+    const errorAlert = {
+      level: globalErrorRate > 10 ? 'critical' : globalErrorRate > 5 ? 'warning' : 'normal',
+      rate: globalErrorRate,
+      totalRequests,
+      totalErrors,
+      message: globalErrorRate > 10 ? '严重：错误率超过 10%' : globalErrorRate > 5 ? '警告：错误率超过 5%' : '正常'
+    };
+
     return Response.json({
       globalRequests: parseInt(globalUsed),
       globalErrorRate,
+      errorAlert,
       data: quotaData,
       timestamp: new Date().toISOString()
     });

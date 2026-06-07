@@ -1198,11 +1198,30 @@ function DashboardContent() {
                 <ProgressBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} theme={theme} />
               )) : <EmptyCard emoji="📭" text="暂无模型数据" theme={theme} />}
             </div>
-            {quota?.globalErrorRate > 0 && (
+            {quota?.errorAlert && quota.errorAlert.level !== 'normal' && (
+              <div style={{
+                marginTop: '12px',
+                padding: '10px 12px',
+                borderRadius: '8px',
+                backgroundColor: quota.errorAlert.level === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                border: `1px solid ${quota.errorAlert.level === 'critical' ? 'rgba(239,68,68,0.4)' : 'rgba(245,158,11,0.4)'}`,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '16px' }}>{quota.errorAlert.level === 'critical' ? '🚨' : '⚠️'}</span>
+                  <span style={{ fontWeight: '700', fontSize: '13px', color: quota.errorAlert.level === 'critical' ? '#ef4444' : '#f59e0b' }}>
+                    {quota.errorAlert.message}
+                  </span>
+                </div>
+                <div style={{ fontSize: '11px', color: theme.text.muted }}>
+                  今日 {quota.errorAlert.totalRequests} 次请求，{quota.errorAlert.totalErrors} 次失败
+                </div>
+              </div>
+            )}
+            {quota?.globalErrorRate > 0 && !quota?.errorAlert?.level && (
               <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.bar.bg}` }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
                   <span>🌐 全局错误率</span>
-                  <span style={{ fontWeight: '600', color: quota.globalErrorRate > 5 ? '#ef4444' : '#22c55e' }}>
+                  <span style={{ fontWeight: '600', color: '#22c55e' }}>
                     {quota.globalErrorRate}%
                   </span>
                 </div>
