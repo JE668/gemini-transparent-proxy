@@ -27,7 +27,7 @@ function getTimeUntilReset() {
  // 简化处理：固定以 UTC 07:00 为重置点（PST），夏令时期间偏差 1h 可接受
  const now = new Date();
  // 计算下一个重置时刻（UTC 07:00）
- const reset = new Date(now);
+ const reset = new Date();
  reset.setUTCHours(7, 0, 0, 0);
  // 如果当前已过今天的重置点，则目标为明天
  if (now >= reset) {
@@ -38,11 +38,59 @@ function getTimeUntilReset() {
  const hours = Math.floor(totalSeconds / 3600);
  const minutes = Math.floor((totalSeconds % 3600) / 60);
  const seconds = totalSeconds % 60;
- return { hours, minutes, seconds };
+ return { hours, minutes, seconds, totalHours: totalSeconds / 3600 };
 }
 
 function formatCountdown(cd) {
   return `${String(cd.hours).padStart(2, '0')}:${String(cd.minutes).padStart(2, '0')}:${String(cd.seconds).padStart(2, '0')}`;
+}
+
+// ---- 配额耗尽预测 ----
+function predictExhaustion(quota, timeline) {
+  if (!quota?.globalRequests || !timeline?.timeline) return null;
+  
+  // 计算今天的总请求数（从 timeline 聚合）
+  const todayTotal = timeline.timeline.reduce((sum, h) => sum + h.count, 0);
+  
+  // 计算当前小时（UTC+8）
+  const currentHour = (new Date().getUTCHours() + 8) % 24;
+  
+  // 计算从 00:00 到当前小时的总请求数
+  const hoursElapsed = Math.max(currentHour, 1); // 至少 1 小时避免除零
+  const requestsUntilNow = timeline.timeline.slice(0, currentHour).reduce((sum, h) => sum + h.count, 0);
+  
+  // 平均每小时请求速率
+  const hourlyRate = requestsUntilNow / hoursElapsed;
+  
+  // 获取所有模型的总配额和已使用量
+  const totalLimit = quota.data.reduce((sum, d) => sum + d.limit, 0);
+  const totalUsed = quota.data.reduce((sum, d) => sum + d.used, 0);
+  const remaining = totalLimit - totalUsed;
+  
+  if (hourlyRate <= 0 || remaining <= 0) return null;
+  
+  // 预测耗尽所需小时数
+  const hoursToExhaustion = remaining / hourlyRate;
+  
+  // 计算耗尽时间点（当前时间 + hoursToExhaustion）
+  const now = new Date();
+  const exhaustionTime = new Date(now.getTime() + hoursToExhaustion * 3600 * 1000);
+  
+  // 判断是否在重置前耗尽
+  const reset = new Date();
+  reset.setUTCHours(7, 0, 0, 0);
+  if (now >= reset) {
+    reset.setUTCDate(reset.getUTCDate() + 1);
+  }
+  const willExhaustBeforeReset = exhaustionTime < reset;
+  
+  return {
+    hourlyRate: Math.round(hourlyRate),
+    hoursToExhaustion: Math.round(hoursToExhaustion),
+    exhaustionTime,
+    willExhaustBeforeReset,
+    remaining,
+  };
 }
 
 function formatTime(iso) {
@@ -269,6 +317,9 @@ export default function DashboardPage() {
     ? Math.round(globalStats.latencies.reduce((a, b) => a + b, 0) / globalStats.latencies.length)
     : null;
 
+  // 配额耗尽预测
+  const exhaustionPrediction = useMemo(() => predictExhaustion(quota, timeline), [quota, timeline]);
+
   // 未认证：显示密码输入框
  if (!authed) {
  return (
@@ -383,6 +434,20 @@ export default function DashboardPage() {
         <StatusEmoji emoji="&#x1F504;" label="重试次数" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
         <div style={statusDividerStyle} className="dashboard-status-divider" />
         <StatusEmoji emoji="&#x23F0;" label="配额重置" value={formatCountdown(countdown)} mono />
+        {exhaustionPrediction && (
+          <>
+            <div style={statusDividerStyle} className="dashboard-status-divider" />
+            <StatusEmoji 
+              emoji={exhaustionPrediction.willExhaustBeforeReset ? "&#x1F6A8;" : "&#x2705;"} 
+              label="配额预测" 
+              value={exhaustionPrediction.willExhaustBeforeReset ? '将耗尽' : '充足'} 
+              valueColor={exhaustionPrediction.willExhaustBeforeReset ? '#dc2626' : '#166534'}
+              title={exhaustionPrediction.willExhaustBeforeReset 
+                ? `按当前速率 (${exhaustionPrediction.hourlyRate} 次/小时), 预计 ${exhaustionPrediction.hoursToExhaustion} 小时后耗尽配额`
+                : `按当前速率 (${exhaustionPrediction.hourlyRate} 次/小时), 剩余配额可支撑 ${exhaustionPrediction.hoursToExhaustion} 小时`}
+            />
+          </>
+        )}
         <div style={statusDividerStyle} className="dashboard-status-divider" />
         <StatusEmoji emoji="&#x1F916;" label="Gemini" value={geminiOk ? '正常' : '异常'} valueColor={geminiOk ? '#166534' : '#dc2626'} />
         <div style={statusDividerStyle} className="dashboard-status-divider" />
@@ -670,9 +735,9 @@ function StatusDot({ label, ok, okText, failText }) {
  );
 }
 
-function StatusEmoji({ emoji, label, value, valueColor, mono }) {
+function StatusEmoji({ emoji, label, value, valueColor, mono, title }) {
  return (
- <div style={statusItemStyle} className="dashboard-status-item">
+ <div style={statusItemStyle} className="dashboard-status-item" title={title}>
  <div style={statusEmojiStyle}>{emoji}</div>
  <div>
  <div style={statusLabelStyle}>{label}</div>
