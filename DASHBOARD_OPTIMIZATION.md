@@ -219,3 +219,120 @@ lib/models.js          - 模型配置（已更新为 Gemma 4）
 
 **优化完成时间**: 2026-01-06  
 **版本号**: v0.3.0 (UI Enhancement)
+
+---
+
+## 🆕 2026-06-07 更新 — 单节点模式 & 客户端追踪
+
+### 核心改进
+
+#### 1. 运行节点状态 ⚡
+- **单节点模式**：Cherry 集群状态卡片改为显示真实的 Vercel Edge Function 状态
+- **数据来源**：从 Redis 读取实时请求数、平均延迟、心跳计数
+- **显示信息**：
+  - 节点名称：Vercel Edge Function
+  - 延迟：当前平均延迟（ms）
+  - 请求数：今日累计请求数
+  - 区域：Vercel 边缘计算区域（如 `global`、`sin1` 等）
+  - 平台：Vercel Edge
+- **健康检查**：基于心跳计数自动判断在线状态
+
+#### 2. 客户端来源追踪 🔍
+- **IP 提取**：从 `X-Forwarded-For` 或 `X-Real-IP` 头提取真实客户端 IP
+- **UA 识别**：解析 User-Agent 识别客户端类型
+- **客户端类型**：
+  - 🔌 Postman / 通用 API 客户端
+  - 💻 curl / 命令行工具
+  - 🐍 Python (python-requests)
+  - 🟢 Node.js (node-fetch)
+  - 📦 Axios
+  - 🔵 Go (Go-http-client)
+  - ☕ Java
+  - 🌐 Chrome / Firefox / Safari 浏览器
+- **隐私保护**：IP 地址脱敏显示（`192.168.**.**`）
+- **存储结构**：
+  - `client:info:${fingerprint}` Hash：保存 IP、UA、lastSeen
+  - `recent:${date}` List：最近请求含 IP 和 UA
+  - `errors:${date}` List：错误日志含 IP 和 UA
+
+### Dashboard 显示优化
+
+#### 来源统计卡片
+- **新增**：客户端类型图标 + 名称
+- **新增**：脱敏 IP 地址显示
+- **保留**：API Key 指纹 + 请求量进度条
+
+#### 最近请求列表
+- **新增**：每条请求显示客户端类型图标和名称
+- **新增**：来源 IP 地址显示
+
+#### 错误日志
+- **新增**：每条错误显示客户端类型和 IP
+- **便于调试**：快速定位问题客户端
+
+### 后端改动
+
+#### `app/api/[[...path]]/route.js`
+```javascript
+// 提取客户端信息
+const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() 
+              || req.headers.get('x-real-ip') 
+              || 'unknown';
+const userAgent = req.headers.get('user-agent') || 'unknown';
+
+// 记录到 Redis
+redis.hset(`client:info:${clientFingerprint}`, {
+  ip: clientIP,
+  ua: userAgent,
+  lastSeen: new Date().toISOString(),
+});
+```
+
+#### `app/api/cherry/route.js`
+```javascript
+// 从 Redis 读取真实数据
+const [totalRequests, latencyData, heartbeat] = await Promise.all([
+  redis.get(`quota:global:${date}`) || 0,
+  redis.get(`avgLatency:${date}:global`),
+  redis.get('proxy:heartbeat') || 0,
+]);
+
+// 单节点模式
+const cluster = {
+  mode: 'single-node',
+  status: node.status === 'online' ? 'healthy' : 'unknown',
+  totalNodes: 1,
+  onlineNodes: node.status === 'online' ? 1 : 0,
+  nodes: [node],
+  loadBalance: null, // 单节点无需负载均衡
+};
+```
+
+### 前端改动
+
+#### `app/dashboard/page.js`
+- 新增 `parseUserAgent()` 工具函数
+- 来源统计卡片：显示客户端类型图标 + IP
+- 最近请求列表：显示客户端类型 + IP
+- 错误日志：显示客户端类型 + IP
+- Cherry 卡片：根据 `mode` 显示"运行节点"或"Cherry 集群"
+
+### 文档更新
+
+- ✅ `README.md`：Dashboard 面板说明更新至 8 个
+- ✅ `DASHBOARD_FEATURES.md`：添加"运行节点状态"功能说明
+- ✅ `DASHBOARD_OPTIMIZATION.md`：新增 2026-06-07 更新记录
+
+### 技术亮点
+
+1. **真实数据驱动**：Cherry 状态从 mock 数据改为真实 Redis 指标
+2. **隐私保护**：IP 脱敏处理，符合 GDPR/个人信息保护要求
+3. **渐进增强**：单节点模式可平滑过渡到多节点 Cherry 集群
+4. **零成本监控**：利用 Vercel Edge + Upstash Redis 免费额度
+
+### 版本信息
+
+- **Commit**: `feat(dashboard): add client IP and User-Agent tracking`
+- **版本**: v0.4.0 (Client Tracking & Single-Node Mode)
+- **构建状态**: ✅ 通过
+- **部署**: Vercel 自动部署
