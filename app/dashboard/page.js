@@ -113,6 +113,24 @@ const exportToCSV = (data, filename) => {
   URL.revokeObjectURL(link.href);
 };
 
+// 解析 User-Agent 识别客户端类型
+const parseUserAgent = (ua) => {
+  if (!ua || ua === 'unknown') return { type: '未知', icon: '🔌' };
+  if (ua.includes('Postman')) return { type: 'Postman', icon: '🔌' };
+  if (ua.includes('curl')) return { type: 'curl', icon: '💻' };
+  if (ua.includes('python-requests')) return { type: 'Python', icon: '🐍' };
+  if (ua.includes('node-fetch')) return { type: 'Node.js', icon: '🟢' };
+  if (ua.includes('axios')) return { type: 'Axios', icon: '📦' };
+  if (ua.includes('Go-http-client')) return { type: 'Go', icon: '🔵' };
+  if (ua.includes('Java')) return { type: 'Java', icon: '☕' };
+  if (ua.includes('Mozilla/5.0')) {
+    if (ua.includes('Chrome')) return { type: 'Browser (Chrome)', icon: '🌐' };
+    if (ua.includes('Firefox')) return { type: 'Browser (Firefox)', icon: '🦊' };
+    if (ua.includes('Safari')) return { type: 'Browser (Safari)', icon: '🧭' };
+  }
+  return { type: '其他', icon: '🔌' };
+};
+
 // =============================================================================
 // 主题
 // =============================================================================
@@ -1511,11 +1529,20 @@ function DashboardContent() {
             </div>
             <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px', scrollbarWidth: 'thin' }}>
               {clients?.clients?.length > 0 ? clients.clients.map((c, i) => (
-                <ProgressBar key={i} label={c.fingerprint?.length > 30 ? c.fingerprint.slice(0, 30) + '…' : c.fingerprint || 'unknown'}
-                  value={c.requests}
-                  max={Math.max(...clients.clients.map(x => x.requests), 1)}
-                  color={['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81'][i % 10]}
-                  theme={theme} />
+                <div key={i} style={{ marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', fontSize: '13px' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '500' }}>
+                      <span>{c.uaIcon || '🔌'}</span>
+                      <span style={{ color: theme.text.main }}>{c.ua || '未知'}</span>
+                    </span>
+                    <span style={{ fontSize: '11px', color: theme.text.muted }}>{c.ip || '***'}</span>
+                  </div>
+                  <ProgressBar label={c.fingerprint?.length > 30 ? c.fingerprint.slice(0, 30) + '…' : c.fingerprint || 'unknown'}
+                    value={c.requests}
+                    max={Math.max(...clients.clients.map(x => x.requests), 1)}
+                    color={['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81'][i % 10]}
+                    theme={theme} />
+                </div>
               )) : <EmptyCard emoji="🔒" text="暂无来源数据" theme={theme} />}
             </div>
           </div>
@@ -1543,11 +1570,12 @@ function DashboardContent() {
               {(selectedModel ? filteredRecent : recent?.recent)?.length > 0
                 ? (selectedModel ? filteredRecent : recent?.recent).slice(0, 20).map((r, i) => {
                     const label = getStatusLabel(r.status);
+                    const uaInfo = r.ua ? parseUserAgent(r.ua) : null;
                     return (
                       <LogRow key={i} time={formatTime(r.ts)} badge={r.status}
-                        label={shortModel(r.model)}
+                        label={`${shortModel(r.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}`}
                         badgeColor={label.color}
-                        sub={r.latency != null ? `${r.latency}ms` : undefined}
+                        sub={r.ip ? r.ip : (r.latency != null ? `${r.latency}ms` : undefined)}
                         color={label.color} theme={theme} />
                     );
                   })
@@ -1576,11 +1604,12 @@ function DashboardContent() {
               {errors?.errors?.length > 0
                 ? errors.errors.slice(0, 20).map((e, i) => {
                     const label = getStatusLabel(e.status);
+                    const uaInfo = e.ua ? parseUserAgent(e.ua) : null;
                     return (
                       <LogRow key={i} time={formatTime(e.ts)} badge={e.status}
-                        label={`${shortModel(e.model)}${e.message ? ` · ${e.message}` : ''}`}
+                        label={`${shortModel(e.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}${e.message ? ` · ${e.message}` : ''}`}
                         badgeColor={label.color}
-                        sub={e.latency != null ? `${e.latency}ms` : undefined}
+                        sub={e.ip ? e.ip : (e.latency != null ? `${e.latency}ms` : undefined)}
                         color={label.color} theme={theme} />
                     );
                   })
