@@ -1,6 +1,6 @@
 'use client';
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import React, { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 
 // =============================================================================
 // 工具函数
@@ -408,8 +408,17 @@ function EmptyCard({ emoji, text, theme }) {
 // 主组件
 // =============================================================================
 export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>Loading Dashboard...</div>}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+
+function DashboardContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const pathname = usePathname();
   
   const [dark, setDark] = useState(() => {
     // 优先从 URL 恢复，其次从 localStorage
