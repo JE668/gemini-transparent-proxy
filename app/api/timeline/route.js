@@ -1,16 +1,16 @@
 // app/api/timeline/route.js
 import { getQuotaDate } from '../../../lib/utils';
-import redis from '../../../lib/redis';
+import getRedis from '../../../lib/redis';
 
 export async function GET() {
   try {
     const date = getQuotaDate();
 
     // 获取今天有数据的小时集合
-    const activeHours = await redis.smembers(`timeline:${date}:hours`);
+    const activeHours = await getRedis()?.smembers(`timeline:${date}:hours`);
 
     // 并行拉取每个小时的计数
-    const pipeline = redis.pipeline();
+    const pipeline = getRedis()?.pipeline();
     for (let h = 0; h < 24; h++) {
       pipeline.get(`timeline:${date}:h${h}`);
     }
