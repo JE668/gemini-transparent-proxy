@@ -423,6 +423,9 @@ export default function DashboardPage() {
   const [collapsedSections, setCollapsedSections] = useState({});
   const [exporting, setExporting] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState(null);
+  const [refreshProgress, setRefreshProgress] = useState(0);
 
   const theme = getTheme(dark);
 
@@ -431,6 +434,21 @@ export default function DashboardPage() {
     const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // 刷新进度条（30 秒倒计时）
+  useEffect(() => {
+    if (!authed) return;
+    let progress = 0;
+    const interval = REFRESH_INTERVAL / 100; // 100 步
+    const timer = setInterval(() => {
+      progress += 1;
+      setRefreshProgress(Math.min(progress, 100));
+      if (progress >= 100) {
+        progress = 0;
+      }
+    }, interval);
+    return () => clearInterval(timer);
+  }, [authed]);
 
   // 从 localStorage 恢复暗色模式和密码
   useEffect(() => {
@@ -458,6 +476,8 @@ export default function DashboardPage() {
 
   const fetchData = useCallback(async () => {
     if (!authed) return;
+    setRefreshing(true);
+    setLastRefreshTime(new Date());
     try {
       const [q, h, e, t, c, r] = await Promise.all([
         authFetch('/api/quota').then(r => r?.json()),
@@ -470,7 +490,7 @@ export default function DashboardPage() {
       if (!q && !h && !e && !t && !c && !r) return;
       setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setClients(c); setRecent(r);
     } catch (err) { console.error(err); }
-    finally { setLoading(false); }
+    finally { setRefreshing(false); setLoading(false); }
   }, [authed, authFetch]);
 
   useEffect(() => {
@@ -776,8 +796,27 @@ export default function DashboardPage() {
         <header style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           marginBottom: '28px', paddingBottom: '20px',
-          borderBottom: `1px solid ${dark ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.08)'}`
+          borderBottom: `1px solid ${dark ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.08)'}`,
+          position: 'relative'
         }}>
+          {/* 刷新进度条 */}
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: '2px',
+            backgroundColor: theme.bar.bg,
+            borderRadius: '2px',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              width: `${refreshProgress}%`,
+              height: '100%',
+              background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+              transition: 'width 0.3s linear',
+            }} />
+          </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{
@@ -798,6 +837,11 @@ export default function DashboardPage() {
             <p style={{ color: theme.text.muted, fontSize: '13px', margin: '4px 0 0', fontWeight: '500' }}>
               实时监控 · 智能分析 · 配额管理
             </p>
+            {lastRefreshTime && (
+              <p style={{ color: theme.text.muted, fontSize: '11px', margin: '6px 0 0', fontFamily: 'monospace' }}>
+                上次刷新：{lastRefreshTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </p>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ 
@@ -829,24 +873,30 @@ export default function DashboardPage() {
                 e.currentTarget.style.boxShadow = theme.card.boxShadow;
               }}
             >{dark ? '☀️' : '🌙'}</button>
-            <button onClick={fetchData} title="刷新数据"
+            <button onClick={fetchData} title={refreshing ? '刷新中...' : '刷新数据'}
               style={{
                 width: '38px', height: '38px', borderRadius: '12px',
                 border: theme.card.border, backgroundColor: theme.card.backgroundColor,
-                cursor: 'pointer', fontSize: '18px', display: 'flex',
+                cursor: refreshing ? 'not-allowed' : 'pointer', fontSize: '18px', display: 'flex',
                 alignItems: 'center', justifyContent: 'center',
                 transition: 'all 0.2s ease',
                 boxShadow: theme.card.boxShadow,
+                opacity: refreshing ? 0.6 : 1,
+                animation: refreshing ? 'spin 1s linear infinite' : 'none',
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.transform = 'scale(1.1) rotate(180deg)';
-                e.currentTarget.style.boxShadow = theme.glow;
+                if (!refreshing) {
+                  e.currentTarget.style.transform = 'scale(1.1) rotate(180deg)';
+                  e.currentTarget.style.boxShadow = theme.glow;
+                }
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
-                e.currentTarget.style.boxShadow = theme.card.boxShadow;
+                if (!refreshing) {
+                  e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
+                  e.currentTarget.style.boxShadow = theme.card.boxShadow;
+                }
               }}
-            >⟳</button>
+            >{refreshing ? '⏳' : '⟳'}</button>
             
             {/* 导出按钮 */}
             <div style={{ position: 'relative' }}>
