@@ -1,5 +1,6 @@
 'use client';
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 // =============================================================================
 // 工具函数
@@ -407,7 +408,16 @@ function EmptyCard({ emoji, text, theme }) {
 // 主组件
 // =============================================================================
 export default function DashboardPage() {
-  const [dark, setDark] = useState(false);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  
+  const [dark, setDark] = useState(() => {
+    // 优先从 URL 恢复，其次从 localStorage
+    const fromUrl = searchParams.get('dark');
+    if (fromUrl === '1') return true;
+    const saved = localStorage.getItem('dashboard_dark');
+    return saved === 'true';
+  });
   const [authed, setAuthed] = useState(false);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
@@ -420,7 +430,13 @@ export default function DashboardPage() {
   const [selectedModel, setSelectedModel] = useState(null);
   const [authError, setAuthError] = useState('');
   const [countdown, setCountdown] = useState(getTimeUntilReset());
-  const [collapsedSections, setCollapsedSections] = useState({});
+  const [collapsedSections, setCollapsedSections] = useState(() => {
+    const fromUrl = searchParams.get('collapsed');
+    if (fromUrl) {
+      try { return JSON.parse(fromUrl); } catch { return {}; }
+    }
+    return {};
+  });
   const [exporting, setExporting] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -450,13 +466,35 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, [authed]);
 
-  // 从 localStorage 恢复暗色模式和密码
+  // 从 localStorage 恢复暗色模式和密码（仅当 URL 没有时）
   useEffect(() => {
     const saved = localStorage.getItem('dashboard_token');
-    if (saved) { setPassword(saved); setAuthed(true); }
-    const savedDark = localStorage.getItem('dashboard_dark');
-    if (savedDark === 'true') setDark(true);
-  }, []);
+    if (saved && !searchParams.get('authed')) { setPassword(saved); setAuthed(true); }
+    // dark 已经从 useState 初始化时处理了
+  }, [searchParams]);
+
+  // 同步状态到 URL（暗色模式、折叠状态）
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    
+    // 同步 dark
+    if (dark) params.set('dark', '1');
+    else params.delete('dark');
+    
+    // 同步 collapsedSections
+    const hasCollapsed = Object.values(collapsedSections).some(v => v);
+    if (hasCollapsed) {
+      params.set('collapsed', JSON.stringify(collapsedSections));
+    } else {
+      params.delete('collapsed');
+    }
+    
+    // 只有当 URL 真正变化时才 replace
+    const newSearch = params.toString();
+    if (window.location.search !== newSearch) {
+      router.replace(`?${newSearch}`, { scroll: false });
+    }
+  }, [dark, collapsedSections, router, searchParams]);
 
   const handleLogin = async (e) => {
     e?.preventDefault();
