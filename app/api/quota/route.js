@@ -1,12 +1,12 @@
 // app/api/quota/route.js
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
-import redis from '../../../lib/redis';
+import getRedis from '../../../lib/redis';
 
 export async function GET() {
   try {
     const date = getQuotaDate();
-    const globalUsed = await redis.get(`quota:global:${date}`) || 0;
+    const globalUsed = await getRedis()?.get(`quota:global:${date}`) || 0;
 
     // 动态扫描 Redis 中所有 quota:{date}:* 的 key，发现实际使用的所有模型
     // Upstash Redis 不支持 keys()，必须用 scan()
@@ -21,7 +21,7 @@ export async function GET() {
     // Upstash scan 返回 [cursor: string, keys: string[]]，cursor 为 "0" 时扫描完成
     let cursor = "0";
     do {
-    const [nextCursor, keys] = await redis.scan(cursor, { match: `quota:${date}:*`, count: 100 });
+    const [nextCursor, keys] = await getRedis()?.scan(cursor, { match: `quota:${date}:*`, count: 100 });
     cursor = nextCursor;
     for (const key of keys) {
     // key 格式: quota:{date}:{modelId}
@@ -41,7 +41,7 @@ export async function GET() {
     }
 
     // Pipeline 批量获取所有模型的配额和平均延迟
-    const pipeline = redis.pipeline();
+    const pipeline = getRedis()?.pipeline();
     for (const modelId of allModelIds) {
       pipeline.get(`quota:${date}:${modelId}`);
       pipeline.get(`avgLatency:${date}:${modelId}`);
@@ -57,8 +57,8 @@ export async function GET() {
     const quotaData = [];
     for (let i = 0; i < allModelIds.length; i++) {
       const modelId = allModelIds[i];
-      const used = results[i * 2]?.[1] || 0;
-      const avgLatencyRaw = results[i * 2 + 1]?.[1];
+      const used = results[i * 2] || 0;
+      const avgLatencyRaw = results[i * 2 + 1];
       const limit = limitMap[modelId] || 1500;
       const percent = parseFloat(((used / limit) * 100).toFixed(2));
 
@@ -86,7 +86,7 @@ export async function GET() {
     let totalRequests = 0;
     let totalErrors = 0;
     for (let i = 0; i < statusCodes.length; i++) {
-      const count = parseInt(results[statusOffset + i]?.[1]) || 0;
+      const count = parseInt(results[statusOffset + i]) || 0;
       totalRequests += count;
       if (statusCodes[i] >= 400) {
         totalErrors += count;
