@@ -279,7 +279,7 @@ const darkCheck = (t) => {
 // =============================================================================
 // 小组件
 // =============================================================================
-function MetricCard({ icon, label, value, sub, color, onClick, selected, theme }) {
+function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, badge }) {
   const isDark = darkCheck(theme);
   return (
     <div onClick={onClick}
@@ -307,6 +307,30 @@ function MetricCard({ icon, label, value, sub, color, onClick, selected, theme }
         } 
       }}
     >
+      {/* 红点提示 */}
+      {badge > 0 && (
+        <span style={{
+          position: 'absolute',
+          top: '12px',
+          right: '12px',
+          minWidth: '18px',
+          height: '18px',
+          borderRadius: '9px',
+          backgroundColor: '#ef4444',
+          color: 'white',
+          fontSize: '10px',
+          fontWeight: '700',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)',
+          zIndex: 10,
+          padding: '0 5px',
+        }}>
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
+      
       {/* 顶部装饰条 */}
       {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '16px 16px 0 0' }} />}
       
@@ -452,6 +476,7 @@ function DashboardContent() {
   const [lastRefreshTime, setLastRefreshTime] = useState(null);
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [cherry, setCherry] = useState(null);
+  const [unreadErrors, setUnreadErrors] = useState(0);
 
   const theme = getTheme(dark);
 
@@ -547,6 +572,16 @@ function DashboardContent() {
     const timer = setInterval(fetchData, REFRESH_INTERVAL);
     return () => clearInterval(timer);
   }, [fetchData]);
+
+  // 追踪未读错误数（每次刷新后重置，5 秒后自动标记为已读）
+  useEffect(() => {
+    if (errors?.count > 0) {
+      setUnreadErrors(prev => prev === 0 ? errors.count : prev);
+      // 5 秒后自动标记为已读
+      const timer = setTimeout(() => setUnreadErrors(0), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [errors?.count]);
 
   const toggleDark = () => {
     const next = !dark;
@@ -1090,6 +1125,7 @@ function DashboardContent() {
             color={errorCount > 0 ? '#ef4444' : '#22c55e'} 
             theme={theme} 
             style={errorCount > 0 && errorRate > 5 ? { animation: 'pulse-glow 2s ease-in-out infinite' } : {}}
+            badge={unreadErrors}
           />
           <MetricCard icon="⏱️" label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)}ms` : '—'}
             sub="所有模型综合" color="#f59e0b" theme={theme} />
