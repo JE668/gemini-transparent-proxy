@@ -254,6 +254,15 @@ async function handleRequest(req) {
     telemetryOps.push(
     redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
     );
+    
+    // 慢请求追踪：延迟 >3000ms 的记录到 sorted set
+    if (latency > 3000) {
+    telemetryOps.push(
+    redis.zadd(`slow:${date}`, latency, recentEntry)
+    .then(() => redis.zremrangebyrank(`slow:${date}`, 0, -11)) // 只保留 Top 10
+    .then(() => redis.expire(`slow:${date}`, TTL))
+    );
+    }
 
     // 错误日志：4xx/5xx 写入 Redis List
     if (response.status >= 400) {

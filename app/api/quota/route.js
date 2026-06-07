@@ -105,6 +105,20 @@ export async function GET() {
       message: globalErrorRate > 10 ? '严重：错误率超过 10%' : globalErrorRate > 5 ? '警告：错误率超过 5%' : '正常'
     };
 
+    // 检测 unknown-model
+    const unknownModels = quotaData.filter(d => d.model === 'unknown-model' || d.model.includes('unknown'));
+    const unknownModelAlert = unknownModels.length > 0 ? {
+      count: unknownModels.length,
+      totalUsed: unknownModels.reduce((s, d) => s + d.used, 0),
+      models: unknownModels.map(d => d.model),
+    } : null;
+    
+    // 如果有 unknown-model，提升告警级别
+    if (unknownModelAlert && errorAlert.level === 'normal') {
+      errorAlert.level = 'warning';
+      errorAlert.message = '警告：发现未配置模型';
+    }
+
     // Webhook 告警通知：当错误级别从正常变为警告/严重时发送
     const webhookUrl = process.env.ERROR_WEBHOOK_URL;
     const webhookType = process.env.ERROR_WEBHOOK_TYPE; // 'dingtalk' or 'telegram'
@@ -175,6 +189,7 @@ export async function GET() {
       globalRequests: parseInt(globalUsed),
       globalErrorRate,
       errorAlert,
+      unknownModelAlert,
       data: quotaData,
       timestamp: new Date().toISOString()
     });
