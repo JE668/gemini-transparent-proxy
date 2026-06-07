@@ -451,6 +451,7 @@ function DashboardContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshTime, setLastRefreshTime] = useState(null);
   const [refreshProgress, setRefreshProgress] = useState(0);
+  const [cherry, setCherry] = useState(null);
 
   const theme = getTheme(dark);
 
@@ -526,16 +527,17 @@ function DashboardContent() {
     setRefreshing(true);
     setLastRefreshTime(new Date());
     try {
-      const [q, h, e, t, c, r] = await Promise.all([
+      const [q, h, e, t, c, r, ch] = await Promise.all([
         authFetch('/api/quota').then(r => r?.json()),
         authFetch('/api/health').then(r => r?.json()).catch(() => null),
         authFetch('/api/errors').then(r => r?.json()).catch(() => null),
         authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
         authFetch('/api/clients').then(r => r?.json()).catch(() => null),
         authFetch('/api/recent').then(r => r?.json()).catch(() => null),
+        authFetch('/api/cherry').then(r => r?.json()).catch(() => null),
       ]);
-      if (!q && !h && !e && !t && !c && !r) return;
-      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setClients(c); setRecent(r);
+      if (!q && !h && !e && !t && !c && !r && !ch) return;
+      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setClients(c); setRecent(r); setCherry(ch);
     } catch (err) { console.error(err); }
     finally { setRefreshing(false); setLoading(false); }
   }, [authed, authFetch]);
@@ -1529,6 +1531,77 @@ function DashboardContent() {
             </div>
           </div>
         </div>
+
+        {/* ====== Cherry 集群状态 ====== */}
+        {cherry && (
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card, marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🍒 Cherry 集群状态
+              </h2>
+              <span style={{
+                fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                backgroundColor: cherry.status === 'healthy' ? '#22c55e18' : '#ef444418',
+                color: cherry.status === 'healthy' ? '#22c55e' : '#ef4444',
+                border: `1px solid ${cherry.status === 'healthy' ? '#22c55e30' : '#ef444430'}`,
+                fontWeight: '600'
+              }}>
+                {cherry.status === 'healthy' ? '集群健康' : '集群异常'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
+              </span>
+            </div>
+            
+            {/* 节点列表 */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+              {cherry.nodes?.map((node, i) => (
+                <div key={node.id} style={{
+                  padding: '14px', borderRadius: '10px',
+                  backgroundColor: theme.bar.bg,
+                  border: `1px solid ${node.status === 'online' ? '#22c55e30' : '#ef444430'}`
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.name}</span>
+                    <span style={{
+                      fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+                      backgroundColor: node.status === 'online' ? '#22c55e18' : '#ef444418',
+                      color: node.status === 'online' ? '#22c55e' : '#ef4444',
+                      fontWeight: '600'
+                    }}>{node.status}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
+                    <span>延迟：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.latency}ms</span></span>
+                    <span>请求：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.requests.toLocaleString()}</span></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            {/* 负载均衡信息 */}
+            {cherry.loadBalance && (
+              <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
+                <div style={{ fontSize: '12px', color: theme.text.muted, marginBottom: '8px' }}>
+                  负载均衡：{cherry.loadBalance.algorithm} · 流量分布
+                </div>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  {cherry.loadBalance.distribution?.map(( pct, i) => (
+                    <div key={i} style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>
+                        <span>Node {i + 1}</span>
+                        <span style={{ color: theme.text.main, fontWeight: '600' }}>{pct}%</span>
+                      </div>
+                      <div style={{ height: '6px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          background: i === 0 ? 'linear-gradient(90deg, #6366f1, #8b5cf6)' : i === 1 ? 'linear-gradient(90deg, #22c55e, #10b981)' : 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                        }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ====== Footer ====== */}
         <footer style={{
