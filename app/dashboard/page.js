@@ -1801,6 +1801,32 @@ function DashboardContent() {
           }
           @media (max-width: 768px) {
             body > div > div > div { padding: 16px 12px !important; }
+            /* 标题字体缩小 */
+            h1 { font-size: 20px !important; }
+            h2 { font-size: 15px !important; }
+            /* 状态栏紧凑 */
+            [class*=\"metric-card\"] { padding: 10px 8px !important; }
+            [class*=\"metric-value\"] { font-size: 16px !important; }
+            /* 图表高度减小 */
+            svg[height=\"180\"] { height: 140px !important; }
+            /* 卡片内边距减小 */
+            [style*=\"padding: 20px\"] { padding: 14px !important; }
+          }
+          @media (max-width: 480px) {
+            /* 超小屏幕进一步优化 */
+            body > div > div > div { padding: 12px 8px !important; }
+            h1 { font-size: 18px !important; }
+            h2 { font-size: 14px !important; }
+            /* 隐藏次要信息 */
+            [style*=\"fontSize: '11px'\"] { display: none !important; }
+            /* 简化统计卡片 */
+            [style*=\"gridTemplateColumns: '1fr 1fr 1fr'\"] { 
+              grid-template-columns: 1fr !important; 
+              gap: 8px !important; 
+            }
+            /* 慢请求列表简化 */
+            [style*=\"minWidth: '70px'\"] { display: none !important; }
+            [style*=\"minWidth: '80px'\"] { min-width: 60px !important; font-size: 12px !important; }
           }
           @media (max-width: 860px) {
             [style*="grid-template-columns: 1fr 1fr"] {

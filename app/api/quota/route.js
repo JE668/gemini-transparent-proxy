@@ -122,6 +122,9 @@ export async function GET() {
     // Webhook 告警通知：当错误级别从正常变为警告/严重时发送
     const webhookUrl = process.env.ERROR_WEBHOOK_URL;
     const webhookType = process.env.ERROR_WEBHOOK_TYPE; // 'dingtalk' or 'telegram'
+    const quietHours = process.env.QUIET_HOURS_ENABLED === 'true'; // 是否启用静默时段
+    const quietStart = parseInt(process.env.QUIET_HOURS_START || '22'); // 静默开始时间（小时）
+    const quietEnd = parseInt(process.env.QUIET_HOURS_END || '8'); // 静默结束时间（小时）
     
     if (errorAlert.level !== 'normal' && webhookUrl) {
       // 从 Redis 读取上次告警级别
@@ -133,7 +136,17 @@ export async function GET() {
       const levelPriority = { normal: 0, warning: 1, critical: 2 };
       const shouldNotify = !lastLevel || levelPriority[errorAlert.level] > levelPriority[lastLevel];
       
-      if (shouldNotify && redis) {
+      // 检查是否在静默时段（仅针对 warning 级别，critical 始终发送）
+      const now = new Date();
+      const beijingHour = (now.getUTCHours() + 8) % 24;
+      const isQuietHours = quietHours && 
+        ((quietStart >= quietEnd && (beijingHour >= quietStart || beijingHour < quietEnd)) ||
+         (quietStart < quietEnd && beijingHour >= quietStart && beijingHour < quietEnd));
+      
+      // 静默时段只发送 critical 告警
+      const skipForQuiet = isQuietHours && errorAlert.level === 'warning';
+      
+      if (shouldNotify && !skipForQuiet && redis) {
         // 发送 Webhook
         try {
           const alertBody = {
