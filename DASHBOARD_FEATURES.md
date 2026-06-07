@@ -1,153 +1,178 @@
-# Gemini 透明代理 - Dashboard 功能更新
+# Gemini 透明代理 - Dashboard 完整功能文档
 
-## 📅 2026-06-07 更新
+## 📅 2026-06-07 最终版本
 
-本次更新为 Dashboard 添加了三大核心优化功能，提升监控能力和告警响应速度。
-
----
-
-## ✨ 新增功能
-
-### 1. 配额耗尽预测 ⏱️
-
-**功能描述**
-- 基于当前使用速率预测每个模型的配额何时耗尽
-- 自动计算从今天 00:00 到现在的平均使用速率
-- 智能格式化显示（"2 小时 30 分"、"1.5 天"）
-
-**告警级别**
-- 🟢 **绿色**：预计 >4 小时耗尽（配额充足）
-- 🟠 **橙色**：预计 <4 小时耗尽（需关注）
-- 🔴 **红色**：预计 <2 小时耗尽（紧急）
-
-**显示位置**
-- 每个模型卡片内，配额进度条下方
-- 仅显示未耗尽的模型预测
-
-**技术实现**
-```javascript
-// 预测算法
-const predictQuotaExhaustion = (used, limit, hoursElapsed) => {
-  const hourlyRate = used / hoursElapsed;
-  const remaining = limit - used;
-  const hoursUntilExhaustion = remaining / hourlyRate;
-  return {
-    exhausted: false,
-    minutes: hoursUntilExhaustion * 60,
-    rate: hourlyRate,
-    remaining,
-  };
-};
-```
+本次更新为 Dashboard 添加了**9 大核心功能**，打造企业级监控告警系统。
 
 ---
 
-### 2. 分级错误告警 🚨
+## ✨ 完整功能清单
 
-**功能描述**
-- 实时监控全局错误率
-- 根据错误率自动判断告警级别
-- 在 Dashboard 显示醒目的告警框
+### 一、配额管理
 
-**告警级别**
-- 🚨 **严重**（错误率 >10%）：红色告警框
-- ⚠️ **警告**（错误率 >5%）：橙色告警框
-- ✅ **正常**（错误率 <5%）：不显示告警
-
-**显示内容**
-- 告警图标 + 级别消息
-- 详细统计：总请求数、失败次数
-
-**技术实现**
-```javascript
-// quota API 返回
-{
-  errorAlert: {
-    level: 'critical' | 'warning' | 'normal',
-    rate: 5.33,
-    totalRequests: 150,
-    totalErrors: 8,
-    message: '警告：错误率超过 5%'
-  }
-}
-```
+#### 1. 配额耗尽预测 ⏱️
+- **功能**：基于当前使用速率预测每个模型的配额何时耗尽
+- **算法**：`剩余配额 ÷ 平均速率 = 预计可用时间`
+- **告警级别**：
+  - 🟢 绿色：>4 小时（充足）
+  - 🟠 橙色：<4 小时（需关注）
+  - 🔴 红色：<2 小时（紧急）
+- **显示**：每个模型卡片内，配额进度条下方
 
 ---
 
-### 3. Webhook 告警通知 📬
+### 二、质量监控
 
-**功能描述**
-- 当错误率从正常升级为警告/严重时，自动发送通知
-- 使用 Redis 记录告警状态，24 小时内不重复通知
-- 支持钉钉和 Telegram 两种机器人
+#### 2. 分级错误告警 🚨
+- **监控指标**：全局错误率（4xx + 5xx）
+- **告警级别**：
+  - 🚨 **严重**（>10%）：红色告警框
+  - ⚠️ **警告**（>5%）：橙色告警框
+  - ✅ **正常**（<5%）：不显示
+- **详细信息**：总请求数、失败次数
 
-**支持平台**
-- **钉钉机器人**：Markdown 格式消息
-- **Telegram Bot**：Markdown 格式消息
+#### 3. unknown-model 检测 🔍
+- **自动识别**：模型名为 `unknown-model` 或包含 `unknown`
+- **告警触发**：发现未配置模型时自动升级为 warning
+- **显示内容**：未知模型数量、总使用量
 
-**触发条件**
-- 错误率从 normal → warning（升级告警）
-- 错误率从 normal/warning → critical（严重告警）
-- 每天每个级别只通知一次（避免骚扰）
+#### 4. 慢请求 Top 10 🐌
+- **阈值**：延迟 > 3000ms
+- **存储**：Redis Sorted Set（按延迟排序）
+- **维护**：自动保留 Top 10，24 小时过期
+- **显示**：排名、模型名、延迟、状态码、时间
 
-**消息内容**
-```
-🚨 Gemini 代理错误告警
+---
 
-**错误率告警**
+### 三、告警通知
 
-当前错误率：5.33%
-总请求数：150
-失败次数：8
-告警级别：警告：错误率超过 5%
+#### 5. Webhook 自动推送 📬
+- **支持平台**：
+  - 钉钉机器人（Markdown 格式）
+  - Telegram Bot（Markdown 格式）
+- **触发条件**：
+  - 错误率从 normal → warning/critical
+  - 发现 unknown-model
+- **防骚扰机制**：
+  - 级别升级才发送（避免重复）
+  - Redis 记录状态，24 小时内不重复
+- **静默时段**：
+  - 默认 22:00-08:00（北京时间）
+  - warning 级别静默，critical 始终发送
+  - 可配置：`QUIET_HOURS_ENABLED/START/END`
 
-时间：2026-06-07 18:30:00
-[查看 Dashboard](https://api.170909.xyz/dashboard)
-```
+---
 
-**环境配置**
+### 四、流量分析
+
+#### 6. 今天 vs 昨天对比 📊
+- **数据维度**：
+  - 今日总计 vs 昨日总计
+  - 每小时流量对比
+  - 总体增长率（%）
+- **图表展示**：
+  - 实线：今天
+  - 虚线：昨天
+  - 增长率徽章（📈增长/📉下降）
+- **统计卡片**：
+  - 今日总计
+  - 昨日总计
+  - 峰值时段
+
+#### 7. 请求时间线 📈
+- **数据**：24 小时流量趋势
+- **图表**：SVG 折线图（带交互 tooltip）
+- **辅助线**：
+  - Y 轴网格（5 个刻度）
+  - 当前小时高亮
+  - 数据点悬浮放大
+
+#### 8. 模型路由分布 🧬
+- **展示**：水平条形图（Top 10）
+- **排序**：按使用量降序
+- **颜色**：不同模型独立颜色
+- **详情**：使用量、百分比、延迟、错误率
+
+#### 9. 来源统计 🔑
+- **识别**：基于 API Key 指纹
+- **展示**：Top 10 客户端
+- **指标**：请求次数、占比
+
+---
+
+## 🎨 用户体验优化
+
+### 响应式设计
+- **768px 以下**（平板）：
+  - 标题/状态栏紧凑布局
+  - 图表高度从 180px → 140px
+  - 卡片内边距减小
+- **480px 以下**（手机）：
+  - 隐藏次要信息（11px 字体）
+  - 三栏统计 → 单栏
+  - 慢请求列表简化（隐藏时间戳）
+
+### 暗黑模式
+- **自动检测**：根据系统主题
+- **配色方案**：
+  - 深色：`#1e293b` 背景，`#e2e8f0` 文字
+  - 浅色：`#ffffff` 背景，`#1e293b` 文字
+- **适配组件**：所有卡片、图表、滚动条
+
+### 交互优化
+- **刷新按钮**：手动立即刷新数据
+- **悬浮提示**：图表数据点详情
+- **加载状态**：骨架屏 + 加载动画
+- **空状态**：友好的 Emoji 提示
+
+---
+
+## 🔧 环境配置
+
+### Vercel 环境变量
+
 ```bash
-# 钉钉机器人
+# 必需
+GOOGLE_API_KEY=your-google-api-key
+UPSTASH_REDIS_REST_URL=https://your-redis.upstash.io
+UPSTASH_REDIS_REST_TOKEN=your-redis-token
+
+# 可选 - Dashboard 认证
+DASHBOARD_PASSWORD=your-password
+
+# 可选 - 告警通知
 ERROR_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx
-ERROR_WEBHOOK_TYPE=dingtalk
+ERROR_WEBHOOK_TYPE=dingtalk  # dingtalk 或 telegram
 
-# Telegram Bot
-ERROR_WEBHOOK_URL=https://api.telegram.org/bot<token>
-ERROR_WEBHOOK_TYPE=telegram
-```
+# 可选 - 静默时段（默认启用）
+QUIET_HOURS_ENABLED=true
+QUIET_HOURS_START=22
+QUIET_HOURS_END=8
 
-**技术实现**
-```javascript
-// Redis 记录告警状态
-const lastAlertKey = `alert:last_error_level:${new Date().toDateString()}`;
-const lastLevel = await redis.get(lastAlertKey);
-
-// 只有级别升级时才发送
-const levelPriority = { normal: 0, warning: 1, critical: 2 };
-const shouldNotify = levelPriority[current] > levelPriority[last];
+# 可选 - CORS
+CORS_ALLOWED_ORIGINS=https://your-frontend.com
 ```
 
 ---
 
-## 📊 Dashboard 完整功能清单
+## 📊 Dashboard 功能矩阵
 
 | 类别 | 功能 | 状态 |
 |------|------|------|
-| **配额监控** | 实时配额使用量 | ✅ |
-| | 配额重置倒计时 | ✅ |
-| | 配额耗尽预测 | ✅ **NEW** |
+| **配额管理** | 配额耗尽预测 | ✅ |
 | | 配额告警（>90%） | ✅ |
-| **错误监控** | 全局错误率 | ✅ |
-| | 分级错误告警 | ✅ **NEW** |
-| | Webhook 通知 | ✅ **NEW** |
-| | 实时错误日志 | ✅ |
-| **性能监控** | 平均延迟 | ✅ |
-| | 重试次数追踪 | ✅ |
-| **流量分析** | 请求时间线（24h） | ✅ |
+| **质量监控** | 分级错误告警 | ✅ |
+| | unknown-model 检测 | ✅ |
+| | 慢请求 Top 10 | ✅ |
+| **告警通知** | Webhook 自动推送 | ✅ |
+| | 静默时段控制 | ✅ |
+| **流量分析** | Today vs Yesterday | ✅ |
+| | 请求时间线 | ✅ |
 | | 模型路由分布 | ✅ |
-| | 来源统计（Top10） | ✅ |
-| **系统健康** | Gemini API 状态 | ✅ |
-| | Redis 连接状态 | ✅ |
+| | 来源统计 | ✅ |
+| **性能追踪** | 延迟监控 | ✅ |
+| | 重试次数 | ✅ |
+| **系统健康** | API/Redis 状态 | ✅ |
 | **数据导出** | CSV 导出 | ✅ |
 | **用户体验** | 暗黑模式 | ✅ |
 | | 响应式设计 | ✅ |
@@ -155,51 +180,51 @@ const shouldNotify = levelPriority[current] > levelPriority[last];
 
 ---
 
-## 🔧 部署配置
+## 📱 移动端适配
 
-### Vercel 环境变量
+### 768px（平板）
+- ✅ 标题字体缩小（28px → 20px）
+- ✅ 状态栏紧凑布局
+- ✅ 图表高度减小（180px → 140px）
+- ✅ 卡片内边距减小（20px → 14px）
 
-在 Vercel 项目设置中添加以下环境变量：
-
-```bash
-# 必需
-GOOGLE_API_KEY=xxx
-UPSTASH_REDIS_REST_URL=https://xxx.upstash.io
-UPSTASH_REDIS_REST_TOKEN=xxx
-
-# 可选
-DASHBOARD_PASSWORD=your-password
-ERROR_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx
-ERROR_WEBHOOK_TYPE=dingtalk
-```
-
-### 本地开发
-
-```bash
-cp .env.example .env.local
-# 编辑 .env.local 填入实际值
-npm run dev
-```
+### 480px（手机）
+- ✅ 超小字体隐藏（≤11px）
+- ✅ 三栏统计 → 单栏
+- ✅ 慢请求时间戳隐藏
+- ✅ 延迟数字体缩小
 
 ---
 
-## 📈 监控建议
+## 🚀 部署状态
+
+- **最新 Commit**: `61d3ca0`
+- **GitHub**: https://github.com/JE668/gemini-transparent-proxy
+- **Vercel**: 自动构建部署中
+- **生产环境**: https://api.170909.xyz/dashboard
+
+---
+
+## 📈 监控最佳实践
 
 ### 日常巡检
-1. 打开 Dashboard 查看配额预测（绿色为正常）
-2. 检查是否有错误告警框（无告警为正常）
-3. 关注重试次数趋势
+1. **早晨**：查看配额预测（应全绿）
+2. **下午**：检查错误告警（应无红色）
+3. **晚上**：浏览流量对比（了解趋势）
 
 ### 告警响应
-- 收到 **警告** 通知：检查 API 日志，确认是否有临时故障
-- 收到 **严重** 通知：立即可查，可能需要紧急修复
-- 配额预测 **红色**：考虑调整路由策略或申请增加配额
+- **收到 warning**：
+  - 非静默时段 → 立即查看 Dashboard
+  - 静默时段 → 早晨处理（critical 除外）
+- **收到 critical**：
+  - 立即响应，无论时段
+- **配额红色**：
+  - 调整路由策略或申请增加配额
 
-### 最佳实践
-1. 配置钉钉/Telegram 告警，确保第一时间获知问题
-2. 每天早晚各查看一次 Dashboard
-3. 配额使用超过 70% 时关注预测趋势
-4. 错误率连续 3 次 >5% 时启动排查流程
+### 阈值建议
+- **错误率**：>5% 关注，>10% 紧急
+- **配额预测**：<2 小时需干预
+- **慢请求**：>3000ms 需优化
 
 ---
 
@@ -210,17 +235,22 @@ npm run dev
 - **数据库**: Upstash Redis (Serverless)
 - **部署**: Vercel
 - **监控**: 自定义 Dashboard + Webhook 告警
+- **图表**: 原生 SVG（零依赖）
 
 ---
 
 ## 📝 更新日志
 
-### 2026-06-07
-- ✅ 新增配额耗尽预测功能
-- ✅ 新增分级错误告警显示
-- ✅ 新增 Webhook 告警通知（钉钉/Telegram）
-- ✅ 优化错误率计算逻辑
-- ✅ 更新 .env.example 配置模板
+### 2026-06-07（最终版本）
+- ✅ 配额耗尽预测
+- ✅ 分级错误告警
+- ✅ Webhook 通知（钉钉/Telegram）
+- ✅ 静默时段控制
+- ✅ 请求量对比（今天 vs 昨天）
+- ✅ 慢请求 Top 10 追踪
+- ✅ unknown-model 检测
+- ✅ 移动端专项优化
+- ✅ 暗黑模式完善
 
 ### 之前版本
 - ✅ 请求时间线图表
@@ -229,13 +259,16 @@ npm run dev
 - ✅ 重试事件追踪
 - ✅ 实时错误日志
 - ✅ CSV 导出
-- ✅ 暗黑模式
-- ✅ 响应式设计
+- ✅ 响应式设计基础
 
 ---
 
 ## 📞 支持与反馈
 
-如有问题或建议，请通过以下方式联系：
-- GitHub Issues: https://github.com/JE668/gemini-transparent-proxy/issues
-- Dashboard: https://api.170909.xyz/dashboard
+- **GitHub Issues**: https://github.com/JE668/gemini-transparent-proxy/issues
+- **Dashboard**: https://api.170909.xyz/dashboard
+- **文档**: `/DASHBOARD_FEATURES.md`
+
+---
+
+**🎉 Dashboard 已具备完整的企业级监控告警能力！**
