@@ -1,290 +1,570 @@
 'use client';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 
+// =============================================================================
+// 工具函数
+// =============================================================================
 const REFRESH_INTERVAL = 30000;
 
-// ---- HTTP 状态码中文解释 ----
 const HTTP_STATUS_DESC = {
-  400: '请求格式错误',
-  401: '认证失败/密钥无效',
-  403: '权限不足/访问被拒',
-  404: '资源不存在',
-  408: '请求超时',
-  429: '请求过于频繁(限流)',
-  500: '服务器内部错误',
-  502: '网关错误(上游异常)',
-  503: '服务暂不可用',
-  504: '网关超时(上游无响应)',
+  400: '请求格式错误', 401: '认证失败/密钥无效', 403: '权限不足',
+  404: '资源不存在', 408: '请求超时', 429: '请求过于频繁（限流）',
+  500: '服务器内部错误', 502: '网关错误（上游异常）', 503: '服务暂不可用', 504: '网关超时（上游无响应）',
 };
 
-function getStatusDesc(code) {
-  return HTTP_STATUS_DESC[code] || '';
-}
+const MODEL_COLORS = {
+  'gemma-4-31b-it': '#6366f1', 'gemma-4-26b-a4b-it': '#8b5cf6',
+  'gemma-3-27b-it': '#a78bfa', 'gemma-3-12b-it': '#c4b5fd',
+  'gemini-2.5-pro': '#ec4899', 'gemini-2.5-flash': '#10b981', 'default': '#6366f1'
+};
 
-// ---- 配额重置倒计时 ----
-function getTimeUntilReset() {
- // Gemini API 配额在太平洋时间午夜重置（即 UTC 07:00 PST / UTC 08:00 PDT）
- // 简化处理：固定以 UTC 07:00 为重置点（PST），夏令时期间偏差 1h 可接受
- const now = new Date();
- // 计算下一个重置时刻（UTC 07:00）
- const reset = new Date();
- reset.setUTCHours(7, 0, 0, 0);
- // 如果当前已过今天的重置点，则目标为明天
- if (now >= reset) {
- reset.setUTCDate(reset.getUTCDate() + 1);
- }
- const diffMs = reset - now;
- const totalSeconds = Math.floor(diffMs / 1000);
- const hours = Math.floor(totalSeconds / 3600);
- const minutes = Math.floor((totalSeconds % 3600) / 60);
- const seconds = totalSeconds % 60;
- return { hours, minutes, seconds, totalHours: totalSeconds / 3600 };
-}
+const getModelColor = (id) => MODEL_COLORS[id] || MODEL_COLORS.default;
 
-function formatCountdown(cd) {
-  return `${String(cd.hours).padStart(2, '0')}:${String(cd.minutes).padStart(2, '0')}:${String(cd.seconds).padStart(2, '0')}`;
-}
+const formatTime = (iso) => {
+  try { return new Date(iso).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch { return iso; }
+};
 
-// ---- 配额耗尽预测 ----
-function predictExhaustion(quota, timeline) {
-  if (!quota?.globalRequests || !timeline?.timeline) return null;
-  
-  // 计算今天的总请求数（从 timeline 聚合）
-  const todayTotal = timeline.timeline.reduce((sum, h) => sum + h.count, 0);
-  
-  // 计算当前小时（UTC+8）
-  const currentHour = (new Date().getUTCHours() + 8) % 24;
-  
-  // 计算从 00:00 到当前小时的总请求数
-  const hoursElapsed = Math.max(currentHour, 1); // 至少 1 小时避免除零
-  const requestsUntilNow = timeline.timeline.slice(0, currentHour).reduce((sum, h) => sum + h.count, 0);
-  
-  // 平均每小时请求速率
-  const hourlyRate = requestsUntilNow / hoursElapsed;
-  
-  // 获取所有模型的总配额和已使用量
-  const totalLimit = quota.data.reduce((sum, d) => sum + d.limit, 0);
-  const totalUsed = quota.data.reduce((sum, d) => sum + d.used, 0);
-  const remaining = totalLimit - totalUsed;
-  
-  if (hourlyRate <= 0 || remaining <= 0) return null;
-  
-  // 预测耗尽所需小时数
-  const hoursToExhaustion = remaining / hourlyRate;
-  
-  // 计算耗尽时间点（当前时间 + hoursToExhaustion）
+const formatDate = (iso) => {
+  try { return new Date(iso).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }); }
+  catch { return iso; }
+};
+
+const shortModel = (id) => id.replace('models/', '');
+const getStatusDesc = (code) => HTTP_STATUS_DESC[code] || '';
+const getStatusLabel = (code) => {
+  if (!code) return { text: '未知', color: '#94a3b8' };
+  if (code >= 500) return { text: '服务器错误', color: '#ef4444' };
+  if (code >= 400) return { text: '客户端错误', color: '#f59e0b' };
+  return { text: '成功', color: '#22c55e' };
+};
+
+const getTimeUntilReset = () => {
   const now = new Date();
-  const exhaustionTime = new Date(now.getTime() + hoursToExhaustion * 3600 * 1000);
-  
-  // 判断是否在重置前耗尽
-  const reset = new Date();
-  reset.setUTCHours(7, 0, 0, 0);
-  if (now >= reset) {
-    reset.setUTCDate(reset.getUTCDate() + 1);
-  }
-  const willExhaustBeforeReset = exhaustionTime < reset;
-  
+  const reset = new Date(now); reset.setUTCHours(7, 0, 0, 0);
+  if (now >= reset) reset.setUTCDate(reset.getUTCDate() + 1);
+  const diffMs = reset - now;
+  const totalSeconds = Math.floor(diffMs / 1000);
   return {
-    hourlyRate: Math.round(hourlyRate),
-    hoursToExhaustion: Math.round(hoursToExhaustion),
-    exhaustionTime,
-    willExhaustBeforeReset,
+    hours: Math.floor(totalSeconds / 3600),
+    minutes: Math.floor((totalSeconds % 3600) / 60),
+    seconds: totalSeconds % 60
+  };
+};
+
+const formatCountdown = (cd) =>
+  String(cd.hours).padStart(2, '0') + ':' + String(cd.minutes).padStart(2, '0') + ':' + String(cd.seconds).padStart(2, '0');
+
+// 数字格式化动画辅助
+const formatNumber = (num) => num?.toLocaleString?.() ?? String(num);
+
+// 格式化时间段（如 "2 小时 30 分"）
+const formatDuration = (minutes) => {
+  if (minutes < 1) return '不到 1 分钟';
+  if (minutes < 60) return `${Math.round(minutes)}分钟`;
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (hours >= 24) {
+    const days = (hours / 24).toFixed(1);
+    return `${days}天`;
+  }
+  return mins > 0 ? `${hours}小时${mins}分` : `${hours}小时`;
+};
+
+// 计算配额耗尽预测（基于当前使用速率）
+const predictQuotaExhaustion = (used, limit, hoursElapsed) => {
+  if (!used || !limit || hoursElapsed <= 0) return null;
+  const hourlyRate = used / hoursElapsed;
+  if (hourlyRate <= 0) return null;
+  const remaining = limit - used;
+  if (remaining <= 0) return { exhausted: true, minutes: 0, rate: hourlyRate };
+  const hoursUntilExhaustion = remaining / hourlyRate;
+  const minutesUntilExhaustion = hoursUntilExhaustion * 60;
+  return {
+    exhausted: false,
+    minutes: minutesUntilExhaustion,
+    rate: hourlyRate,
     remaining,
   };
-}
+};
 
-function formatTime(iso) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  } catch { return iso; }
-}
+// 导出 CSV 数据
+const exportToCSV = (data, filename) => {
+  if (!data || data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  const csvContent = [
+    headers.join(','),
+    ...data.map(row => headers.map(field => {
+      const value = row[field];
+      // 处理包含逗号或引号的字符串
+      if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    }).join(','))
+  ].join('\n');
+  
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+};
 
-// ---- SVG 折线图 ----
-function SparklineChart({ data, width = 700, height = 160 }) {
-  const [hovered, setHovered] = useState(null);
-  if (!data || data.length === 0) return null;
+// =============================================================================
+// 主题
+// =============================================================================
+const getTheme = (dark) => ({
+  page: { 
+    backgroundColor: dark ? '#0b1121' : '#f0f5ff', 
+    color: dark ? '#e2e8f0' : '#0f172a',
+    backgroundGradient: dark 
+      ? 'radial-gradient(circle at 20% 30%, rgba(99,102,241,0.08) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(139,92,246,0.06) 0%, transparent 50%)'
+      : 'radial-gradient(circle at 20% 30%, rgba(99,102,241,0.04) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(139,92,246,0.03) 0%, transparent 50%)'
+  },
+  card: {
+    backgroundColor: dark ? '#131c31' : 'white',
+    border: dark ? '1px solid rgba(99,102,241,0.15)' : '1px solid rgba(99,102,241,0.1)',
+    boxShadow: dark ? '0 4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)' : '0 4px 24px rgba(99,102,241,0.06), inset 0 1px 0 rgba(255,255,255,0.8)',
+  },
+  text: { main: dark ? '#f1f5f9' : '#0f172a', sub: dark ? '#94a3b8' : '#475569', muted: dark ? '#64748b' : '#94a3b8' },
+  bar: { bg: dark ? '#1e293b' : '#f1f5f9' },
+  input: { backgroundColor: dark ? '#0f172a' : 'white', border: dark ? '1px solid #1e293b' : '1px solid #e2e8f0', color: dark ? '#f1f5f9' : '#0f172a' },
+  glow: dark ? '0 0 20px rgba(99,102,241,0.12)' : '0 0 20px rgba(99,102,241,0.08)',
+  neonGlow: dark ? '0 0 8px rgba(99,102,241,0.4), 0 0 16px rgba(99,102,241,0.2)' : '0 0 8px rgba(99,102,241,0.2), 0 0 16px rgba(99,102,241,0.1)',
+});
+
+// =============================================================================
+// SparklineChart — 带 tooltip 交互的折线图
+// =============================================================================
+function SparklineChart({ data, width = 700, height = 180, theme }) {
+  const [hover, setHover] = useState(null);
+  const t = theme || { text: { sub: '#94a3b8' }, card: { backgroundColor: '#1e293b' } };
+
+  if (!data || data.length === 0) {
+    return (
+      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.text.sub, fontSize: '14px' }}>
+        📊 暂无数据
+      </div>
+    );
+  }
+
   const maxVal = Math.max(...data.map(d => d.count), 1);
-  const padX = 40, padY = 20;
-  const chartW = width - padX * 2;
+  const padX = 50, padY = 28, rPad = 20;
+  const chartW = width - padX - rPad;
   const chartH = height - padY * 2;
-  const stepX = chartW / (data.length - 1);
-  const points = data.map((d, i) => ({ x: padX + i * stepX, y: padY + chartH - (d.count / maxVal) * chartH, ...d }));
+  const stepX = chartW / (Math.max(data.length - 1, 1));
+  const points = data.map((d, i) => ({
+    x: padX + i * stepX, y: padY + chartH - (d.count / maxVal) * chartH, ...d
+  }));
+
   const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
   const areaPath = `${linePath} L${points[points.length - 1].x},${padY + chartH} L${points[0].x},${padY + chartH} Z`;
-  const currentBjHour = (new Date().getUTCHours() + 8) % 24;
 
-  // Tooltip 定位
-  const tipW = 130, tipH = 48, tipR = 8;
-  const tipX = hovered != null ? Math.min(Math.max(points[hovered].x - tipW / 2, 4), width - tipW - 4) : 0;
-  const tipY = hovered != null ? Math.max(points[hovered].y - tipH - 16, 2) : 0;
+  // Y 轴刻度
+  const yTicks = 5;
+  const yStep = chartH / yTicks;
+  const yValues = [];
+  for (let i = 0; i <= yTicks; i++) {
+    yValues.push(Math.round((maxVal / yTicks) * (yTicks - i)));
+  }
+
+  // Tooltip
+  const tip = hover !== null ? points[hover] : null;
+  const tipW = 160, tipH = 64;
+  const tipX = tip ? Math.min(Math.max(tip.x - tipW / 2, 4), width - tipW - 4) : 0;
+  const tipY = tip ? Math.max(tip.y - tipH - 20, 4) : 0;
 
   return (
-  <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', cursor: 'crosshair' }}
-  onMouseMove={(e) => {
-  const svg = e.currentTarget;
-  const rect = svg.getBoundingClientRect();
-  const scaleX = width / rect.width;
-  const mx = (e.clientX - rect.left) * scaleX;
-  let closest = 0, minDist = Infinity;
-  points.forEach((p, i) => { const d = Math.abs(p.x - mx); if (d < minDist) { minDist = d; closest = i; } });
-  if (hovered !== closest) setHovered(closest);
-  }}
-  onMouseLeave={() => setHovered(null)}
-  >
-      {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-        const y = padY + chartH - ratio * chartH;
-        return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}
+        style={{ display: 'block' }}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const scaleX = width / rect.width;
+          const mx = (e.clientX - rect.left) * scaleX;
+          let closest = 0, minDist = Infinity;
+          points.forEach((p, i) => { const d = Math.abs(p.x - mx); if (d < minDist) { minDist = d; closest = i; } });
+          if (hover !== closest) setHover(closest);
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
+        <defs>
+          <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#6366f1" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="#6366f1" stopOpacity="0.02" />
+          </linearGradient>
+          <filter id="glowFilter">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+
+        {/* Y 轴网格 */}
+        {yValues.map((v, i) => (
           <g key={i}>
-            <line x1={padX} y1={y} x2={width - padX} y2={y} stroke="#f1f5f9" strokeWidth="1" />
-            <text x={padX - 8} y={y + 4} textAnchor="end" fill="#94a3b8" fontSize="10" fontFamily="monospace">{Math.round(maxVal * ratio)}</text>
+            <line x1={padX} y1={padY + i * yStep} x2={width - rPad} y2={padY + i * yStep}
+              stroke={t.bar?.bg || '#e2e8f0'} strokeWidth="1" strokeDasharray="4 3" />
+            <text x={padX - 8} y={padY + i * yStep + 4} textAnchor="end"
+              fill={t.text?.sub || '#94a3b8'} fontSize="11" fontFamily="monospace">
+              {v.toLocaleString()}
+            </text>
           </g>
-        );
-      })}
-      <path d={areaPath} fill="url(#areaGrad)" opacity="0.3" />
-      <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6366f1" /><stop offset="100%" stopColor="#6366f1" stopOpacity="0" /></linearGradient></defs>
-      <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        ))}
 
-      {/* 悬浮垂直辅助线 */}
-      {hovered != null && (
-        <line x1={points[hovered].x} y1={padY} x2={points[hovered].x} y2={padY + chartH} stroke="#6366f1" strokeWidth="1" strokeDasharray="4 3" opacity="0.5" />
-      )}
+        {/* 面积 */}
+        <path d={areaPath} fill="url(#lineGrad)" />
 
-      {/* 数据点 */}
-      {points.map((p, i) => {
-      const isCurrent = p.hour === currentBjHour;
-      const isHovered = hovered === i;
-      return (
-      <g key={i}>
-      <circle cx={p.x} cy={p.y} r={isHovered ? 6 : isCurrent ? 4.5 : 3} fill={isHovered ? '#4f46e5' : isCurrent ? '#6366f1' : '#fff'} stroke="#6366f1" strokeWidth={isHovered ? 3 : isCurrent ? 2.5 : 2} style={{ transition: 'r 0.15s ease' }} />
-      {(i % 3 === 0 || i === data.length - 1) && (
-      <text x={p.x} y={height - 2} textAnchor="middle" fill="#94a3b8" fontSize="10" fontFamily="monospace">{p.label}</text>
-      )}
-      </g>
-      );
-      })}
+        {/* 折线 */}
+        <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5"
+          strokeLinecap="round" strokeLinejoin="round" filter="url(#glowFilter)" />
 
-      {/* Tooltip */}
-      {hovered != null && (
-      <g pointerEvents="none">
-          <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={tipR} fill="#1e293b" opacity="0.92" />
-          <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle" fill="#e2e8f0" fontSize="12" fontWeight="600">
-            {points[hovered].label}
-          </text>
-          <text x={tipX + tipW / 2} y={tipY + 36} textAnchor="middle" fill="#a5b4fc" fontSize="14" fontWeight="700" fontFamily="monospace">
-            {points[hovered].count} 次请求
-          </text>
-        </g>
-      )}
-    </svg>
+        {/* X 轴标签 */}
+        {points.filter((_, i) => i % 3 === 0 || i === data.length - 1).map((p, i) => (
+          <text key={i} x={p.x} y={height - 4} textAnchor="middle"
+            fill={t.text?.muted || '#94a3b8'} fontSize="10" fontFamily="monospace">{p.label}</text>
+        ))}
+
+        {/* 数据点 */}
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={hover === i ? 6 : 3}
+            fill={hover === i ? '#4f46e5' : '#6366f1'}
+            stroke={hover === i ? '#fff' : 'none'}
+            strokeWidth="2"
+            style={{ transition: 'r 0.15s, fill 0.15s', cursor: 'crosshair' }} />
+        ))}
+
+        {/* 当前小时高亮线 */}
+        {(() => {
+          const now = new Date();
+          const curHour = (now.getUTCHours() + 8) % 24;
+          const idx = data.findIndex(d => d.hour === curHour);
+          if (idx >= 0) {
+            const p = points[idx];
+            return (
+              <line x1={p.x} y1={padY} x2={p.x} y2={padY + chartH}
+                stroke="#6366f1" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
+            );
+          }
+          return null;
+        })()}
+
+        {/* Tooltip */}
+        {tip && (
+          <g>
+            <rect x={tipX} y={tipY} width={tipW} height={tipH} rx="8"
+              fill={darkCheck(t)} opacity="0.95" />
+            <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle"
+              fill="#e2e8f0" fontSize="12" fontWeight="600">{tip.label}</text>
+            <text x={tipX + tipW / 2} y={tipY + 36} textAnchor="middle"
+              fill="#a5b4fc" fontSize="20" fontWeight="700" fontFamily="monospace">
+              {tip.count.toLocaleString()}
+            </text>
+            <text x={tipX + tipW / 2} y={tipY + 52} textAnchor="middle"
+              fill="#94a3b8" fontSize="10">次请求</text>
+          </g>
+        )}
+      </svg>
+    </div>
   );
 }
 
-// ---- 水平条形图 ----
-function HorizontalBar({ label, value, max, color = '#6366f1' }) {
+const darkCheck = (t) => {
+  const bg = t?.card?.backgroundColor || '#1e293b';
+  return bg === '#1e293b' || bg === '#131c31' || bg.includes('13');
+};
+
+// =============================================================================
+// 小组件
+// =============================================================================
+function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, badge }) {
+  const isDark = darkCheck(theme);
+  return (
+    <div onClick={onClick}
+      style={{
+        background: selected ? `linear-gradient(135deg, ${color}15, ${color}08)` : theme.card.backgroundColor,
+        border: selected ? `1.5px solid ${color}` : theme.card.border,
+        borderRadius: '16px', padding: '18px 20px',
+        boxShadow: selected ? `0 0 24px ${color}20, 0 4px 24px rgba(0,0,0,0.2)` : theme.card.boxShadow,
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        position: 'relative', overflow: 'hidden',
+      }}
+      onMouseEnter={e => { 
+        if (!selected) { 
+          e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)'; 
+          e.currentTarget.style.boxShadow = theme.glow; 
+          e.currentTarget.style.borderColor = `${color}60`;
+        } 
+      }}
+      onMouseLeave={e => { 
+        if (!selected) { 
+          e.currentTarget.style.transform = 'translateY(0) scale(1)'; 
+          e.currentTarget.style.boxShadow = theme.card.boxShadow; 
+          e.currentTarget.style.borderColor = theme.card.border;
+        } 
+      }}
+    >
+      {/* 红点提示 */}
+      {badge > 0 && (
+        <span style={{
+          position: 'absolute',
+          top: '12px',
+          right: '12px',
+          minWidth: '18px',
+          height: '18px',
+          borderRadius: '9px',
+          backgroundColor: '#ef4444',
+          color: 'white',
+          fontSize: '10px',
+          fontWeight: '700',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)',
+          zIndex: 10,
+          padding: '0 5px',
+        }}>
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
+      
+      {/* 顶部装饰条 */}
+      {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '16px 16px 0 0' }} />}
+      
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <span style={{ fontSize: '24px', opacity: 0.9, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}>{icon}</span>
+        <span style={{
+          fontSize: '26px', fontWeight: '800', color, fontFamily: 'monospace', letterSpacing: '-0.03em',
+          textShadow: selected ? `0 0 20px ${color}40` : 'none',
+          transition: 'all 0.3s ease'
+        }}>{value}</span>
+      </div>
+      <div style={{ marginTop: '8px', fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{label}</div>
+      {sub && <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '3px' }}>{sub}</div>}
+    </div>
+  );
+}
+
+function ProgressBar({ label, value, max, color, theme }) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
   return (
-    <div style={{ marginBottom: '10px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '13px' }}>
-        <span style={{ fontFamily: 'monospace', fontWeight: '600', color: '#1e293b' }}>{label}</span>
-        <span style={{ fontFamily: 'monospace', color: '#64748b' }}>{value.toLocaleString()}</span>
+    <div style={{ marginBottom: '14px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+        <span style={{ fontWeight: '600', color: theme.text.main, letterSpacing: '0.02em' }}>{label}</span>
+        <span style={{ fontFamily: 'monospace', color: theme.text.sub, fontWeight: '500' }}>{value.toLocaleString()}</span>
       </div>
-      <div style={{ backgroundColor: '#f1f5f9', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${pct}%`, borderRadius: '4px', background: color, transition: 'width 0.5s ease' }} />
+      <div style={{ 
+        backgroundColor: theme.bar.bg, 
+        height: '8px', 
+        borderRadius: '4px', 
+        overflow: 'hidden',
+        boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)',
+      }}>
+        <div style={{ 
+          height: '100%', 
+          width: `${pct}%`, 
+          backgroundColor: color, 
+          borderRadius: '4px', 
+          transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
+          boxShadow: `0 0 10px ${color}60`,
+          position: 'relative'
+        }}>
+          {/* 进度条高光效果 */}
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+            animation: 'shimmer 2s infinite',
+          }} />
+        </div>
       </div>
     </div>
   );
 }
 
+function LogRow({ time, badge, label, sub, color, badgeColor, theme }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px',
+      borderRadius: '10px', backgroundColor: theme.bar.bg,
+      fontSize: '12px', fontFamily: 'monospace', marginBottom: '6px',
+      transition: 'all 0.2s ease',
+      border: `1px solid transparent`,
+    }}
+    onMouseEnter={e => {
+      e.currentTarget.style.borderColor = `${color}30`;
+      e.currentTarget.style.backgroundColor = `${color}08`;
+    }}
+    onMouseLeave={e => {
+      e.currentTarget.style.borderColor = 'transparent';
+      e.currentTarget.style.backgroundColor = theme.bar.bg;
+    }}
+    >
+      <span style={{ color: theme.text.muted, fontSize: '11px', minWidth: '70px', flexShrink: 0, fontFamily: 'monospace' }}>{time}</span>
+      <span style={{
+        padding: '2px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: '700',
+        backgroundColor: (badgeColor || color) + '18',
+        color: badgeColor || color, border: '1px solid ' + (badgeColor || color) + '40',
+        minWidth: '36px', textAlign: 'center', flexShrink: 0,
+        boxShadow: '0 0 8px ' + (badgeColor || color) + '30',
+      }}>{badge}</span>
+      <span style={{ color: theme.text.main, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: '500' }}>{label}</span>
+      {sub && <span style={{ color: theme.text.muted, textAlign: 'right', flexShrink: 0, fontFamily: 'monospace' }}>{sub}</span>}
+    </div>
+  );
+}
+
+function EmptyCard({ emoji, text, theme }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      padding: '40px', color: theme.text.muted, gap: '8px'
+    }}>
+      <span style={{ fontSize: '28px' }}>{emoji}</span>
+      <span style={{ fontSize: '13px' }}>{text}</span>
+    </div>
+  );
+}
+
+// =============================================================================
+// 主组件
+// =============================================================================
 export default function DashboardPage() {
- const [quota, setQuota] = useState(null);
- const [health, setHealth] = useState(null);
- const [errors, setErrors] = useState(null);
- const [timeline, setTimeline] = useState(null);
- const [clients, setClients] = useState(null);
- const [recent, setRecent] = useState(null);
- const [lastUpdate, setLastUpdate] = useState(null);
- const [loading, setLoading] = useState(true);
- const [countdown, setCountdown] = useState(getTimeUntilReset());
- // 认证状态
- const [authed, setAuthed] = useState(false);
- const [password, setPassword] = useState('');
- const [authError, setAuthError] = useState('');
+  return (
+    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>Loading Dashboard...</div>}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
 
- // 从 localStorage 恢复密码
- useEffect(() => {
- const saved = localStorage.getItem('dashboard_token');
- if (saved) {
- setPassword(saved);
- setAuthed(true);
- }
- }, []);
+function DashboardContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  
+  const [dark, setDark] = useState(() => {
+    // 优先从 URL 恢复，其次从 localStorage
+    const fromUrl = searchParams.get('dark');
+    if (fromUrl === '1') return true;
+    const saved = localStorage.getItem('dashboard_dark');
+    return saved === 'true';
+  });
+  const [authed, setAuthed] = useState(false);
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [quota, setQuota] = useState(null);
+  const [health, setHealth] = useState(null);
+  const [errors, setErrors] = useState(null);
+  const [timeline, setTimeline] = useState(null);
+  const [clients, setClients] = useState(null);
+  const [recent, setRecent] = useState(null);
+  const [selectedModel, setSelectedModel] = useState(null);
+  const [authError, setAuthError] = useState('');
+  const [countdown, setCountdown] = useState(getTimeUntilReset());
+  const [collapsedSections, setCollapsedSections] = useState(() => {
+    const fromUrl = searchParams.get('collapsed');
+    if (fromUrl) {
+      try { return JSON.parse(fromUrl); } catch { return {}; }
+    }
+    return {};
+  });
+  const [exporting, setExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState(null);
+  const [refreshProgress, setRefreshProgress] = useState(0);
+  const [cherry, setCherry] = useState(null);
+  const [unreadErrors, setUnreadErrors] = useState(0);
 
- const handleLogin = async (e) => {
- e?.preventDefault();
- setAuthError('');
- try {
- const res = await fetch('/api/quota', {
- headers: { 'Authorization': `Bearer ${password}` }
- });
- if (res.status === 401) {
- setAuthError('密码错误，请重新输入');
- return;
- }
- // 认证成功
- localStorage.setItem('dashboard_token', password);
- setAuthed(true);
- } catch {
- setAuthError('连接失败，请检查网络');
- }
- };
+  const theme = getTheme(dark);
 
- // 带认证的 fetch 封装
- const authFetch = useCallback(async (url) => {
- const res = await fetch(url, {
- headers: { 'Authorization': `Bearer ${password}` }
- });
- if (res.status === 401) {
- // 密码失效，退回登录
- localStorage.removeItem('dashboard_token');
- setAuthed(false);
- setPassword('');
- setAuthError('认证已过期，请重新输入密码');
- return null;
- }
- return res;
- }, [password]);
-
+  // 倒计时每秒更新
   useEffect(() => {
     const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // 刷新进度条（30 秒倒计时）
+  useEffect(() => {
+    if (!authed) return;
+    let progress = 0;
+    const interval = REFRESH_INTERVAL / 100; // 100 步
+    const timer = setInterval(() => {
+      progress += 1;
+      setRefreshProgress(Math.min(progress, 100));
+      if (progress >= 100) {
+        progress = 0;
+      }
+    }, interval);
+    return () => clearInterval(timer);
+  }, [authed]);
+
+  // 从 localStorage 恢复暗色模式和密码（仅当 URL 没有时）
+  useEffect(() => {
+    const saved = localStorage.getItem('dashboard_token');
+    if (saved && !searchParams.get('authed')) { setPassword(saved); setAuthed(true); }
+    // dark 已经从 useState 初始化时处理了
+  }, [searchParams]);
+
+  // 同步状态到 URL（暗色模式、折叠状态）
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    
+    // 同步 dark
+    if (dark) params.set('dark', '1');
+    else params.delete('dark');
+    
+    // 同步 collapsedSections
+    const hasCollapsed = Object.values(collapsedSections).some(v => v);
+    if (hasCollapsed) {
+      params.set('collapsed', JSON.stringify(collapsedSections));
+    } else {
+      params.delete('collapsed');
+    }
+    
+    // 只有当 URL 真正变化时才 replace
+    const newSearch = params.toString();
+    if (window.location.search !== newSearch) {
+      router.replace(`?${newSearch}`, { scroll: false });
+    }
+  }, [dark, collapsedSections, router, searchParams]);
+
+  const handleLogin = async (e) => {
+    e?.preventDefault();
+    setAuthError('');
+    try {
+      const res = await fetch('/api/quota', { headers: { Authorization: `Bearer ${password}` } });
+      if (res.ok) { localStorage.setItem('dashboard_token', password); setAuthed(true); }
+      else { setAuthError('密码错误'); }
+    } catch { setAuthError('连接失败'); }
+  };
+
+  const authFetch = useCallback(async (url) => {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${password}` } });
+    if (res.status === 401) { localStorage.removeItem('dashboard_token'); setAuthed(false); return null; }
+    return res;
+  }, [password]);
+
   const fetchData = useCallback(async () => {
-  if (!authed) return;
-  try {
-  const [quotaRes, healthRes, errorsRes, timelineRes, clientsRes, recentRes] = await Promise.all([
-  authFetch('/api/quota').then(r => r?.json()),
-  authFetch('/api/health').then(r => r?.json()).catch(() => null),
-  authFetch('/api/errors').then(r => r?.json()).catch(() => null),
-  authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
-  authFetch('/api/clients').then(r => r?.json()).catch(() => null),
-  authFetch('/api/recent').then(r => r?.json()).catch(() => null),
-  ]);
-  // 任一返回 null 说明 401 已处理
-  if (!quotaRes && !healthRes && !errorsRes && !timelineRes && !clientsRes && !recentRes) return;
-  setQuota(quotaRes);
-  setHealth(healthRes);
-  setErrors(errorsRes);
-  setTimeline(timelineRes);
-  setClients(clientsRes);
-  setRecent(recentRes);
-  setLastUpdate(new Date());
-  } catch (e) {
-  console.error('Fetch error:', e);
-  } finally {
-  setLoading(false);
-  }
+    if (!authed) return;
+    setRefreshing(true);
+    setLastRefreshTime(new Date());
+    try {
+      const [q, h, e, t, c, r, ch] = await Promise.all([
+        authFetch('/api/quota').then(r => r?.json()),
+        authFetch('/api/health').then(r => r?.json()).catch(() => null),
+        authFetch('/api/errors').then(r => r?.json()).catch(() => null),
+        authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
+        authFetch('/api/clients').then(r => r?.json()).catch(() => null),
+        authFetch('/api/recent').then(r => r?.json()).catch(() => null),
+        authFetch('/api/cherry').then(r => r?.json()).catch(() => null),
+      ]);
+      if (!q && !h && !e && !t && !c && !r && !ch) return;
+      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setClients(c); setRecent(r); setCherry(ch);
+    } catch (err) { console.error(err); }
+    finally { setRefreshing(false); setLoading(false); }
   }, [authed, authFetch]);
 
   useEffect(() => {
@@ -293,559 +573,1158 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, [fetchData]);
 
-  // 模型分布：从 quota 数据聚合
+  // 追踪未读错误数（每次刷新后重置，5 秒后自动标记为已读）
+  useEffect(() => {
+    if (errors?.count > 0) {
+      setUnreadErrors(prev => prev === 0 ? errors.count : prev);
+      // 5 秒后自动标记为已读
+      const timer = setTimeout(() => setUnreadErrors(0), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [errors?.count]);
+
+  const toggleDark = useCallback(() => {
+    setDark(prev => {
+      const next = !prev;
+      localStorage.setItem('dashboard_dark', next);
+      return next;
+    });
+  }, []);
+
+  // 键盘快捷键
+  useEffect(() => {
+    if (!authed) return;
+    const handleKeyDown = (e) => {
+      // 忽略输入框中的按键
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      
+      const key = e.key.toLowerCase();
+      if (key === 'r') {
+        e.preventDefault();
+        fetchData();
+      } else if (key === 'd') {
+        e.preventDefault();
+        toggleDark();
+      } else if (key === 'e') {
+        e.preventDefault();
+        setShowExportMenu(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [authed, fetchData, toggleDark]);
+
+  const toggleSection = (key) => {
+    setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  // 导出数据功能
+  const handleExport = useCallback((type) => {
+    setExporting(true);
+    setShowExportMenu(false);
+    
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      
+      if (type === 'quota') {
+        // 导出配额数据
+        const quotaExport = quota?.data?.map(d => ({
+          model: shortModel(d.model),
+          used: d.used,
+          limit: d.limit,
+          percent: d.percent.toFixed(2) + '%',
+          avgLatency: d.avgLatency ? `${d.avgLatency}ms` : 'N/A',
+        })) || [];
+        exportToCSV(quotaExport, `配额数据_${timestamp}.csv`);
+      } else if (type === 'timeline') {
+        // 导出时间线数据
+        const timelineExport = timeline?.timeline?.map(d => ({
+          hour: d.label,
+          requests: d.count,
+        })) || [];
+        exportToCSV(timelineExport, `时间线_${timestamp}.csv`);
+      } else if (type === 'errors') {
+        // 导出错误日志
+        const errorExport = errors?.errors?.slice(0, 100).map(e => ({
+          time: formatTime(e.ts),
+          status: e.status,
+          model: shortModel(e.model),
+          message: e.message || '',
+          latency: e.latency ? `${e.latency}ms` : 'N/A',
+        })) || [];
+        exportToCSV(errorExport, `错误日志_${timestamp}.csv`);
+      } else if (type === 'all') {
+        // 导出所有数据（JSON 格式）
+        const allExport = {
+          exportTime: new Date().toISOString(),
+          quotaData: quota?.data?.map(d => ({
+            model: shortModel(d.model),
+            used: d.used,
+            limit: d.limit,
+            percent: d.percent,
+            avgLatency: d.avgLatency,
+          })),
+          timelineData: timeline?.timeline,
+          errorStats: {
+            totalErrors: errors?.count,
+            errors: errors?.errors?.slice(0, 100),
+          },
+          clientStats: clients?.clients,
+        };
+        const blob = new Blob([JSON.stringify(allExport, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `完整数据_${timestamp}.json`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+    } catch (err) {
+      console.error('导出失败:', err);
+    } finally {
+      setExporting(false);
+    }
+  }, [quota, timeline, errors, clients, exportToCSV, shortModel, formatTime]);
+
+  // 派生数据
   const modelDistribution = useMemo(() => {
     if (!quota?.data) return [];
-    const maxUsed = Math.max(...quota.data.map(d => d.used), 1);
-    const colors = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8'];
-    return quota.data
-      // 只显示 Gemma 4 系列模型
-      .filter(d => d.model && d.model.startsWith('gemma-4'))
-      .map((d, i) => ({ label: d.model, value: d.used, max: maxUsed, color: colors[i % colors.length] }))
-      .sort((a, b) => b.value - a.value);
+    return quota.data.map((d, i) => ({
+      label: shortModel(d.model), value: d.used, max: Math.max(...quota.data.map(x => x.used), 1),
+      color: getModelColor(d.model), rawModel: d.model, avgLatency: d.avgLatency, percent: d.percent, limit: d.limit
+    })).sort((a, b) => b.value - a.value);
   }, [quota]);
 
-  const globalStats = quota?.data ? quota.data.reduce((acc, item) => {
-    acc.totalUsed += item.used;
-    acc.totalLimit += item.limit;
-    if (item.avgLatency) acc.latencies.push(item.avgLatency);
-    acc.errorRate = Math.max(acc.errorRate, item.errorRate || 0);
-    return acc;
-  }, { totalUsed: 0, totalLimit: 0, latencies: [], errorRate: 0 }) : null;
+  // 配额预测（基于当前使用速率）
+  const quotaPredictions = useMemo(() => {
+    if (!quota?.data) return {};
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const quotaDate = today.split('-').slice(1).join(''); // MMDD
+    // 计算从今天 00:00 到现在经过了多少小时
+    const startOfDay = new Date(today + 'T00:00:00');
+    const hoursElapsed = Math.max((now - startOfDay) / (1000 * 60 * 60), 0.5); // 至少按 0.5 小时算
+    
+    const predictions = {};
+    quota.data.forEach(d => {
+      const prediction = predictQuotaExhaustion(d.used, d.limit, hoursElapsed);
+      if (prediction) {
+        predictions[d.model] = {
+          ...prediction,
+          formatted: formatDuration(prediction.minutes),
+          exhausted: prediction.exhausted || prediction.remaining <= 0,
+        };
+      }
+    });
+    return predictions;
+  }, [quota]);
 
-  const globalAvgLatency = globalStats?.latencies.length
-    ? Math.round(globalStats.latencies.reduce((a, b) => a + b, 0) / globalStats.latencies.length)
-    : null;
+  const filteredRecent = useMemo(() => {
+    if (!selectedModel || !recent?.recent) return recent?.recent || [];
+    return recent.recent.filter(r => shortModel(r.model) === selectedModel || r.model === selectedModel);
+  }, [selectedModel, recent]);
 
-  // 配额耗尽预测
-  const exhaustionPrediction = useMemo(() => predictExhaustion(quota, timeline), [quota, timeline]);
+  const retryCount = recent?.retries || 0;
+  const globalRequests = quota?.globalRequests || 0;
+  const errorCount = errors?.count || 0;
+  const errorRate = globalRequests > 0 ? ((errorCount / globalRequests) * 100).toFixed(2) : '0.00';
+  const avgLatency = health?.avgLatency || quota?.data?.reduce((s, d) => s + (d.avgLatency || 0), 0) / Math.max(quota?.data?.length || 1, 1) || null;
 
-  // 未认证：显示密码输入框
- if (!authed) {
- return (
- <div style={pageStyle}>
- <div style={centerStyle}>
- <div style={{ textAlign: 'center', maxWidth: '360px', width: '100%' }}>
- <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#x1F512;</div>
- <h2 style={{ color: '#1e293b', marginBottom: '8px', fontSize: '22px' }}>Dashboard 认证</h2>
- <p style={{ color: '#64748b', marginBottom: '24px', fontSize: '14px' }}>请输入访问密码</p>
- <form onSubmit={handleLogin}>
- <input
- type="password"
- value={password}
- onChange={e => setPassword(e.target.value)}
- placeholder="输入密码"
- autoFocus
- style={{
- width: '100%',
- padding: '12px 16px',
- border: '2px solid #e2e8f0',
- borderRadius: '8px',
- fontSize: '15px',
- outline: 'none',
- boxSizing: 'border-box',
- transition: 'border-color 0.2s',
- borderColor: authError ? '#ef4444' : '#e2e8f0',
- }}
- onFocus={e => e.target.style.borderColor = '#6366f1'}
- onBlur={e => e.target.style.borderColor = authError ? '#ef4444' : '#e2e8f0'}
- />
- {authError && (
- <p style={{ color: '#ef4444', fontSize: '13px', marginTop: '8px' }}>{authError}</p>
- )}
- <button
- type="submit"
- style={{
- width: '100%',
- marginTop: '16px',
- padding: '12px',
- backgroundColor: '#6366f1',
- color: '#fff',
- border: 'none',
- borderRadius: '8px',
- fontSize: '15px',
- fontWeight: '600',
- cursor: 'pointer',
- transition: 'background-color 0.2s',
- }}
- onMouseOver={e => e.target.style.backgroundColor = '#4f46e5'}
- onMouseOut={e => e.target.style.backgroundColor = '#6366f1'}
- >
- 登 录
- </button>
- </form>
- </div>
- </div>
- </div>
- );
- }
+  const peakHour = timeline?.timeline?.length
+    ? timeline.timeline.reduce((a, b) => b.count > a.count ? b : a, { count: 0 }) : null;
 
- if (loading) {
+  const successCount = globalRequests - errorCount;
+
+  // ============= 登录页 =============
+  if (!authed) {
     return (
-      <div style={pageStyle}>
-        <div style={centerStyle}>
-          <div style={spinnerStyle} />
-          <p style={{ color: '#64748b', marginTop: '16px' }}>正在加载控制台...</p>
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'linear-gradient(135deg, #0b1121 0%, #1a1f3a 30%, #0f172a 70%, #0b1121 100%)',
+        position: 'relative', overflow: 'hidden'
+      }}>
+        {/* 背景装饰光晕 */}
+        <div style={{
+          position: 'absolute', top: '-30%', right: '-20%', width: '800px', height: '800px',
+          borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 60%)',
+          pointerEvents: 'none', animation: 'pulse-glow 8s ease-in-out infinite'
+        }} />
+        <div style={{
+          position: 'absolute', bottom: '-40%', left: '-10%', width: '600px', height: '600px',
+          borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.12) 0%, transparent 60%)',
+          pointerEvents: 'none', animation: 'pulse-glow 6s ease-in-out infinite reverse'
+        }} />
+        
+        {/* 网格背景 */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundImage: `
+            linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px)
+          `,
+          backgroundSize: '40px 40px',
+          pointerEvents: 'none',
+          maskImage: 'radial-gradient(circle at center, black 0%, transparent 70%)'
+        }} />
+        
+        <div style={{
+          background: 'rgba(19,28,49,0.8)', backdropFilter: 'blur(24px)',
+          padding: '56px 48px', borderRadius: '24px', border: '1px solid rgba(99,102,241,0.3)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 0 40px rgba(99,102,241,0.1), inset 0 1px 0 rgba(255,255,255,0.1)',
+          width: '100%', maxWidth: '400px',
+          position: 'relative', zIndex: 1,
+          animation: 'slide-up 0.6s ease-out'
+        }}>
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <div style={{ 
+              fontSize: '48px', marginBottom: '12px', 
+              filter: 'drop-shadow(0 0 20px rgba(99,102,241,0.4))',
+              animation: 'float 3s ease-in-out infinite'
+            }}>🛡️</div>
+            <h2 style={{ color: '#f1f5f9', margin: 0, fontSize: '24px', fontWeight: '700', letterSpacing: '-0.02em' }}>代理监控控制台</h2>
+            <p style={{ color: '#64748b', fontSize: '14px', marginTop: '8px', fontWeight: '500' }}>Gemini Transparent Proxy</p>
+            <div style={{ 
+              fontSize: '11px', color: '#475569', marginTop: '12px', 
+              padding: '4px 12px', borderRadius: '20px',
+              backgroundColor: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)',
+              display: 'inline-block'
+            }}>
+              🔒 安全访问
+            </div>
+          </div>
+          <form onSubmit={handleLogin}>
+            <div style={{ position: 'relative', marginBottom: '12px' }}>
+              <input 
+                type="password" 
+                value={password} 
+                onChange={e => setPassword(e.target.value)}
+                placeholder="输入访问密码" 
+                autoFocus
+                style={{
+                  width: '100%', padding: '14px 18px',
+                  borderRadius: '12px', border: '1px solid rgba(99,102,241,0.3)',
+                  background: 'rgba(15,23,42,0.6)', color: '#f1f5f9',
+                  fontSize: '14px', outline: 'none', boxSizing: 'border-box',
+                  transition: 'all 0.2s ease',
+                  boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.3)',
+                }}
+                onFocus={e => {
+                  e.target.style.borderColor = '#6366f1';
+                  e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.15), inset 0 1px 3px rgba(0,0,0,0.3)';
+                }}
+                onBlur={e => {
+                  e.target.style.borderColor = 'rgba(99,102,241,0.3)';
+                  e.target.style.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.3)';
+                }}
+              />
+            </div>
+            {authError && (
+              <div style={{ 
+                color: '#ef4444', fontSize: '13px', marginBottom: '12px',
+                padding: '8px 12px', borderRadius: '8px',
+                backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                display: 'flex', alignItems: 'center', gap: '6px',
+                animation: 'shake 0.4s ease-in-out'
+              }}>
+                <span>⚠️</span> {authError}
+              </div>
+            )}
+            <button type="submit"
+              style={{
+                width: '100%', padding: '14px', border: 'none', borderRadius: '12px',
+                background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #6366f1 100%)',
+                backgroundSize: '200% 100%',
+                color: 'white', fontSize: '15px', fontWeight: '600', cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                boxShadow: '0 4px 16px rgba(99,102,241,0.4), 0 0 20px rgba(99,102,241,0.2)',
+                letterSpacing: '0.02em',
+              }}
+              onMouseEnter={e => {
+                e.target.style.backgroundPosition = 'right center';
+                e.target.style.transform = 'translateY(-2px)';
+                e.target.style.boxShadow = '0 6px 20px rgba(99,102,241,0.5), 0 0 30px rgba(99,102,241,0.3)';
+              }}
+              onMouseLeave={e => {
+                e.target.style.backgroundPosition = 'left center';
+                e.target.style.transform = 'translateY(0)';
+                e.target.style.boxShadow = '0 4px 16px rgba(99,102,241,0.4), 0 0 20px rgba(99,102,241,0.2)';
+              }}
+            >
+              进入控制台 ✨
+            </button>
+          </form>
+          <div style={{
+            marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(99,102,241,0.15)',
+            textAlign: 'center', fontSize: '12px', color: '#475569'
+          }}>
+            <span>实时监控 · 智能分析 · 配额管理</span>
+          </div>
         </div>
       </div>
     );
   }
 
-  const systemOk = health?.status === 'ok' || health?.status === 'degraded';
- const geminiOk = health?.gemini?.status === 'ok';
- const redisOk = health?.redis?.status === 'ok' || health?.redis?.status === 'warn';
-  const hasErrors = errors?.errors?.length > 0;
-  const hasTimeline = timeline?.timeline?.length > 0;
-  const hasClients = clients?.clients?.length > 0;
-  const hasRecent = recent?.recent?.length > 0;
-  const totalRetries = recent?.retries || 0;
-  const peakHour = hasTimeline
-    ? timeline.timeline.reduce((max, d) => d.count > max.count ? d : max, { count: 0 })
-    : null;
-  const clientMax = hasClients ? Math.max(...clients.clients.map(c => c.requests), 1) : 1;
+  if (loading) {
+    return (
+      <div style={{ ...theme.page, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            width: '40px', height: '40px', margin: '0 auto 16px',
+            border: '3px solid rgba(99,102,241,0.2)', borderTopColor: '#6366f1',
+            borderRadius: '50%', animation: 'spin 0.8s linear infinite'
+          }} />
+          <p style={{ color: theme.text.sub }}>正在加载控制台…</p>
+        </div>
+      </div>
+    );
+  }
 
+  // ============= 主界面 =============
   return (
-    <div style={pageStyle} className="dashboard-page">
-    <div style={{ maxWidth: '1440px', margin: '0 auto' }} className="dashboard-container">
+    <div style={{
+      ...theme.page, 
+      minHeight: '100vh',
+      padding: '0', 
+      fontFamily: '"Inter", system-ui, -apple-system, "PingFang SC", sans-serif',
+      backgroundImage: theme.page.backgroundGradient,
+      backgroundAttachment: 'fixed',
+    }}>
+      {/* 背景装饰 - 保留但简化 */}
+      <div style={{
+        position: 'fixed', top: '-50%', right: '-20%', width: '600px', height: '600px',
+        borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.05) 0%, transparent 70%)',
+        pointerEvents: 'none', zIndex: 0
+      }} />
+      <div style={{
+        position: 'fixed', bottom: '-30%', left: '-10%', width: '400px', height: '400px',
+        borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.04) 0%, transparent 70%)',
+        pointerEvents: 'none', zIndex: 0
+      }} />
 
-    {/* Header */}
-    <header style={headerStyle} className="dashboard-header">
-          <div>
-            <h1 style={titleStyle} className="dashboard-title">Gemini 代理 <span style={{ color: '#6366f1' }}>控制台</span></h1>
-            <p style={subtitleStyle} className="dashboard-subtitle">
-              {lastUpdate
-                ? `最近更新: ${lastUpdate.toLocaleTimeString('zh-CN', { hour12: false })} | 自动刷新: ${REFRESH_INTERVAL / 1000}秒`
-                : '监控代理状态与配额使用情况'}
-            </p>
+      <div style={{ position: 'relative', zIndex: 1, maxWidth: '1360px', margin: '0 auto', padding: '28px 24px' }}>
+        {/* ====== 顶部导航 ====== */}
+        <header style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          marginBottom: '28px', paddingBottom: '20px',
+          borderBottom: `1px solid ${dark ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.08)'}`,
+          position: 'relative'
+        }}>
+          {/* 刷新进度条 */}
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: '2px',
+            backgroundColor: theme.bar.bg,
+            borderRadius: '2px',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              width: `${refreshProgress}%`,
+              height: '100%',
+              background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+              transition: 'width 0.3s linear',
+            }} />
           </div>
-          <button onClick={fetchData} style={refreshBtnStyle} title="立即刷新">&#x21bb;</button>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{
+                width: '10px', height: '10px', borderRadius: '50%',
+                backgroundColor: health?.status === 'ok' ? '#22c55e' : '#ef4444',
+                boxShadow: `0 0 12px ${health?.status === 'ok' ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'}`,
+                animation: health?.status === 'ok' ? 'pulse-glow 2s ease-in-out infinite' : 'none'
+              }} />
+              <h1 style={{ fontSize: '28px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
+                Gemini <span style={{ 
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text'
+                }}>代理</span>
+              </h1>
+            </div>
+            <p style={{ color: theme.text.muted, fontSize: '13px', margin: '4px 0 0', fontWeight: '500' }}>
+              实时监控 · 智能分析 · 配额管理
+            </p>
+            {lastRefreshTime && (
+              <p style={{ color: theme.text.muted, fontSize: '11px', margin: '6px 0 0', fontFamily: 'monospace' }}>
+                上次刷新：{lastRefreshTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </p>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span style={{ 
+              fontSize: '12px', 
+              color: theme.text.muted, 
+              fontFamily: 'monospace',
+              padding: '6px 10px',
+              borderRadius: '8px',
+              backgroundColor: theme.bar.bg,
+              border: `1px solid ${dark ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.1)'}`,
+            }}>
+              {new Date().toLocaleTimeString('zh-CN', { hour12: false })}
+            </span>
+            <button onClick={toggleDark} title={dark ? '切换亮色模式' : '切换暗色模式'}
+              style={{
+                width: '38px', height: '38px', borderRadius: '12px',
+                border: theme.card.border, backgroundColor: theme.card.backgroundColor,
+                cursor: 'pointer', fontSize: '18px', display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.2s ease',
+                boxShadow: theme.card.boxShadow,
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.transform = 'scale(1.1)';
+                e.currentTarget.style.boxShadow = theme.glow;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.boxShadow = theme.card.boxShadow;
+              }}
+            >{dark ? '☀️' : '🌙'}</button>
+            <button onClick={fetchData} title={refreshing ? '刷新中...' : '刷新数据'}
+              style={{
+                width: '38px', height: '38px', borderRadius: '12px',
+                border: theme.card.border, backgroundColor: theme.card.backgroundColor,
+                cursor: refreshing ? 'not-allowed' : 'pointer', fontSize: '18px', display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.2s ease',
+                boxShadow: theme.card.boxShadow,
+                opacity: refreshing ? 0.6 : 1,
+                animation: refreshing ? 'spin 1s linear infinite' : 'none',
+              }}
+              onMouseEnter={e => {
+                if (!refreshing) {
+                  e.currentTarget.style.transform = 'scale(1.1) rotate(180deg)';
+                  e.currentTarget.style.boxShadow = theme.glow;
+                }
+              }}
+              onMouseLeave={e => {
+                if (!refreshing) {
+                  e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
+                  e.currentTarget.style.boxShadow = theme.card.boxShadow;
+                }
+              }}
+            >{refreshing ? '⏳' : '⟳'}</button>
+            
+            {/* 导出按钮 */}
+            <div style={{ position: 'relative' }}>
+              <button 
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                disabled={exporting}
+                title="导出数据"
+                style={{
+                  width: '38px', height: '38px', borderRadius: '12px',
+                  border: theme.card.border, 
+                  backgroundColor: exporting ? theme.bar.bg : theme.card.backgroundColor,
+                  cursor: exporting ? 'not-allowed' : 'pointer', 
+                  fontSize: '18px', 
+                  display: 'flex',
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  transition: 'all 0.2s ease',
+                  boxShadow: theme.card.boxShadow,
+                  opacity: exporting ? 0.6 : 1,
+                }}
+                onMouseEnter={e => {
+                  if (!exporting) {
+                    e.currentTarget.style.transform = 'scale(1.1)';
+                    e.currentTarget.style.boxShadow = theme.glow;
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!exporting) {
+                    e.currentTarget.style.transform = 'scale(1)';
+                    e.currentTarget.style.boxShadow = theme.card.boxShadow;
+                  }
+                }}
+              >
+                {exporting ? '⏳' : '📥'}
+              </button>
+              
+              {/* 导出菜单 */}
+              {showExportMenu && (
+                <div style={{
+                  position: 'absolute',
+                  top: '48px',
+                  right: 0,
+                  zIndex: 100,
+                  minWidth: '180px',
+                  backgroundColor: theme.card.backgroundColor,
+                  border: theme.card.border,
+                  borderRadius: '12px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.2), ' + theme.glow,
+                  padding: '8px',
+                  animation: 'slide-up 0.2s ease-out',
+                }}>
+                  <div style={{ 
+                    fontSize: '11px', 
+                    fontWeight: '700', 
+                    color: theme.text.muted, 
+                    padding: '8px 12px 6px',
+                    borderBottom: `1px solid ${theme.bar.bg}`,
+                    marginBottom: '4px',
+                  }}>导出数据</div>
+                  {[
+                    { type: 'quota', label: '配额数据', icon: '📊' },
+                    { type: 'timeline', label: '时间线', icon: '📈' },
+                    { type: 'errors', label: '错误日志', icon: '⚠️' },
+                    { type: 'all', label: '完整数据 (JSON)', icon: '💾' },
+                  ].map(item => (
+                    <button
+                      key={item.type}
+                      onClick={() => handleExport(item.type)}
+                      disabled={exporting}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 12px',
+                        margin: '4px 0',
+                        border: 'none',
+                        borderRadius: '8px',
+                        backgroundColor: 'transparent',
+                        color: theme.text.main,
+                        fontSize: '13px',
+                        cursor: exporting ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s ease',
+                        textAlign: 'left',
+                      }}
+                      onMouseEnter={e => {
+                        if (!exporting) {
+                          e.currentTarget.style.backgroundColor = theme.bar.bg;
+                          e.currentTarget.style.transform = 'translateX(4px)';
+                        }
+                      }}
+                      onMouseLeave={e => {
+                        if (!exporting) {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                          e.currentTarget.style.transform = 'translateX(0)';
+                        }
+                      }}
+                    >
+                      <span style={{ fontSize: '16px' }}>{item.icon}</span>
+                      <span style={{ flex: 1 }}>{item.label}</span>
+                      {exporting && <span style={{ fontSize: '12px', color: theme.text.muted }}>⏳</span>}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setShowExportMenu(false)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      marginTop: '4px',
+                      border: 'none',
+                      borderRadius: '8px',
+                      backgroundColor: 'transparent',
+                      color: theme.text.muted,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.color = theme.text.main}
+                    onMouseLeave={e => e.currentTarget.style.color = theme.text.muted}
+                  >
+                    取消
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </header>
 
-        {/* Global Status Bar */}
-        <div style={statusBarStyle} className="dashboard-status-bar">
-        <StatusDot label="系统状态" ok={systemOk} okText="在线" failText="离线" />
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x1F4C8;" label="总请求数" value={(quota?.globalRequests || 0).toLocaleString()} />
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x23F1;" label="平均延迟" value={globalAvgLatency != null ? `${globalAvgLatency}ms` : '暂无'} />
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x26A0;" label="错误率" value={globalStats ? `${globalStats.errorRate}%` : '暂无'} valueColor={(globalStats?.errorRate || 0) > 5 ? '#dc2626' : '#166534'} />
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x1F504;" label="重试次数" value={totalRetries.toLocaleString()} valueColor={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#166534'} />
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x23F0;" label="配额重置" value={formatCountdown(countdown)} mono />
-        {exhaustionPrediction && (
-          <>
-            <div style={statusDividerStyle} className="dashboard-status-divider" />
-            <StatusEmoji 
-              emoji={exhaustionPrediction.willExhaustBeforeReset ? "&#x1F6A8;" : "&#x2705;"} 
-              label="配额预测" 
-              value={exhaustionPrediction.willExhaustBeforeReset ? '将耗尽' : '充足'} 
-              valueColor={exhaustionPrediction.willExhaustBeforeReset ? '#dc2626' : '#166534'}
-              title={exhaustionPrediction.willExhaustBeforeReset 
-                ? `按当前速率 (${exhaustionPrediction.hourlyRate} 次/小时), 预计 ${exhaustionPrediction.hoursToExhaustion} 小时后耗尽配额`
-                : `按当前速率 (${exhaustionPrediction.hourlyRate} 次/小时), 剩余配额可支撑 ${exhaustionPrediction.hoursToExhaustion} 小时`}
-            />
-          </>
-        )}
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x1F916;" label="Gemini" value={geminiOk ? '正常' : '异常'} valueColor={geminiOk ? '#166534' : '#dc2626'} />
-        <div style={statusDividerStyle} className="dashboard-status-divider" />
-        <StatusEmoji emoji="&#x1F5C4;" label="Redis" value={redisOk ? '正常' : '异常'} valueColor={redisOk ? '#166534' : '#dc2626'} />
+        {/* ====== 核心指标行 ====== */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '14px', marginBottom: '24px'
+        }}>
+          <MetricCard icon="📡" label="总请求数" value={formatNumber(globalRequests)}
+            sub={`今日累计`} color="#6366f1" theme={theme} />
+          <MetricCard icon="✅" label="成功请求" value={formatNumber(successCount)}
+            sub={`成功率 ${successCount > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100'}%`}
+            color="#22c55e" theme={theme} />
+          <MetricCard icon="⚠️" label="错误数" value={formatNumber(errorCount)}
+            sub={`错误率 ${errorRate}%`}
+            color={errorCount > 0 ? '#ef4444' : '#22c55e'} 
+            theme={theme} 
+            style={errorCount > 0 && errorRate > 5 ? { animation: 'pulse-glow 2s ease-in-out infinite' } : {}}
+            badge={unreadErrors}
+          />
+          <MetricCard icon="⏱️" label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)}ms` : '—'}
+            sub="所有模型综合" color="#f59e0b" theme={theme} />
+          <MetricCard icon="🔄" label="配额重置" value={formatCountdown(countdown)}
+            sub="UTC+8 07:00 重置" color="#8b5cf6" theme={theme} />
         </div>
 
-        {/* Model Cards */}
-        <div style={modelGridStyle} className="dashboard-model-grid">
-          {quota?.data?.filter(item => item.model && item.model.startsWith('gemma-4')).map((item, i) => <ModelCard key={i} item={item} />)}
-        </div>
+        {/* ====== 双列布局 ====== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
-        {/* Row: Timeline + Model Distribution */}
-        <div style={twoColStyle} className="dashboard-two-col">
-          {/* Request Timeline */}
-          {hasTimeline && (
-            <div style={sectionCardStyle} className="dashboard-section">
-              <div style={sectionHeaderStyle} className="dashboard-section-header">
-                <h2 style={sectionTitleStyle}>
-                  <span style={{ marginRight: '8px' }}>&#x1F4CA;</span>请求时间线
-                  <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>UTC+8 {timeline.date}</span>
-                </h2>
-                {peakHour && peakHour.count > 0 && (
-                  <span style={peakBadge} className="dashboard-peak-badge">峰值: {peakHour.label} ({peakHour.count})</span>
-                )}
-              </div>
-              <SparklineChart data={timeline.timeline} />
-            </div>
-          )}
-
-          {/* Model Distribution */}
-          {modelDistribution.length > 0 && (
-            <div style={sectionCardStyle} className="dashboard-section">
-              <div style={sectionHeaderStyle} className="dashboard-section-header">
-                <h2 style={sectionTitleStyle}>
-                  <span style={{ marginRight: '8px' }}>&#x1F4CB;</span>模型路由分布
-                  <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>今日</span>
-                </h2>
-                <span style={peakBadge} className="dashboard-peak-badge">{quota.data.reduce((s, d) => s + d.used, 0).toLocaleString()} 次总计</span>
-              </div>
-              {modelDistribution.map((d, i) => (
-                <HorizontalBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Row: Clients + Retries */}
-        <div style={twoColStyle} className="dashboard-two-col">
-          {/* Client Source Top 10 */}
-          <div style={sectionCardStyle} className="dashboard-section">
-            <div style={sectionHeaderStyle} className="dashboard-section-header">
-              <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F511;</span>来源统计
-                <span style={{ fontSize: '13px', fontWeight: '400', color: '#94a3b8', marginLeft: '12px' }}>
-                  {clients?.totalClients || 0} 个密钥
-                </span>
+          {/* 请求时间线 */}
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                📊 请求时间线
+                {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
               </h2>
-              {clients?.totalRequests > 0 && (
-                <span style={peakBadge} className="dashboard-peak-badge">{clients.totalRequests.toLocaleString()} 次请求</span>
+              {peakHour && peakHour.count > 0 && (
+                <span style={{
+                  fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                  backgroundColor: '#6366f118', color: '#6366f1', border: '1px solid #6366f130',
+                  fontWeight: '600'
+                }}>
+                  峰值 {peakHour.label} · {peakHour.count}次
+                </span>
               )}
             </div>
-            {hasClients ? (
-              clients.clients.map((c, i) => (
-                <HorizontalBar
-                  key={i}
-                  label={c.fingerprint}
-                  value={c.requests}
-                  max={clientMax}
-                  color={['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81'][i % 10]}
-                />
-              ))
-            ) : (
-              <EmptyState emoji="&#x1F512;" text="暂无来源数据" />
-            )}
+            <SparklineChart data={timeline?.timeline || []} theme={theme} />
+            <div style={{ display: 'flex', gap: '16px', marginTop: '12px', fontSize: '12px', color: theme.text.muted }}>
+              <span>📈 最大流量: {peakHour?.count?.toLocaleString() || 0} 次/h</span>
+              <span>📉 今日总计: {(timeline?.timeline?.reduce((s, d) => s + d.count, 0) || 0).toLocaleString()} 次</span>
+            </div>
           </div>
 
-          {/* Retry Events */}
-          <div style={sectionCardStyle} className="dashboard-section">
-            <div style={sectionHeaderStyle} className="dashboard-section-header">
-              <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F504;</span>重试事件追踪
+          {/* 模型分布 */}
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🧬 模型路由分布
+                {quota?.data && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>共 {quota.data.length} 个模型</span>}
               </h2>
-              <span style={{
-                ...badgeBase,
-                backgroundColor: totalRetries > 10 ? '#fef2f2' : totalRetries > 0 ? '#fffbeb' : '#f0fdf4',
-                color: totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669',
-                border: `1px solid ${totalRetries > 10 ? '#fecaca' : totalRetries > 0 ? '#fde68a' : '#bbf7d0'}`,
-              }}>
-                今日 {totalRetries} 次
+            </div>
+            <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px', scrollbarWidth: 'thin' }}>
+              {modelDistribution.length > 0 ? modelDistribution.map((d, i) => (
+                <ProgressBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} theme={theme} />
+              )) : <EmptyCard emoji="📭" text="暂无模型数据" theme={theme} />}
+            </div>
+            {quota?.globalErrorRate > 0 && (
+              <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.bar.bg}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
+                  <span>🌐 全局错误率</span>
+                  <span style={{ fontWeight: '600', color: quota.globalErrorRate > 5 ? '#ef4444' : '#22c55e' }}>
+                    {quota.globalErrorRate}%
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ====== 模型配额监控 ====== */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              ⚡ 模型配额监控
+              {quota?.data?.some(m => m.percent > 90) && (
+                <span style={{
+                  fontSize: '10px', padding: '2px 8px', borderRadius: '12px',
+                  backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444',
+                  border: '1px solid rgba(239,68,68,0.3)', fontWeight: '700',
+                  display: 'flex', alignItems: 'center', gap: '4px',
+                  animation: 'pulse-glow 2s ease-in-out infinite'
+                }}>
+                  ⚠ 配额告警
+                </span>
+              )}
+            </h2>
+            {selectedModel && (
+              <button onClick={() => setSelectedModel(null)}
+                style={{
+                  fontSize: '12px', padding: '4px 12px', borderRadius: '20px',
+                  border: `1px solid ${theme.text.muted}40`, background: 'transparent',
+                  color: theme.text.muted, cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={e => {
+                  e.target.style.background = theme.bar.bg;
+                  e.target.style.borderColor = theme.text.muted;
+                }}
+                onMouseLeave={e => {
+                  e.target.style.background = 'transparent';
+                  e.target.style.borderColor = `${theme.text.muted}40`;
+                }}
+              >清除筛选 ✕</button>
+            )}
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            gap: '12px'
+          }}>
+            {quota?.data?.map((item, i) => {
+              const color = getModelColor(item.model);
+              const pct = Math.min(item.percent, 100);
+              const isSelected = selectedModel === shortModel(item.model);
+              const isHigh = pct > 90;
+              const isMedium = pct > 70;
+              const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color;
+              const warningLevel = isHigh ? 'critical' : isMedium ? 'warning' : 'normal';
+              return (
+                <div key={i}
+                  onClick={() => setSelectedModel(isSelected ? null : shortModel(item.model))}
+                  style={{
+                    borderRadius: '16px', padding: '18px', cursor: 'pointer',
+                    background: isSelected ? `linear-gradient(135deg, ${color}12, ${color}06)` : theme.card.backgroundColor,
+                    border: isSelected 
+                      ? `2px solid ${color}` 
+                      : isHigh 
+                        ? `2px solid rgba(239,68,68,0.4)` 
+                        : theme.card.border,
+                    boxShadow: isSelected 
+                      ? `0 0 24px ${color}12` 
+                      : isHigh
+                        ? `0 0 20px rgba(239,68,68,0.2), 0 4px 24px rgba(0,0,0,0.2)`
+                        : theme.card.boxShadow,
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    position: 'relative',
+                  }}
+                  onMouseEnter={e => { 
+                    if (!isSelected) { 
+                      e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)'; 
+                      e.currentTarget.style.borderColor = isHigh ? '#ef4444' : `${color}60`; 
+                    } 
+                  }}
+                  onMouseLeave={e => { 
+                    if (!isSelected) { 
+                      e.currentTarget.style.transform = 'translateY(0) scale(1)'; 
+                      e.currentTarget.style.borderColor = isHigh ? 'rgba(239,68,68,0.4)' : theme.card.border; 
+                    } 
+                  }}
+                >
+                  {/* 配额告警角标 */}
+                  {isHigh && (
+                    <div style={{
+                      position: 'absolute', top: '10px', right: '10px',
+                      width: '8px', height: '8px', borderRadius: '50%',
+                      backgroundColor: '#ef4444',
+                      boxShadow: '0 0 12px rgba(239,68,68,0.6)',
+                      animation: 'pulse-glow 1s ease-in-out infinite'
+                    }} />
+                  )}
+                  {isSelected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', background: `linear-gradient(90deg, ${color}, ${color}60)`, borderRadius: '16px 16px 0 0' }} />}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '700', color: theme.text.main, fontFamily: 'monospace' }}>
+                      {shortModel(item.model)}
+                    </div>
+                    <div style={{
+                      fontSize: '20px', fontWeight: '800',
+                      color: barColor, fontFamily: 'monospace', letterSpacing: '-0.02em'
+                    }}>
+                      {pct.toFixed(1)}<span style={{ fontSize: '12px', fontWeight: '600' }}>%</span>
+                    </div>
+                  </div>
+                  <div style={{
+                    backgroundColor: theme.bar.bg, height: '6px', borderRadius: '3px',
+                    overflow: 'hidden', marginBottom: '10px'
+                  }}>
+                    <div style={{
+                      height: '100%', width: `${pct}%`,
+                      background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : `${color}80`})`,
+                      borderRadius: '3px', transition: 'width 0.8s ease'
+                    }} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted }}>
+                    <span>{(item.used || 0).toLocaleString()} / {(item.limit || '∞').toLocaleString()}</span>
+                    <span>{item.limit - (item.used || 0) > 0 ? `余 ${(item.limit - (item.used || 0)).toLocaleString()}` : '已耗尽'}</span>
+                  </div>
+                  
+                  {/* 配额预测 */}
+                  {quotaPredictions[item.model] && !quotaPredictions[item.model].exhausted && (
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      backgroundColor: quotaPredictions[item.model].minutes < 120 
+                        ? 'rgba(239,68,68,0.1)' 
+                        : quotaPredictions[item.model].minutes < 240
+                          ? 'rgba(245,158,11,0.1)'
+                          : 'rgba(34,197,94,0.1)',
+                      border: `1px solid ${
+                        quotaPredictions[item.model].minutes < 120 
+                          ? 'rgba(239,68,68,0.3)' 
+                          : quotaPredictions[item.model].minutes < 240
+                            ? 'rgba(245,158,11,0.3)'
+                            : 'rgba(34,197,94,0.3)'
+                      }`,
+                      fontSize: '11px',
+                      color: quotaPredictions[item.model].minutes < 120 
+                        ? '#ef4444' 
+                        : quotaPredictions[item.model].minutes < 240
+                          ? '#f59e0b'
+                          : '#22c55e',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}>
+                      <span>🔮</span>
+                      <span style={{ fontWeight: '600' }}>预计耗尽:</span>
+                      <span>{quotaPredictions[item.model].formatted}</span>
+                    </div>
+                  )}
+                  {quotaPredictions[item.model]?.exhausted && (
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      backgroundColor: 'rgba(239,68,68,0.15)',
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      fontSize: '11px',
+                      color: '#ef4444',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontWeight: '700',
+                    }}>
+                      <span>⚠️</span>
+                      <span>配额已耗尽或今日无法用完</span>
+                    </div>
+                  )}
+                  
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '3px',
+                      padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                      backgroundColor: `${color}12`, color, border: `1px solid ${color}25`
+                    }}>
+                      📡 {(item.used || 0).toLocaleString()}
+                    </span>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '3px',
+                      padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                      backgroundColor: '#f59e0b12', color: item.avgLatency > 3000 ? '#ef4444' : '#f59e0b',
+                      border: `1px solid ${item.avgLatency > 3000 ? '#ef444425' : '#f59e0b25'}`
+                    }}>
+                      ⏱ {item.avgLatency ? `${item.avgLatency}ms` : '—'}
+                    </span>
+                    {item.errorRate > 0 && (
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '3px',
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                        backgroundColor: '#ef444412', color: '#ef4444', border: '1px solid #ef444425'
+                      }}>
+                        ⚠ {(item.errorRate || 0)}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ====== 底部双列：来源 + 重试/请求 ====== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+          {/* 来源统计 */}
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🔑 来源统计
+              </h2>
+              <span style={{ fontSize: '11px', color: theme.text.muted }}>
+                {clients?.totalClients || 0} 个密钥 / {clients?.totalRequests?.toLocaleString() || 0} 次
               </span>
             </div>
-
-            {/* 重试摘要 */}
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }} className="dashboard-retry-stats">
-              <MiniStat label="总重试次数" value={totalRetries} color={totalRetries > 0 ? '#d97706' : '#059669'} />
-              <MiniStat label="重试率" value={quota?.globalRequests > 0 ? `${((totalRetries / quota.globalRequests) * 100).toFixed(2)}%` : '0%'} color="#6366f1" />
-              <MiniStat label="状态" value={totalRetries > 10 ? '性能下降' : totalRetries > 0 ? '需关注' : '正常'} color={totalRetries > 10 ? '#dc2626' : totalRetries > 0 ? '#d97706' : '#059669'} />
+            <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px', scrollbarWidth: 'thin' }}>
+              {clients?.clients?.length > 0 ? clients.clients.map((c, i) => (
+                <ProgressBar key={i} label={c.fingerprint?.length > 30 ? c.fingerprint.slice(0, 30) + '…' : c.fingerprint || 'unknown'}
+                  value={c.requests}
+                  max={Math.max(...clients.clients.map(x => x.requests), 1)}
+                  color={['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81'][i % 10]}
+                  theme={theme} />
+              )) : <EmptyCard emoji="🔒" text="暂无来源数据" theme={theme} />}
             </div>
+          </div>
 
-            {/* 最近有重试的请求 */}
-            {hasRecent && (
-              <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '8px', fontWeight: '600' }}>
-                最近重试请求
+          {/* 最近请求 + 重试 */}
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                📋 最近请求
+                {selectedModel && <span style={{ fontSize: '11px', fontWeight: '400', color: '#6366f1' }}>筛选: {selectedModel}</span>}
+              </h2>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {retryCount > 0 && (
+                  <span style={{
+                    fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                    backgroundColor: '#f59e0b18', color: '#f59e0b',
+                    border: '1px solid #f59e0b30', fontWeight: '600'
+                  }}>
+                    重试 {retryCount} 次
+                  </span>
+                )}
               </div>
-            )}
-            <div style={errorListStyle}>
-              {recent.recent
-                .filter(r => r.retries > 0)
-                .slice(0, 10)
-                .map((r, i) => (
-                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
-                    <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
-                    <span style={{ ...errorStatusBadgeStyle, backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
-                      {r.retries}次重试
-                    </span>
-                    <span style={errorModelStyle}>{r.model}</span>
-                     <span style={errorLatencyStyle}>{r.latency}ms</span>
-                     </div>
-                     ))}
-                    {recent.recent.filter(r => r.retries > 0).length === 0 && (
-                <EmptyState emoji="&#x2705;" text="今日无重试" />
+            </div>
+            <div style={{ maxHeight: '300px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
+              {(selectedModel ? filteredRecent : recent?.recent)?.length > 0
+                ? (selectedModel ? filteredRecent : recent?.recent).slice(0, 20).map((r, i) => {
+                    const label = getStatusLabel(r.status);
+                    return (
+                      <LogRow key={i} time={formatTime(r.ts)} badge={r.status}
+                        label={shortModel(r.model)}
+                        badgeColor={label.color}
+                        sub={r.latency != null ? `${r.latency}ms` : undefined}
+                        color={label.color} theme={theme} />
+                    );
+                  })
+                : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} theme={theme} />}
+            </div>
+          </div>
+        </div>
+
+        {/* ====== 双列：错误日志 + status 码 ====== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+          {/* 错误日志 */}
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🚨 错误日志
+              </h2>
+              {errorCount > 0 && (
+                <span style={{
+                  fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                  backgroundColor: '#ef444418', color: '#ef4444',
+                  border: '1px solid #ef444430', fontWeight: '600'
+                }}>今日 {errorCount} 条</span>
               )}
             </div>
+            <div style={{ maxHeight: '280px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
+              {errors?.errors?.length > 0
+                ? errors.errors.slice(0, 20).map((e, i) => {
+                    const label = getStatusLabel(e.status);
+                    return (
+                      <LogRow key={i} time={formatTime(e.ts)} badge={e.status}
+                        label={`${shortModel(e.model)}${e.message ? ` · ${e.message}` : ''}`}
+                        badgeColor={label.color}
+                        sub={e.latency != null ? `${e.latency}ms` : undefined}
+                        color={label.color} theme={theme} />
+                    );
+                  })
+                : <EmptyCard emoji="✅" text="今日无错误，一切正常" theme={theme} />}
+            </div>
+          </div>
+
+          {/* HTTP 状态码速查 + Gemini/Redis 状态 */}
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🔗 系统状态
+              </h2>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+              <div style={{
+                padding: '14px', borderRadius: '10px',
+                backgroundColor: theme.bar.bg,
+                border: health?.redis?.status === 'ok' ? '1px solid #22c55e30' : '1px solid #ef444430'
+              }}>
+                <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>Gemini API</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    width: '8px', height: '8px', borderRadius: '50%',
+                    backgroundColor: health?.gemini?.status === 'ok' ? '#22c55e' : '#ef4444',
+                    boxShadow: `0 0 6px ${health?.gemini?.status === 'ok' ? '#22c55e60' : '#ef444460'}`
+                  }} />
+                  <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>
+                    {health?.gemini?.status === 'ok' ? '正常' : '异常'}
+                  </span>
+                  {health?.gemini?.latency && (
+                    <span style={{ fontSize: '11px', color: theme.text.muted }}>
+                      {health.gemini.latency}ms
+                    </span>
+                  )}
+                </div>
+                {health?.gemini?.message && (
+                  <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '4px' }}>{health.gemini.message}</div>
+                )}
+              </div>
+              <div style={{
+                padding: '14px', borderRadius: '10px',
+                backgroundColor: theme.bar.bg,
+                border: health?.redis?.status === 'ok' ? '1px solid #22c55e30' : health?.redis?.status === 'warn' ? '1px solid #f59e0b30' : '1px solid #ef444430'
+              }}>
+                <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>Redis</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    width: '8px', height: '8px', borderRadius: '50%',
+                    backgroundColor: health?.redis?.status === 'ok' ? '#22c55e' : health?.redis?.status === 'warn' ? '#f59e0b' : '#ef4444',
+                    boxShadow: `0 0 6px ${health?.redis?.status === 'ok' ? '#22c55e60' : health?.redis?.status === 'warn' ? '#f59e0b60' : '#ef444460'}`
+                  }} />
+                  <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>
+                    {health?.redis?.status === 'ok' ? '正常' : health?.redis?.status === 'warn' ? '异常' : '离线'}
+                  </span>
+                  {health?.redis?.latency && (
+                    <span style={{ fontSize: '11px', color: theme.text.muted }}>
+                      {health.redis.latency}ms
+                    </span>
+                  )}
+                </div>
+                {health?.redis?.message && (
+                  <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '4px' }}>{health.redis.message}</div>
+                )}
+              </div>
+            </div>
+
+            {/* HTTP 状态码 */}
+            <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main, marginBottom: '10px' }}>
+              📖 HTTP 状态码速查
+            </div>
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px'
+            }}>
+              {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => {
+                const c = parseInt(code);
+                const color = c >= 500 ? '#ef4444' : c >= 400 ? '#f59e0b' : '#22c55e';
+                return (
+                  <div key={code} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '6px 10px', borderRadius: '6px',
+                    backgroundColor: theme.bar.bg, fontSize: '12px'
+                  }}>
+                    <span style={{
+                      padding: '1px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700',
+                      fontFamily: 'monospace', backgroundColor: `${color}18`, color,
+                      border: `1px solid ${color}30`
+                    }}>{code}</span>
+                    <span style={{ color: theme.text.sub }}>{desc}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        {/* Row: Error Stream + Recent Requests */}
-        <div style={twoColStyle} className="dashboard-two-col">
-          {/* Error Stream */}
-          <div style={sectionCardStyle} className="dashboard-section">
-            <div style={sectionHeaderStyle} className="dashboard-section-header">
-              <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F534;</span>实时错误日志
+        {/* ====== Cherry 集群状态 ====== */}
+        {cherry && (
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card, marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🍒 Cherry 集群状态
               </h2>
-              {errors?.count > 0 && <span style={errorCountBadge}>今日 {errors.count} 条</span>}
+              <span style={{
+                fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                backgroundColor: cherry.status === 'healthy' ? '#22c55e18' : '#ef444418',
+                color: cherry.status === 'healthy' ? '#22c55e' : '#ef4444',
+                border: `1px solid ${cherry.status === 'healthy' ? '#22c55e30' : '#ef444430'}`,
+                fontWeight: '600'
+              }}>
+                {cherry.status === 'healthy' ? '集群健康' : '集群异常'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
+              </span>
             </div>
-            {hasErrors ? (
-              <div style={errorListStyle}>
-                {errors.errors.slice(0, 15).map((entry, i) => (
-                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
-                    <span style={errorTimeStyle}>{formatTime(entry.ts)}</span>
+            
+            {/* 节点列表 */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+              {cherry.nodes?.map((node, i) => (
+                <div key={node.id} style={{
+                  padding: '14px', borderRadius: '10px',
+                  backgroundColor: theme.bar.bg,
+                  border: `1px solid ${node.status === 'online' ? '#22c55e30' : '#ef444430'}`
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.name}</span>
                     <span style={{
-                      ...errorStatusBadgeStyle,
-                      backgroundColor: entry.status >= 500 ? '#fef2f2' : '#fffbeb',
-                      color: entry.status >= 500 ? '#dc2626' : '#d97706',
-                      border: `1px solid ${entry.status >= 500 ? '#fecaca' : '#fde68a'}`,
-                    }}>{entry.status}</span>
-                    {getStatusDesc(entry.status) && (
-                      <span style={{ fontSize: '12px', color: entry.status >= 500 ? '#b91c1c' : '#92400e', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={getStatusDesc(entry.status)}>
-                        {getStatusDesc(entry.status)}
-                      </span>
-                    )}
-                    <span style={errorModelStyle}>{entry.model}</span>
-                    <span style={errorLatencyStyle}>{entry.latency}ms</span>
+                      fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+                      backgroundColor: node.status === 'online' ? '#22c55e18' : '#ef444418',
+                      color: node.status === 'online' ? '#22c55e' : '#ef4444',
+                      fontWeight: '600'
+                    }}>{node.status}</span>
                   </div>
-                ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
+                    <span>延迟：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.latency}ms</span></span>
+                    <span>请求：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.requests.toLocaleString()}</span></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            {/* 负载均衡信息 */}
+            {cherry.loadBalance && (
+              <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
+                <div style={{ fontSize: '12px', color: theme.text.muted, marginBottom: '8px' }}>
+                  负载均衡：{cherry.loadBalance.algorithm} · 流量分布
+                </div>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  {cherry.loadBalance.distribution?.map(( pct, i) => (
+                    <div key={i} style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>
+                        <span>Node {i + 1}</span>
+                        <span style={{ color: theme.text.main, fontWeight: '600' }}>{pct}%</span>
+                      </div>
+                      <div style={{ height: '6px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          background: i === 0 ? 'linear-gradient(90deg, #6366f1, #8b5cf6)' : i === 1 ? 'linear-gradient(90deg, #22c55e, #10b981)' : 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                        }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            ) : (
-              <EmptyState emoji="&#x2705;" text="今日无错误" />
             )}
           </div>
+        )}
 
-          {/* Recent Requests */}
-          <div style={sectionCardStyle} className="dashboard-section">
-            <div style={sectionHeaderStyle} className="dashboard-section-header">
-              <h2 style={sectionTitleStyle}>
-                <span style={{ marginRight: '8px' }}>&#x1F4E5;</span>最近请求快照
-              </h2>
-              <span style={peakBadge} className="dashboard-peak-badge">最近 30 条</span>
-            </div>
-            {hasRecent ? (
-              <div style={errorListStyle}>
-                {recent.recent.slice(0, 20).map((r, i) => (
-                  <div key={i} style={errorRowStyle} className="dashboard-error-row">
-                    <span style={errorTimeStyle}>{formatTime(r.ts)}</span>
-                    <span style={{
-                      ...errorStatusBadgeStyle,
-                      backgroundColor: r.status >= 400 ? '#fef2f2' : '#f0fdf4',
-                      color: r.status >= 400 ? '#dc2626' : '#059669',
-                      border: `1px solid ${r.status >= 400 ? '#fecaca' : '#bbf7d0'}`,
-                    }}>{r.status}</span>
-                    {r.status >= 400 && getStatusDesc(r.status) && (
-                      <span style={{ fontSize: '12px', color: r.status >= 500 ? '#b91c1c' : '#92400e', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={getStatusDesc(r.status)}>
-                        {getStatusDesc(r.status)}
-                      </span>
-                    )}
-                    <span style={errorModelStyle}>{r.model}</span>
-                     <span style={errorLatencyStyle}>{r.latency}ms</span>
-                     {r.retries > 0 && (
-                      <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '4px', backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a' }}>
-                        {r.retries}次重试
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState emoji="&#x1F4ED;" text="暂无请求记录" />
-            )}
-          </div>
-        </div>
-
-        {/* HTTP 状态码速查表 */}
-        <div style={sectionCardStyle} className="dashboard-section">
-          <div style={sectionHeaderStyle} className="dashboard-section-header">
-            <h2 style={sectionTitleStyle}>
-              <span style={{ marginRight: '8px' }}>&#x1F4D6;</span>HTTP 状态码速查
-            </h2>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }} className="dashboard-http-grid">
-            {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => (
-              <div key={code} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
-                <span style={{
-                  padding: '2px 10px',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  fontWeight: '700',
-                  fontFamily: 'monospace',
-                  minWidth: '36px',
-                  textAlign: 'center',
-                  backgroundColor: parseInt(code) >= 500 ? '#fef2f2' : parseInt(code) >= 400 ? '#fffbeb' : '#f0fdf4',
-                  color: parseInt(code) >= 500 ? '#dc2626' : parseInt(code) >= 400 ? '#d97706' : '#059669',
-                  border: `1px solid ${parseInt(code) >= 500 ? '#fecaca' : parseInt(code) >= 400 ? '#fde68a' : '#bbf7d0'}`,
-                }}>{code}</span>
-                <span style={{ fontSize: '13px', color: '#475569' }}>{desc}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <footer style={footerStyle}>
-        <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>GitHub</a>
-        <span style={{ color: '#cbd5e1' }}>|</span>
-        <span style={{ color: '#94a3b8', fontSize: '13px' }}>Gemini 透明代理 &middot; Vercel Edge</span>
+        {/* ====== Footer ====== */}
+        <footer style={{
+          display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px',
+          paddingTop: '24px', marginTop: '8px',
+          borderTop: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.06)'}`,
+          color: theme.text.muted, fontSize: '12px'
+        }}>
+          <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer"
+            style={{ color: '#6366f1', textDecoration: 'none', fontWeight: '500' }}>
+            GitHub
+          </a>
+          <span>·</span>
+          <span>Gemini 透明代理</span>
+          <span>·</span>
+          <span>Vercel Edge</span>
         </footer>
-        </div>
 
-        {/* 移动端响应式媒体查询 — 注入全局 CSS */}
+        {/* 全局 CSS */}
         <style>{`
-        @media (max-width: 768px) {
-        .dashboard-page { padding: 16px 10px !important; }
-        .dashboard-container { max-width: 100% !important; }
-        .dashboard-status-bar { padding: 14px 12px !important; gap: 4px !important; }
-        .dashboard-status-item { padding: 4px 8px !important; }
-        .dashboard-status-divider { display: none !important; }
-        .dashboard-status-value { font-size: 14px !important; }
-        .dashboard-title { font-size: 22px !important; }
-        .dashboard-subtitle { font-size: 12px !important; }
-        .dashboard-two-col { grid-template-columns: 1fr !important; }
-        .dashboard-model-grid { grid-template-columns: 1fr !important; }
-        .dashboard-card { padding: 16px !important; }
-        .dashboard-section { padding: 16px !important; }
-        .dashboard-error-row { flex-wrap: wrap !important; gap: 6px !important; }
-         .dashboard-error-time { min-width: auto !important; }
-        .dashboard-section-header { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
-        .dashboard-retry-stats { flex-wrap: wrap !important; }
-        .dashboard-http-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important; }
-        .dashboard-header { margin-bottom: 16px !important; }
-        .dashboard-peak-badge { font-size: 11px !important; padding: 3px 8px !important; }
-        }
-        @media (max-width: 480px) {
-        .dashboard-status-bar { flex-direction: column !important; align-items: flex-start !important; }
-        .dashboard-status-item { width: 100% !important; padding: 6px 8px !important; }
-        .dashboard-title { font-size: 20px !important; }
-        .dashboard-model-grid { gap: 10px !important; }
-        .dashboard-http-grid { grid-template-columns: 1fr !important; }
-        }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          @keyframes shimmer { 
+            0% { transform: translateX(-100%); } 
+            100% { transform: translateX(100%); } 
+          }
+          @keyframes pulse-glow { 
+            0%, 100% { opacity: 0.5; transform: scale(1); } 
+            50% { opacity: 0.8; transform: scale(1.1); } 
+          }
+          @keyframes float { 
+            0%, 100% { transform: translateY(0); } 
+            50% { transform: translateY(-10px); } 
+          }
+          @keyframes slide-up { 
+            from { opacity: 0; transform: translateY(30px); } 
+            to { opacity: 1; transform: translateY(0); } 
+          }
+          @keyframes shake { 
+            0%, 100% { transform: translateX(0); } 
+            25% { transform: translateX(-8px); } 
+            75% { transform: translateX(8px); } 
+          }
+          ::-webkit-scrollbar { width: 6px; height: 6px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { 
+            background: ${darkCheck(theme)} ? '#334155' : '#cbd5e1'; 
+            border-radius: 3px;
+            transition: background 0.2s ease;
+          }
+          ::-webkit-scrollbar-thumb:hover { 
+            background: ${darkCheck(theme)} ? '#475569' : '#94a3b8'; 
+          }
+          @media (max-width: 768px) {
+            body > div > div > div { padding: 16px 12px !important; }
+          }
+          @media (max-width: 860px) {
+            [style*="grid-template-columns: 1fr 1fr"] {
+              grid-template-columns: 1fr !important;
+            }
+          }
         `}</style>
-        </div>
-        );
-}
-
-// ---- Sub-Components ----
-
-function StatusDot({ label, ok, okText, failText }) {
- return (
- <div style={statusItemStyle} className="dashboard-status-item">
- <div style={{ ...statusDotStyle, backgroundColor: ok ? '#22c55e' : '#ef4444', boxShadow: ok ? '0 0 8px rgba(34,197,94,0.5)' : '0 0 8px rgba(239,68,68,0.5)' }} />
- <div>
- <div style={statusLabelStyle}>{label}</div>
- <div style={{ ...statusValueStyle, color: ok ? '#166534' : '#991b1b' }} className="dashboard-status-value">{ok ? okText : failText}</div>
- </div>
- </div>
- );
-}
-
-function StatusEmoji({ emoji, label, value, valueColor, mono, title }) {
- return (
- <div style={statusItemStyle} className="dashboard-status-item" title={title}>
- <div style={statusEmojiStyle}>{emoji}</div>
- <div>
- <div style={statusLabelStyle}>{label}</div>
- <div style={{ ...statusValueStyle, color: valueColor || '#0f172a', fontFamily: mono ? 'monospace' : undefined, fontSize: mono ? '16px' : undefined, letterSpacing: mono ? '0.05em' : undefined }} className="dashboard-status-value">{value}</div>
- </div>
- </div>
- );
-}
-
-function ModelCard({ item }) {
-  const percent = Math.min(item.percent, 100);
-  const isHigh = percent > 90;
-  const isMedium = percent > 70;
-  const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : '#6366f1';
-
-  return (
-    <div style={cardStyle} className="dashboard-card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
-        <h3 style={cardModelNameStyle}>{item.model}</h3>
-        <span style={cardUsageStyle}>
-          {item.used.toLocaleString()} <span style={{ color: '#94a3b8' }}>/ {item.limit.toLocaleString()}</span>
-        </span>
-      </div>
-      <div style={progressTrackStyle}>
-        <div style={{ ...progressFillStyle, width: `${percent}%`, background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : '#818cf8'})` }} />
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', marginBottom: '14px' }}>
-        <span style={{ fontSize: '13px', fontWeight: '600', color: barColor }}>{percent.toFixed(1)}%</span>
-        <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-          {item.limit - item.used > 0 ? `剩余 ${(item.limit - item.used).toLocaleString()}` : '配额已耗尽'}
-        </span>
-      </div>
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        <Tag label="延迟" value={item.avgLatency != null ? `${item.avgLatency}ms` : '暂无'} color={item.avgLatency != null && item.avgLatency > 3000 ? '#dc2626' : item.avgLatency != null && item.avgLatency > 1500 ? '#d97706' : '#059669'} />
-        <Tag label="错误率" value={item.errorRate != null ? `${item.errorRate}%` : '0%'} color={(item.errorRate || 0) > 5 ? '#dc2626' : (item.errorRate || 0) > 1 ? '#d97706' : '#059669'} />
       </div>
     </div>
   );
 }
-
-function Tag({ label, value, color }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontFamily: 'monospace', backgroundColor: `${color}11`, color, border: `1px solid ${color}33` }}>
-      <span style={{ opacity: 0.7 }}>{label}</span>
-      <span style={{ fontWeight: '600' }}>{value}</span>
-    </span>
-  );
-}
-
-function MiniStat({ label, value, color }) {
-  return (
-    <div style={{ flex: 1, padding: '12px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', textAlign: 'center' }}>
-      <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px', fontWeight: '500' }}>{label}</div>
-      <div style={{ fontSize: '18px', fontWeight: '700', color, fontFamily: 'monospace' }}>{value}</div>
-    </div>
-  );
-}
-
-function EmptyState({ emoji, text }) {
-  return (
-    <div style={emptyStateStyle}>
-      <span style={{ fontSize: '24px', marginBottom: '8px' }}>{emoji}</span>
-      <span style={{ color: '#94a3b8', fontWeight: '600' }}>{text}</span>
-    </div>
-  );
-}
-
-// ===================== Styles =====================
-
-const pageStyle = { backgroundColor: '#f1f5f9', minHeight: '100vh', padding: '32px 20px', fontFamily: 'Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif', color: '#1e293b' };
-const centerStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' };
-const spinnerStyle = { width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' };
-const headerStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' };
-const titleStyle = { fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.025em' };
-const subtitleStyle = { color: '#64748b', fontSize: '14px', marginTop: '4px', margin: 0 };
-const refreshBtnStyle = { width: '40px', height: '40px', borderRadius: '12px', border: '1px solid #e2e8f0', backgroundColor: 'white', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1', transition: 'all 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' };
-
-const statusBarStyle = { display: 'flex', alignItems: 'center', backgroundColor: 'white', borderRadius: '16px', padding: '20px 28px', marginBottom: '28px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', flexWrap: 'wrap' };
-const statusItemStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 20px' };
-const statusDotStyle = { width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0 };
-const statusEmojiStyle = { fontSize: '20px', flexShrink: 0 };
-const statusDividerStyle = { width: '1px', height: '36px', backgroundColor: '#e2e8f0', flexShrink: 0 };
-const statusLabelStyle = { fontSize: '12px', color: '#94a3b8', fontWeight: '500', letterSpacing: '0.05em' };
-const statusValueStyle = { fontSize: '18px', fontWeight: '700', color: '#0f172a' };
-
-const modelGridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '16px', marginBottom: '28px' };
-const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' };
-
-const cardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
-const cardModelNameStyle = { fontSize: '15px', fontWeight: '700', color: '#1e293b', margin: 0, fontFamily: 'monospace' };
-const cardUsageStyle = { fontSize: '16px', fontWeight: '700', color: '#6366f1' };
-const progressTrackStyle = { backgroundColor: '#f1f5f9', height: '8px', borderRadius: '4px', overflow: 'hidden' };
-const progressFillStyle = { height: '100%', borderRadius: '4px', transition: 'width 0.6s ease' };
-
-const sectionCardStyle = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' };
-const sectionHeaderStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' };
-const sectionTitleStyle = { fontSize: '18px', fontWeight: '700', color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center' };
-const peakBadge = { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: '20px', backgroundColor: '#eef2ff', color: '#6366f1', fontSize: '13px', fontWeight: '600', border: '1px solid #c7d2fe' };
-const badgeBase = { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: '600' };
-
-const errorCountBadge = { ...badgeBase, backgroundColor: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' };
-const errorListStyle = { display: 'flex', flexDirection: 'column', gap: '8px' };
-const errorRowStyle = { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9', fontFamily: 'monospace', fontSize: '13px' };
-const errorTimeStyle = { color: '#94a3b8', fontSize: '12px', minWidth: '70px' };
-const errorStatusBadgeStyle = { padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', minWidth: '40px', textAlign: 'center' };
-const errorModelStyle = { color: '#475569', fontWeight: '600', whiteSpace: 'nowrap' };
-const errorLatencyStyle = { color: '#94a3b8', fontSize: '12px', textAlign: 'right', minWidth: '60px' };
-
-const emptyStateStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', gap: '8px' };
-const footerStyle = { display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', paddingTop: '20px', borderTop: '1px solid #e2e8f0' };
-const footerLinkStyle = { color: '#6366f1', textDecoration: 'none', fontSize: '13px', fontWeight: '500' };
