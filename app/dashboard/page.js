@@ -626,34 +626,34 @@ function DashboardContent() {
       
       if (type === 'quota') {
         // 导出配额数据
-        const exportData = quota?.data?.map(d => ({
+        const quotaExport = quota?.data?.map(d => ({
           model: shortModel(d.model),
           used: d.used,
           limit: d.limit,
           percent: d.percent.toFixed(2) + '%',
           avgLatency: d.avgLatency ? `${d.avgLatency}ms` : 'N/A',
         })) || [];
-        exportToCSV(exportData, `配额数据_${timestamp}.csv`);
+        exportToCSV(quotaExport, `配额数据_${timestamp}.csv`);
       } else if (type === 'timeline') {
         // 导出时间线数据
-        const exportData = timeline?.timeline?.map(d => ({
+        const timelineExport = timeline?.timeline?.map(d => ({
           hour: d.label,
           requests: d.count,
         })) || [];
-        exportToCSV(exportData, `时间线_${timestamp}.csv`);
+        exportToCSV(timelineExport, `时间线_${timestamp}.csv`);
       } else if (type === 'errors') {
         // 导出错误日志
-        const exportData = errors?.errors?.slice(0, 100).map(e => ({
+        const errorExport = errors?.errors?.slice(0, 100).map(e => ({
           time: formatTime(e.ts),
           status: e.status,
           model: shortModel(e.model),
           message: e.message || '',
           latency: e.latency ? `${e.latency}ms` : 'N/A',
         })) || [];
-        exportToCSV(exportData, `错误日志_${timestamp}.csv`);
+        exportToCSV(errorExport, `错误日志_${timestamp}.csv`);
       } else if (type === 'all') {
         // 导出所有数据（JSON 格式）
-        const exportData = {
+        const allExport = {
           exportTime: new Date().toISOString(),
           quotaData: quota?.data?.map(d => ({
             model: shortModel(d.model),
@@ -669,7 +669,7 @@ function DashboardContent() {
           },
           clientStats: clients?.clients,
         };
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(allExport, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = `完整数据_${timestamp}.json`;
@@ -681,7 +681,7 @@ function DashboardContent() {
     } finally {
       setExporting(false);
     }
-  }, [quota, timeline, errors, clients]);
+  }, [quota, timeline, errors, clients, exportToCSV, shortModel, formatTime]);
 
   // 派生数据
   const modelDistribution = useMemo(() => {
