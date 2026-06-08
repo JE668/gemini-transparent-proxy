@@ -206,9 +206,17 @@ async function handleRequest(req) {
       } catch (e) {}
     }
     if (modelId === 'unknown') {
+      // 尝试从 URL 路径提取（如 /v1/models/gemma-4-31b-it）
       const modelMatch = targetUrl.match(/\/models\/([^/:]+)/);
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
+      } else {
+        // 尝试从 query string 提取（如 ?model=gemma-4-31b-it）
+        try {
+          const urlObj = new URL(targetUrl);
+          const queryModel = urlObj.searchParams.get('model');
+          if (queryModel) modelId = queryModel;
+        } catch {}
       }
     }
 
