@@ -121,9 +121,11 @@ async function handleRequest(req) {
  // 请求级日志 ID：8 位 hex，方便追踪单次请求全链路
  const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
  
- // 调试：记录请求详情
- console.log(`[${reqId}] ${req.method} ${req.url}`);
- console.log(`[${reqId}] Headers: ${JSON.stringify(Object.fromEntries(req.headers.entries()))}`);
+ // 提取客户端信息
+ const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() 
+               || req.headers.get('x-real-ip') 
+               || 'unknown';
+ const userAgent = req.headers.get('user-agent') || 'unknown';
  
  try {
     const url = new URL(req.url);
@@ -154,15 +156,13 @@ async function handleRequest(req) {
     if (!isOpenAICompat) {
     headers.delete('authorization');
     }
-    // 来源指纹（提前计算，限流也用）- 使用简单的字符串哈希，避免 crypto.subtle 异步问题
+    // 来源指纹（提前计算，限流也用）
     try {
-      // 简单哈希：取 API Key 的前 8 个字符作为指纹
-      // 虽然不够加密安全，但对于限流和统计足够了
-      clientFingerprint = apiKey.slice(0, 8).replace(/[^a-zA-Z0-9]/g, 'X');
-    } catch (e) {
-      console.error(`[Fingerprint Error] ${e}`);
-      clientFingerprint = 'anon';
-    }
+    const keyData = new TextEncoder().encode(apiKey);
+    const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
+    const hashArr = Array.from(new Uint8Array(hashBuf));
+    clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {}
     }
 
     // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
@@ -240,6 +240,12 @@ async function handleRequest(req) {
       redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
       redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
       redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
+      // 记录客户端详细信息（IP、UA、最后 seen 时间）
+      redis.hset(`client:info:${clientFingerprint}`, {
+        ip: clientIP,
+        ua: userAgent,
+        lastSeen: new Date().toISOString(),
+      }).then(() => redis.expire(`client:info:${clientFingerprint}`, TTL)),
     ];
 
     // 重试计数
@@ -257,6 +263,8 @@ async function handleRequest(req) {
     latency: latency,
     retries: retries,
     client: clientFingerprint,
+    ip: clientIP,
+    ua: userAgent,
     });
     telemetryOps.push(
     redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
@@ -279,6 +287,8 @@ async function handleRequest(req) {
     model: finalModelId,
     status: response.status,
     latency: latency,
+    ip: clientIP,
+    ua: userAgent,
     });
     telemetryOps.push(
     redis.lpush(`errors:${date}`, errorEntry).then(() => redis.ltrim(`errors:${date}`, 0, 99)).then(() => redis.expire(`errors:${date}`, TTL))

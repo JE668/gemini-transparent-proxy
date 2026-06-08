@@ -1707,83 +1707,75 @@ function DashboardContent() {
         </div>
 
         {/* ====== Cherry 集群状态 ====== */}
-                {cherry && (
-                  <div style={{ borderRadius: '16px', padding: '20px', ...theme.card, marginBottom: '20px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                      <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        🍒 {cherry.mode === 'single-node' ? '运行节点' : 'Cherry 集群'}
-                      </h2>
-                      <span style={{
-                        fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
-                        backgroundColor: cherry.status === 'healthy' ? '#22c55e18' : '#ef444418',
-                        color: cherry.status === 'healthy' ? '#22c55e' : '#ef4444',
-                        border: `1px solid ${cherry.status === 'healthy' ? '#22c55e30' : '#ef444430'}`,
-                        fontWeight: '600'
-                      }}>
-                        {cherry.status === 'healthy' ? '运行正常' : '状态异常'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
-                      </span>
-                    </div>
+        {cherry && (
+          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card, marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🍒 Cherry 集群状态
+              </h2>
+              <span style={{
+                fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                backgroundColor: cherry.status === 'healthy' ? '#22c55e18' : '#ef444418',
+                color: cherry.status === 'healthy' ? '#22c55e' : '#ef4444',
+                border: `1px solid ${cherry.status === 'healthy' ? '#22c55e30' : '#ef444430'}`,
+                fontWeight: '600'
+              }}>
+                {cherry.status === 'healthy' ? '集群健康' : '集群异常'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
+              </span>
+            </div>
             
-                    {/* 节点列表 */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
-                      {cherry.nodes?.map((node, i) => (
-                        <div key={node.id} style={{
-                          padding: '14px', borderRadius: '10px',
-                          backgroundColor: theme.bar.bg,
-                          border: `1px solid ${node.status === 'online' ? '#22c55e30' : '#ef444430'}`
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                            <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>
-                              <span style={{ marginRight: '6px' }}>{node.platform === 'Vercel Edge' ? '⚡' : '🍒'}</span>
-                              {node.name}
-                            </span>
-                            <span style={{
-                              fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
-                              backgroundColor: node.status === 'online' ? '#22c55e18' : '#ef444418',
-                              color: node.status === 'online' ? '#22c55e' : '#ef4444',
-                              fontWeight: '600'
-                            }}>{node.status}</span>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
-                            <span>延迟：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.latency}ms</span></span>
-                            <span>请求：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.requests.toLocaleString()}</span></span>
-                          </div>
-                          {node.region && (
-                            <div style={{ marginTop: '8px', fontSize: '11px', color: theme.text.muted }}>
-                              区域：<span style={{ color: theme.text.main }}>{node.region}</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-            
-                    {/* 负载均衡信息（仅多节点模式显示） */}
-                    {cherry.loadBalance && (
-                      <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
-                        <div style={{ fontSize: '12px', color: theme.text.muted, marginBottom: '8px' }}>
-                          负载均衡：{cherry.loadBalance.algorithm} · 流量分布
-                        </div>
-                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                          {cherry.loadBalance.distribution?.map((pct, i) => (
-                            <div key={i} style={{ flex: 1 }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>
-                                <span>Node {i + 1}</span>
-                                <span style={{ color: theme.text.main, fontWeight: '600' }}>{pct}%</span>
-                              </div>
-                              <div style={{ height: '6px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
-                                <div style={{
-                                  width: `${pct}%`,
-                                  height: '100%',
-                                  background: i === 0 ? 'linear-gradient(90deg, #6366f1, #8b5cf6)' : i === 1 ? 'linear-gradient(90deg, #22c55e, #10b981)' : 'linear-gradient(90deg, #f59e0b, #ef4444)'
-                                }} />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+            {/* 节点列表 */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+              {cherry.nodes?.map((node, i) => (
+                <div key={node.id} style={{
+                  padding: '14px', borderRadius: '10px',
+                  backgroundColor: theme.bar.bg,
+                  border: `1px solid ${node.status === 'online' ? '#22c55e30' : '#ef444430'}`
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.name}</span>
+                    <span style={{
+                      fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+                      backgroundColor: node.status === 'online' ? '#22c55e18' : '#ef444418',
+                      color: node.status === 'online' ? '#22c55e' : '#ef4444',
+                      fontWeight: '600'
+                    }}>{node.status}</span>
                   </div>
-                )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
+                    <span>延迟：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.latency}ms</span></span>
+                    <span>请求：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.requests.toLocaleString()}</span></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            {/* 负载均衡信息 */}
+            {cherry.loadBalance && (
+              <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
+                <div style={{ fontSize: '12px', color: theme.text.muted, marginBottom: '8px' }}>
+                  负载均衡：{cherry.loadBalance.algorithm} · 流量分布
+                </div>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  {cherry.loadBalance.distribution?.map(( pct, i) => (
+                    <div key={i} style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>
+                        <span>Node {i + 1}</span>
+                        <span style={{ color: theme.text.main, fontWeight: '600' }}>{pct}%</span>
+                      </div>
+                      <div style={{ height: '6px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          background: i === 0 ? 'linear-gradient(90deg, #6366f1, #8b5cf6)' : i === 1 ? 'linear-gradient(90deg, #22c55e, #10b981)' : 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                        }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ====== Footer ====== */}
         <footer style={{

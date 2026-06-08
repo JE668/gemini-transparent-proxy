@@ -1,52 +1,51 @@
-// app/api/cherry/route.js
-// Cherry 集群状态监控 — 单节点模式
-// 显示当前 Vercel Edge Function 的运行状态
-import getRedis from '../../../lib/redis';
-import { getQuotaDate } from '../../../lib/utils';
+import { NextResponse } from 'next/server';
+
+// Cherry 集群状态监控
+// 返回各节点的健康状态、延迟、请求数
 
 export async function GET() {
   try {
-    const redis = getRedis();
-    const date = getQuotaDate();
-    
-    // 从 Redis 读取今天的运行数据
-    const [totalRequests, latencyData, heartbeat] = await Promise.all([
-      redis.get(`quota:global:${date}`) || 0,
-      redis.get(`avgLatency:${date}:global`),
-      redis.get('proxy:heartbeat') || 0,
-    ]);
-    
-    // 解析平均延迟 (格式："count:avg")
-    let avgLatency = 0;
-    if (latencyData && typeof latencyData === 'string') {
-      avgLatency = parseInt(latencyData.split(':')[1]) || 0;
-    }
-    
-    // 单节点模式：Vercel Edge Function
-    const node = {
-      id: 'vercel-edge-1',
-      name: 'Vercel Edge Function',
-      status: heartbeat > 0 ? 'online' : 'unknown',
-      latency: avgLatency,
-      requests: parseInt(totalRequests) || 0,
-      lastSeen: new Date().toISOString(),
-      region: process.env.VERCEL_REGION || 'global',
-      platform: 'Vercel Edge',
-    };
-    
+    // 临时模拟数据（后续可接入真实的 Cherry 集群监控）
     const cluster = {
-      mode: 'single-node',
-      status: node.status === 'online' ? 'healthy' : 'unknown',
-      totalNodes: 1,
-      onlineNodes: node.status === 'online' ? 1 : 0,
-      nodes: [node],
-      loadBalance: null, // 单节点无需负载均衡
+      status: 'healthy',
+      totalNodes: 3,
+      onlineNodes: 3,
+      nodes: [
+        {
+          id: 'cherry-1',
+          name: 'Cherry Node 1',
+          status: 'online',
+          latency: 45,
+          requests: 1234,
+          lastSeen: new Date().toISOString(),
+        },
+        {
+          id: 'cherry-2',
+          name: 'Cherry Node 2',
+          status: 'online',
+          latency: 52,
+          requests: 987,
+          lastSeen: new Date().toISOString(),
+        },
+        {
+          id: 'cherry-3',
+          name: 'Cherry Node 3',
+          status: 'online',
+          latency: 38,
+          requests: 1456,
+          lastSeen: new Date().toISOString(),
+        },
+      ],
+      loadBalance: {
+        algorithm: 'round-robin',
+        distribution: [33, 32, 35], // 百分比
+      },
     };
 
-    return Response.json(cluster);
+    return NextResponse.json(cluster);
   } catch (error) {
     console.error('Cherry cluster status error:', error);
-    return Response.json(
+    return NextResponse.json(
       { error: 'Failed to fetch cluster status' },
       { status: 500 }
     );
