@@ -120,6 +120,11 @@ async function handleRequest(req) {
  const startTime = Date.now();
  // 请求级日志 ID：8 位 hex，方便追踪单次请求全链路
  const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
+ 
+ // 调试：记录请求详情
+ console.log(`[${reqId}] ${req.method} ${req.url}`);
+ console.log(`[${reqId}] Headers: ${JSON.stringify(Object.fromEntries(req.headers.entries()))}`);
+ 
  try {
     const url = new URL(req.url);
     const { pathname, search } = url;
