@@ -11,6 +11,10 @@ const redis = new Redis({
 export async function GET() {
   try {
     const date = getQuotaDate();
+    const now = new Date();
+    const currentHour = (now.getUTCHours() + 8) % 24; // 北京时间小时
+    const hoursElapsed = currentHour + 1; // 从 0 点到现在经过的小时数
+    
     const pipeline = redis.pipeline();
 
     // 1. Global Quota & Status
@@ -18,6 +22,9 @@ export async function GET() {
     pipeline.get(`status:${date}:200`);
     pipeline.get(`status:${date}:500`);
     pipeline.get(`status:${date}:502`);
+    pipeline.get(`status:${date}:400`);
+    pipeline.get(`status:${date}:401`);
+    pipeline.get(`status:${date}:429`);
     pipeline.get(`retries:${date}`);
 
     // 2. Per-Model Quota & Latency
@@ -35,10 +42,7 @@ export async function GET() {
     pipeline.lrange(`recent:${date}`, 0, 29);
     // 5. Error Stream (Maintain 100 depth)
     pipeline.lrange(`errors:${date}`, 0, 99);
-    // 6. Error Count
-    pipeline.get(`status:${date}:500`);
-    pipeline.get(`status:${date}:502`);
-
+    
     // 7. Client Keys
     pipeline.smembers(`clients:${date}:keys`);
 
@@ -49,25 +53,40 @@ export async function GET() {
     const s200 = results[idx++] || 0;
     const s500 = results[idx++] || 0;
     const s502 = results[idx++] || 0;
+    const s400 = results[idx++] || 0;
+    const s401 = results[idx++] || 0;
+    const s429 = results[idx++] || 0;
     const totalRetries = results[idx++] || 0;
 
     const quotaData = [];
-    for (const model of HIGH_QUOTA_MODELS) {
-      const used = results[idx++] || 0;
-      const latencies = results[idx++] || [];
-      const limit = model.limit || 1000;
-      const avgLatency = latencies.length > 0
-        ? Math.round(latencies.reduce((a, b) => a + parseInt(b), 0) / latencies.length)
-        : null;
-
-      quotaData.push({
-        model: model.id,
-        limit: limit,
-        used: parseInt(used),
-        percent: parseFloat(((used / limit) * 100).toFixed(2)),
-        avgLatency,
-      });
-    }
+        for (const model of HIGH_QUOTA_MODELS) {
+          const used = results[idx++] || 0;
+          const latencies = results[idx++] || [];
+          const limit = model.limit || 1000;
+          const avgLatency = latencies.length > 0
+            ? Math.round(latencies.reduce((a, b) => a + parseInt(b), 0) / latencies.length)
+            : null;
+      
+          // 单个模型的配额预测
+          const modelHourlyRate = parseInt(used) / hoursElapsed;
+          const modelRemaining = limit - parseInt(used);
+          const modelHoursUntil = modelHourlyRate > 0 ? modelRemaining / modelHourlyRate : Infinity;
+          const modelMinutesUntil = modelHoursUntil * 60;
+      
+          quotaData.push({
+            model: model.id,
+            limit: limit,
+            used: parseInt(used),
+            percent: parseFloat(((used / limit) * 100).toFixed(2)),
+            avgLatency,
+            prediction: {
+              exhausted: modelRemaining <= 0,
+              minutes: modelRemaining <= 0 ? 0 : Math.round(modelMinutesUntil),
+              rate: Math.round(modelHourlyRate),
+              remaining: Math.max(0, modelRemaining),
+            },
+          });
+        }
 
     const timeline = [];
     for (let h = 0; h < 24; h++) {
@@ -83,10 +102,13 @@ export async function GET() {
 
     const errorsRaw = results[idx++] || [];
     const errors = errorsRaw.map(entry => (typeof entry === 'string' ? JSON.parse(entry) : entry)).filter(Boolean);
-
-    const e500 = results[idx++] || 0;
-    const e502 = results[idx++] || 0;
-    const totalErrorCount = parseInt(e500) + parseInt(e502);
+    
+    // 错误分类统计
+    const errorBreakdown = {
+      client4xx: (parseInt(s400) || 0) + (parseInt(s401) || 0) + (parseInt(s429) || 0),
+      server5xx: (parseInt(s500) || 0) + (parseInt(s502) || 0),
+      timeout: errors.filter(e => e.status === 504 || (e.message && e.message.includes('timeout'))).length,
+    };
 
     const clientKeys = results[idx++] || [];
 
@@ -111,6 +133,22 @@ export async function GET() {
     const totalStatus = parseInt(s200) + parseInt(s500) + parseInt(s502);
     const totalErrors = parseInt(s500) + parseInt(s502);
     const globalErrorRate = totalStatus > 0 ? parseFloat(((totalErrors / totalStatus) * 100).toFixed(2)) : 0;
+    const totalErrorCount = parseInt(s500) + parseInt(s502);
+    
+    // 配额预测：基于当前使用速率预测耗尽时间
+    const globalLimit = HIGH_QUOTA_MODELS.reduce((sum, m) => sum + (m.limit || 1000), 0); // 简单求和作为参考
+    const hourlyRate = globalUsed / hoursElapsed;
+    const remaining = globalLimit - globalUsed;
+    const hoursUntilExhaustion = hourlyRate > 0 ? remaining / hourlyRate : Infinity;
+    const minutesUntilExhaustion = hoursUntilExhaustion * 60;
+    
+    const quotaPrediction = {
+      exhausted: remaining <= 0,
+      minutes: remaining <= 0 ? 0 : Math.round(minutesUntilExhaustion),
+      rate: Math.round(hourlyRate),
+      remaining: Math.max(0, remaining),
+      hoursElapsed,
+    };
 
     return Response.json({
       date,
@@ -118,6 +156,8 @@ export async function GET() {
       globalErrorRate,
       totalRetries: parseInt(totalRetries),
       totalErrorCount,
+      errorBreakdown,
+      quotaPrediction,
       quota: {
         data: quotaData,
       },

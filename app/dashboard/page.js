@@ -1432,27 +1432,27 @@ function DashboardContent() {
                   </div>
                   
                   {/* 配额预测 */}
-                  {quotaPredictions[item.model] && !quotaPredictions[item.model].exhausted && (
+                  {item.prediction && !item.prediction.exhausted && (
                     <div style={{
                       marginTop: '8px',
                       padding: '6px 10px',
                       borderRadius: '6px',
-                      backgroundColor: quotaPredictions[item.model].minutes < 120 
+                      backgroundColor: item.prediction.minutes < 120 
                         ? 'rgba(239,68,68,0.1)' 
-                        : quotaPredictions[item.model].minutes < 240
+                        : item.prediction.minutes < 240
                           ? 'rgba(245,158,11,0.1)'
                           : 'rgba(34,197,94,0.1)',
                       border: `1px solid ${
-                        quotaPredictions[item.model].minutes < 120 
+                        item.prediction.minutes < 120 
                           ? 'rgba(239,68,68,0.3)' 
-                          : quotaPredictions[item.model].minutes < 240
+                          : item.prediction.minutes < 240
                             ? 'rgba(245,158,11,0.3)'
                             : 'rgba(34,197,94,0.3)'
                       }`,
                       fontSize: '11px',
-                      color: quotaPredictions[item.model].minutes < 120 
+                      color: item.prediction.minutes < 120 
                         ? '#ef4444' 
-                        : quotaPredictions[item.model].minutes < 240
+                        : item.prediction.minutes < 240
                           ? '#f59e0b'
                           : '#22c55e',
                       display: 'flex',
@@ -1461,10 +1461,10 @@ function DashboardContent() {
                     }}>
                       <span>🔮</span>
                       <span style={{ fontWeight: '600' }}>预计耗尽:</span>
-                      <span>{quotaPredictions[item.model].formatted}</span>
+                      <span>{formatDuration(item.prediction.minutes)}</span>
                     </div>
                   )}
-                  {quotaPredictions[item.model]?.exhausted && (
+                  {item.prediction?.exhausted && (
                     <div style={{
                       marginTop: '8px',
                       padding: '6px 10px',
@@ -1592,13 +1592,29 @@ function DashboardContent() {
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🚨 错误日志
               </h2>
-              {errorCount > 0 && (
-                <span style={{
-                  fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
-                  backgroundColor: '#ef444418', color: '#ef4444',
-                  border: '1px solid #ef444430', fontWeight: '600'
-                }}>今日 {errorCount} 条</span>
-              )}
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {errors?.errorBreakdown && (
+                  <>
+                    <span style={{
+                      fontSize: '10px', padding: '2px 8px', borderRadius: '12px',
+                      backgroundColor: '#f59e0b18', color: '#f59e0b',
+                      border: '1px solid #f59e0b40', fontWeight: '600'
+                    }}>客户端 {errors.errorBreakdown.client4xx || 0}</span>
+                    <span style={{
+                      fontSize: '10px', padding: '2px 8px', borderRadius: '12px',
+                      backgroundColor: '#ef444418', color: '#ef4444',
+                      border: '1px solid #ef444440', fontWeight: '600'
+                    }}>服务端 {errors.errorBreakdown.server5xx || 0}</span>
+                  </>
+                )}
+                {errorCount > 0 && (
+                  <span style={{
+                    fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                    backgroundColor: '#ef444418', color: '#ef4444',
+                    border: '1px solid #ef444430', fontWeight: '600'
+                  }}>共 {errorCount} 条</span>
+                )}
+              </div>
             </div>
             <div style={{ maxHeight: '280px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
               {errors?.errors?.length > 0
