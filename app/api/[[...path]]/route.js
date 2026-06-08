@@ -2,7 +2,7 @@
 // Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
-import redis from '../../../lib/redis';
+import { getRedis } from '../../../lib/redis';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -165,9 +165,12 @@ async function handleRequest(req) {
     } catch {}
     }
 
+    // 获取 Redis 实例（如果环境变量缺失则返回 null）
+    const redis = getRedis();
+
     // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
     const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '10', 10);
-    if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon') {
+    if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon' && redis) {
     const now = Math.floor(Date.now() / 1000);
     const windowKey = `ratelimit:${clientFingerprint}:${now}`;
     const count = await redis.incr(windowKey);
@@ -228,9 +231,9 @@ async function handleRequest(req) {
   // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
   const TTL = 48 * 60 * 60; // 48 小时（秒）
 
-    // 将遥测写入从 pipeline 改为 Promise.all 单独写入
-    // Upstash Redis 的 auto-pipelining 会自动合并这些请求
-    const telemetryOps = [
+  // 将遥测写入从 pipeline 改为 Promise.all 单独写入
+  // Upstash Redis 的 auto-pipelining 会自动合并这些请求
+  const telemetryOps = redis ? [
       redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
       redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
       redis.incr('proxy:heartbeat'),
@@ -246,11 +249,11 @@ async function handleRequest(req) {
         ua: userAgent,
         lastSeen: new Date().toISOString(),
       }).then(() => redis.expire(`client:info:${clientFingerprint}`, TTL)),
-    ];
+    ] : [];
 
     // 重试计数
     const retries = response._retries || 0;
-    if (retries > 0) {
+    if (retries > 0 && redis) {
     telemetryOps.push(redis.incr(`retries:${date}`).then(() => redis.expire(`retries:${date}`, TTL)));
     }
 
@@ -266,12 +269,14 @@ async function handleRequest(req) {
     ip: clientIP,
     ua: userAgent,
     });
+    if (redis) {
     telemetryOps.push(
     redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
     );
+    }
     
     // 慢请求追踪：延迟 >3000ms 的记录到 sorted set
-    if (latency > 3000) {
+    if (latency > 3000 && redis) {
     telemetryOps.push(
     redis.zadd(`slow:${date}`, latency, recentEntry)
     .then(() => redis.zremrangebyrank(`slow:${date}`, 0, -11)) // 只保留 Top 10
@@ -280,7 +285,7 @@ async function handleRequest(req) {
     }
 
     // 错误日志：4xx/5xx 写入 Redis List
-    if (response.status >= 400) {
+    if (response.status >= 400 && redis) {
     const errorEntry = JSON.stringify({
     ts: new Date().toISOString(),
     reqId,
@@ -296,6 +301,7 @@ async function handleRequest(req) {
     }
 
     // 增量更新平均延迟
+    if (redis) {
     (async () => {
     try {
     const existing = await redis.get(`avgLatency:${date}:${finalModelId}`);
@@ -314,6 +320,7 @@ async function handleRequest(req) {
     console.error(`[AvgLatency Error] ${e}`);
     }
     })();
+    }
 
  // 在所有 return 路径之前等待遥测写入完成
  // Edge Function 在 return Response 后可能被立即冻结，所以不能 fire-and-forget
