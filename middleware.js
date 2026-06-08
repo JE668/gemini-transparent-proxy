@@ -11,6 +11,8 @@ const PUBLIC_PREFIXES = [
   '/v1/',
   '/api/chat',
   '/api/completions',
+  '/v1/chat',
+  '/v1/completions',
 ];
 
 // 需要认证的 API 路由前缀（不含 /dashboard 页面本身）
