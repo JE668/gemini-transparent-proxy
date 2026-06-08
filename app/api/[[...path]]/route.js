@@ -240,13 +240,19 @@ async function handleRequest(req) {
       redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
       redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
       redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
-      // 记录客户端详细信息（IP、UA、最后 seen 时间）
-      redis.hset(`client:info:${clientFingerprint}`, {
-        ip: clientIP,
-        ua: userAgent,
-        lastSeen: new Date().toISOString(),
-      }).then(() => redis.expire(`client:info:${clientFingerprint}`, TTL)),
     ];
+    
+    // 记录客户端详细信息（IP、UA、最后 seen 时间）- 异步写入，不影响主流程
+    (async () => {
+      try {
+        await redis.hset(`client:info:${clientFingerprint}`, 'ip', clientIP);
+        await redis.hset(`client:info:${clientFingerprint}`, 'ua', userAgent);
+        await redis.hset(`client:info:${clientFingerprint}`, 'lastSeen', new Date().toISOString());
+        await redis.expire(`client:info:${clientFingerprint}`, TTL);
+      } catch (e) {
+        console.error(`[ClientInfo Error] ${e}`);
+      }
+    })();
 
     // 重试计数
     const retries = response._retries || 0;
