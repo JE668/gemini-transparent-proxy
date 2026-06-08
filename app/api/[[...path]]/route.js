@@ -120,13 +120,6 @@ async function handleRequest(req) {
  const startTime = Date.now();
  // 请求级日志 ID：8 位 hex，方便追踪单次请求全链路
  const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
- 
- // 提取客户端信息
- const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() 
-               || req.headers.get('x-real-ip') 
-               || 'unknown';
- const userAgent = req.headers.get('user-agent') || 'unknown';
- 
  try {
     const url = new URL(req.url);
     const { pathname, search } = url;
@@ -241,18 +234,6 @@ async function handleRequest(req) {
       redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
       redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
     ];
-    
-    // 记录客户端详细信息（IP、UA、最后 seen 时间）- 异步写入，不影响主流程
-    (async () => {
-      try {
-        await redis.hset(`client:info:${clientFingerprint}`, 'ip', clientIP);
-        await redis.hset(`client:info:${clientFingerprint}`, 'ua', userAgent);
-        await redis.hset(`client:info:${clientFingerprint}`, 'lastSeen', new Date().toISOString());
-        await redis.expire(`client:info:${clientFingerprint}`, TTL);
-      } catch (e) {
-        console.error(`[ClientInfo Error] ${e}`);
-      }
-    })();
 
     // 重试计数
     const retries = response._retries || 0;
@@ -269,8 +250,6 @@ async function handleRequest(req) {
     latency: latency,
     retries: retries,
     client: clientFingerprint,
-    ip: clientIP,
-    ua: userAgent,
     });
     telemetryOps.push(
     redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
@@ -293,8 +272,6 @@ async function handleRequest(req) {
     model: finalModelId,
     status: response.status,
     latency: latency,
-    ip: clientIP,
-    ua: userAgent,
     });
     telemetryOps.push(
     redis.lpush(`errors:${date}`, errorEntry).then(() => redis.ltrim(`errors:${date}`, 0, 99)).then(() => redis.expire(`errors:${date}`, TTL))
