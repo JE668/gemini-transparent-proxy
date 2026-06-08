@@ -154,13 +154,15 @@ async function handleRequest(req) {
     if (!isOpenAICompat) {
     headers.delete('authorization');
     }
-    // 来源指纹（提前计算，限流也用）
+    // 来源指纹（提前计算，限流也用）- 使用简单的字符串哈希，避免 crypto.subtle 异步问题
     try {
-    const keyData = new TextEncoder().encode(apiKey);
-    const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
-    const hashArr = Array.from(new Uint8Array(hashBuf));
-    clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch {}
+      // 简单哈希：取 API Key 的前 8 个字符作为指纹
+      // 虽然不够加密安全，但对于限流和统计足够了
+      clientFingerprint = apiKey.slice(0, 8).replace(/[^a-zA-Z0-9]/g, 'X');
+    } catch (e) {
+      console.error(`[Fingerprint Error] ${e}`);
+      clientFingerprint = 'anon';
+    }
     }
 
     // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
