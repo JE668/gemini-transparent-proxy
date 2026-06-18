@@ -40,6 +40,7 @@ function sanitizeOpenAIBody(body) {
     // 1. 删除 OpenAI 特有、Google API 不认识的字段
     delete json.reasoning_effort;
     delete json.reasoning;
+    delete json.include_reasoning;
     delete json.frequency_penalty;
     delete json.logit_bias;
     delete json.seed;
