@@ -32,6 +32,21 @@ function cleanHeaders(headers) {
   return clean;
 }
 
+// Google API 不支持 OpenAI 的 reasoning_effort 参数，转发前清理掉
+function sanitizeOpenAIBody(body) {
+  if (!body) return body;
+  try {
+    const json = JSON.parse(body);
+    // reasoning_effort 和 reasoning 字段只对 OpenAI 有意义，对 Google API 是无效参数
+    delete json.reasoning_effort;
+    delete json.reasoning;
+    return JSON.stringify(json);
+  } catch (e) {
+    // 非 JSON body 直接透传
+    return body;
+  }
+}
+
 function buildTargetUrl(pathname, search) {
   const rules = [
     { prefix: '/api/v1/', replacement: '/v1beta/openai/' },
@@ -220,10 +235,13 @@ async function handleRequest(req) {
       }
     }
 
+    // OpenAI 兼容路径下过滤 reasoning_effort，避免 Google API 报 400
+    const sanitizedBody = isOpenAICompat ? sanitizeOpenAIBody(body) : body;
+
     const response = await fetchWithRetry(targetUrl, {
       method: req.method,
       headers: headers,
-      body: body,
+      body: sanitizedBody,
       cache: 'no-store',
     });
 
