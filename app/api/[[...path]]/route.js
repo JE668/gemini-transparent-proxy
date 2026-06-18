@@ -32,26 +32,38 @@ function cleanHeaders(headers) {
   return clean;
 }
 
+// Google Gemini OpenAI-compatible API 支持的字段白名单
+const GOOGLE_OPENAI_ALLOWED = new Set([
+  'model',
+  'messages',
+  'contents',
+  'system_instruction',
+  'max_tokens',
+  'temperature',
+  'top_p',
+  'top_k',
+  'stream',
+  'stop',
+  'candidate_count',
+  'safety_settings',
+  'tools',
+  'tool_choice',
+  'response_mime_type',
+  'response_schema',
+]);
+
 // Google API 不支持 OpenAI 的某些参数，转发前清理掉
 function sanitizeOpenAIBody(body) {
   if (!body) return body;
   try {
     const json = JSON.parse(body);
-    // 1. 删除 OpenAI 特有、Google API 不认识的字段
-    delete json.reasoning_effort;
-    delete json.reasoning;
-    delete json.include_reasoning;
-    delete json.frequency_penalty;
-    delete json.logit_bias;
-    delete json.seed;
-    delete json.logprobs;
-    delete json.top_logprobs;
-    delete json.presence_penalty;
-    // 2. 删除值为 null 的字段（Google API 不接受 null 值）
+    const cleaned = {};
     for (const key in json) {
-      if (json[key] === null) delete json[key];
+      if (GOOGLE_OPENAI_ALLOWED.has(key) && json[key] !== null) {
+        cleaned[key] = json[key];
+      }
     }
-    return JSON.stringify(json);
+    return JSON.stringify(cleaned);
   } catch (e) {
     // 非 JSON body 直接透传
     return body;
