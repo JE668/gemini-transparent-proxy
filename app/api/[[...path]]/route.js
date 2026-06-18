@@ -37,7 +37,7 @@ function sanitizeOpenAIBody(body) {
   if (!body) return body;
   try {
     const json = JSON.parse(body);
-    // OpenAI 特有、Google API 不认识的字段
+    // 1. 删除 OpenAI 特有、Google API 不认识的字段
     delete json.reasoning_effort;
     delete json.reasoning;
     delete json.frequency_penalty;
@@ -46,6 +46,10 @@ function sanitizeOpenAIBody(body) {
     delete json.logprobs;
     delete json.top_logprobs;
     delete json.presence_penalty;
+    // 2. 删除值为 null 的字段（Google API 不接受 null 值）
+    for (const key in json) {
+      if (json[key] === null) delete json[key];
+    }
     return JSON.stringify(json);
   } catch (e) {
     // 非 JSON body 直接透传
