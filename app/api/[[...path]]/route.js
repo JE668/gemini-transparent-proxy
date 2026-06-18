@@ -32,14 +32,20 @@ function cleanHeaders(headers) {
   return clean;
 }
 
-// Google API 不支持 OpenAI 的 reasoning_effort 参数，转发前清理掉
+// Google API 不支持 OpenAI 的某些参数，转发前清理掉
 function sanitizeOpenAIBody(body) {
   if (!body) return body;
   try {
     const json = JSON.parse(body);
-    // reasoning_effort 和 reasoning 字段只对 OpenAI 有意义，对 Google API 是无效参数
+    // OpenAI 特有、Google API 不认识的字段
     delete json.reasoning_effort;
     delete json.reasoning;
+    delete json.frequency_penalty;
+    delete json.logit_bias;
+    delete json.seed;
+    delete json.logprobs;
+    delete json.top_logprobs;
+    delete json.presence_penalty;
     return JSON.stringify(json);
   } catch (e) {
     // 非 JSON body 直接透传
