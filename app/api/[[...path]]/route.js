@@ -81,15 +81,10 @@ function buildTargetUrl(pathname, search) {
       break;
     }
   }
+  // 不过滤 query params — Google 会忽略不认识的参数
+  // 之前白名单太严导致 model 等字段被误杀，引发 400
   if (search) {
-    const params = new URLSearchParams(search);
-    const allowed = ['alt', 'prettyPrint', 'fields', 'quotaUser', 'userIp'];
-    const filtered = new URLSearchParams();
-    for (const [k, v] of params) {
-      if (allowed.includes(k)) filtered.set(k, v);
-    }
-    const filteredStr = filtered.toString();
-    return `${GOOGLE_API_BASE}${targetPath}${filteredStr ? '?' + filteredStr : ''}`;
+    return `${GOOGLE_API_BASE}${targetPath}${search}`;
   }
   return `${GOOGLE_API_BASE}${targetPath}`;
 }
@@ -190,12 +185,14 @@ async function handleRequest(req) {
     let apiKey = '';
     if (authHeader.startsWith('Bearer ')) {
     apiKey = authHeader.slice(7).trim();
-    const urlWithKey = new URL(targetUrl);
-    urlWithKey.searchParams.set('key', apiKey);
-    targetUrl = urlWithKey.toString();
     if (!isOpenAICompat) {
-    headers.delete('authorization');
+      // Google 原生 API：用 ?key= 传 API Key
+      const urlWithKey = new URL(targetUrl);
+      urlWithKey.searchParams.set('key', apiKey);
+      targetUrl = urlWithKey.toString();
+      headers.delete('authorization');
     }
+    // OpenAI 兼容路径：保留 Authorization 头，不拼接 ?key=，避免双重认证
     // 来源指纹（提前计算，限流也用）
     try {
     const keyData = new TextEncoder().encode(apiKey);
@@ -421,7 +418,20 @@ async function handleRequest(req) {
 
     // 非流式响应：fire-and-forget 遥测，不阻塞响应返回
     telemetryPromise;
-    return new Response(upstreamBody || null, {
+    let finalBody = upstreamBody || null;
+    // Google 有时对 4xx/5xx 返回空 body，客户端看到 "no body"
+    // 这种情况下补一个结构化错误体，方便客户端诊断
+    if (!finalBody && response.status >= 400) {
+      finalBody = JSON.stringify({
+        error: {
+          message: `Upstream returned HTTP ${response.status}`,
+          type: 'upstream_error',
+          code: response.status,
+          reqId
+        }
+      });
+    }
+    return new Response(finalBody, {
     status: response.status,
     statusText: response.statusText,
     headers: buildResponseHeaders(response, req, reqId),
