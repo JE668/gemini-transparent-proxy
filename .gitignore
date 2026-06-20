@@ -1,20 +1,6 @@
-# Next.js
-.next/
-node_modules/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+node_modules
+.next
 *.log
-npm-debug.log*
-
-# Environment
 .env
 .env.local
-.env.*.local
+**/.wrangler
