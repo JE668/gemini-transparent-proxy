@@ -462,7 +462,7 @@ async function handleRequest(req) {
 }
 
 export const runtime = 'nodejs';
-export const maxDuration = 60; // Hobby: 60s, Pro: 300s — 远超 Edge 的 25s
+export const maxDuration = 60; // Hobby 上限 60s，Pro 上限 300s
 export async function GET(req) { return handleRequest(req); }
 export async function POST(req) { return handleRequest(req); }
 export async function PUT(req) { return handleRequest(req); }
