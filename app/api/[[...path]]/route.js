@@ -32,28 +32,21 @@ function cleanHeaders(headers) {
   return clean;
 }
 
-// Google Gemini OpenAI-compatible API 支持的字段白名单
-// 额外收录客户端常用但 Google 不认识的字段 → 由 sanitizeOpenAIBody 过滤掉
-const GOOGLE_OPENAI_ALLOWED = new Set([
-  'model',
-  'messages',
-  'contents',
-  'system_instruction',
-  'max_tokens',
-  'max_completion_tokens',
-  'temperature',
-  'top_p',
-  'top_k',
-  'stream',
-  'stream_options',
-  'stop',
-  'candidate_count',
-  'safety_settings',
-  'tools',
-  'tool_choice',
-  'response_format',
-  'response_mime_type',
-  'response_schema',
+// Google Gemini OpenAI-compatible API 不支持的字段黑名单
+// 这些字段会被剥离后再转发给 Google API
+const GOOGLE_OPENAI_BLOCKED = new Set([
+  'stream_options',          // Google API 不认识
+  'reasoning_effort',        // OpenAI 推理强度
+  'frequency_penalty',       // Google 不支持
+  'presence_penalty',        // Google 不支持
+  'logit_bias',              // Google 不支持
+  'logprobs',                // Google 不支持
+  'top_logprobs',            // Google 不支持
+  'seed',                    // Google 不支持
+  'user',                    // Google 不支持
+  'service_tier',            // OpenAI 专用
+  'n',                       // Google 用 candidate_count 代替
+  'include_reasoning',       // 部分客户端会发
 ]);
 
 // Google API 不支持 OpenAI 的某些参数，转发前清理掉
@@ -63,7 +56,7 @@ function sanitizeOpenAIBody(body) {
     const json = JSON.parse(body);
     const cleaned = {};
     for (const key in json) {
-      if (GOOGLE_OPENAI_ALLOWED.has(key) && json[key] !== null) {
+      if (!GOOGLE_OPENAI_BLOCKED.has(key) && json[key] !== null) {
         cleaned[key] = json[key];
       }
     }
@@ -458,7 +451,8 @@ async function handleRequest(req) {
   }
 }
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
+export const maxDuration = 60; // Hobby: 60s, Pro: 300s — 远超 Edge 的 25s
 export async function GET(req) { return handleRequest(req); }
 export async function POST(req) { return handleRequest(req); }
 export async function PUT(req) { return handleRequest(req); }
