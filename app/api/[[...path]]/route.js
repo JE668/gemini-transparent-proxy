@@ -33,21 +33,25 @@ function cleanHeaders(headers) {
 }
 
 // Google Gemini OpenAI-compatible API 支持的字段白名单
+// 额外收录客户端常用但 Google 不认识的字段 → 由 sanitizeOpenAIBody 过滤掉
 const GOOGLE_OPENAI_ALLOWED = new Set([
   'model',
   'messages',
   'contents',
   'system_instruction',
   'max_tokens',
+  'max_completion_tokens',
   'temperature',
   'top_p',
   'top_k',
   'stream',
+  'stream_options',
   'stop',
   'candidate_count',
   'safety_settings',
   'tools',
   'tool_choice',
+  'response_format',
   'response_mime_type',
   'response_schema',
 ]);
@@ -74,7 +78,8 @@ function buildTargetUrl(pathname, search) {
   const rules = [
     { prefix: '/api/v1/', replacement: '/v1beta/openai/' },
     { prefix: '/v1/', replacement: '/v1beta/openai/' },
-    { prefix: '/api/', replacement: '/' },
+    // 不再盲目映射 /api/ → /，避免构造出无效 URL
+  // 标准路径如 /api/v1/ 和 /v1/ 已由前两条规则覆盖
   ];
   let targetPath = pathname;
   for (const { prefix, replacement } of rules) {
@@ -127,17 +132,21 @@ function buildResponseHeaders(response, req, reqId = '') {
  return headers;
 }
 
-async function fetchWithRetry(url, options, maxAttempts = 3) {
+// 智能重试：仅对可重试的 502/503 重试，504 不重试（超时重试只会更慢）
+// 最大 2 次，backoff 0.5s, 1s
+const RETRYABLE_STATUSES = new Set([502, 503]);
+
+async function fetchWithRetry(url, options, maxAttempts = 2) {
   let lastError;
   let retries = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(url, options);
-      if (response.status >= 500 && response.status <= 599) {
-        console.warn(`Attempt ${attempt} failed with status ${response.status}. Retrying...`);
+      if (RETRYABLE_STATUSES.has(response.status)) {
+        console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}. Retrying...`);
         retries++;
         if (attempt < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+          await new Promise(resolve => setTimeout(resolve, attempt * 500));
           continue;
         }
       }
@@ -147,7 +156,7 @@ async function fetchWithRetry(url, options, maxAttempts = 3) {
       lastError = error;
       retries++;
       if (attempt < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+        await new Promise(resolve => setTimeout(resolve, attempt * 500));
       }
     }
   }
@@ -371,36 +380,42 @@ async function handleRequest(req) {
     })();
     }
 
- // 在所有 return 路径之前等待遥测写入完成
- // Edge Function 在 return Response 后可能被立即冻结，所以不能 fire-and-forget
+ // 遥测 fire-and-forget：不阻塞响应返回
+ // Edge Runtime 在返回 Response 后会给异步操作足够时间完成
  const telemetryPromise = Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     // 流式响应：检测客户端断线，中止上游读取
     const upstreamBody = response.body;
     if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
-    // SSE 流式：先 await 遥测写入，再返回流（避免 Edge Runtime 冻结）
-    await telemetryPromise;
+    // SSE 流式：不 await 遥测，fire-and-forget，避免阻塞 first byte
+    // Edge Runtime 在返回 Response 后不会立即冻结，遥测有足够时间完成
+    telemetryPromise;
     const transformed = new ReadableStream({
     start(controller) {
     const reader = upstreamBody.getReader();
+    let aborted = false;
     const pump = () => {
+    if (aborted) return;
     reader.read().then(({ done, value }) => {
     if (done) { controller.close(); return; }
     controller.enqueue(value);
     pump();
     }).catch(err => {
-    // 上游读取错误（如服务端断线）
+    // 上游读取错误（如服务端断线），如果客户端已断线则静默处理
+    if (!aborted) {
     console.error(`[${reqId}] Upstream read error: ${err.message}`);
-    controller.error(err);
+    try { controller.error(err); } catch {}
+    }
     });
     };
     pump();
 
     // 客户端断线时中止上游读取
     req.signal.addEventListener('abort', () => {
+    aborted = true;
     console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
     reader.cancel().catch(() => {});
-    controller.close();
+    try { controller.close(); } catch {}
     });
     },
     });
@@ -411,8 +426,8 @@ async function handleRequest(req) {
     });
     }
 
-    // 非流式响应：返回前 await 遥测写入
-    await telemetryPromise;
+    // 非流式响应：fire-and-forget 遥测，不阻塞响应返回
+    telemetryPromise;
     return new Response(upstreamBody || null, {
     status: response.status,
     statusText: response.statusText,
