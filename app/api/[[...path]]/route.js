@@ -24,7 +24,12 @@ const BLOCKED_RESPONSE_HEADERS = [
 
 async function getRequestBody(req) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return undefined;
-  return await req.text();
+  try {
+    const text = await req.text();
+    return (text && text.trim() !== '') ? text : '{}';
+  } catch (e) {
+    return '{}';
+  }
 }
 
 function cleanHeaders(headers) {
@@ -132,7 +137,7 @@ const RETRYABLE_STATUSES = new Set([502, 503]);
 async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   let lastError;
   let retries = 0;
-  const TIMEOUT_THRESHOLD = 45000; // 45秒阈值，超过此时间不再重试，防止触发 Vercel 60s 504
+  const TIMEOUT_THRESHOLD = 25000; // 25秒阈值，确保重试后仍有足够时间，防止触发 Vercel 60s 504
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
