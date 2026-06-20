@@ -124,17 +124,24 @@ function getCorsHeaders() {
 const RETRYABLE = new Set([502, 503]);
 
 async function fetchWithRetry(url, options, maxAttempts = 2) {
+  const startTime = Date.now();
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(url, options);
       if (RETRYABLE.has(response.status) && attempt < maxAttempts) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed > 25000) {
+          console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}, but elapsed ${elapsed}ms > threshold. Skipping retry.`);
+          return response;
+        }
         console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}. Retrying...`);
         await new Promise((r) => setTimeout(r, attempt * 500));
         continue;
       }
       return response;
     } catch (error) {
-      if (attempt < maxAttempts) {
+      const elapsed = Date.now() - startTime;
+      if (attempt < maxAttempts && elapsed < 25000) {
         console.warn(`[FetchRetry] Attempt ${attempt} error: ${error.message}. Retrying...`);
         await new Promise((r) => setTimeout(r, attempt * 500));
         continue;
@@ -202,7 +209,12 @@ export default {
       const isOpenAI = targetUrl.includes('/v1beta/openai/');
 
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
-        body = await request.text();
+        try {
+          const text = await request.text();
+          body = (text && text.trim() !== '') ? text : '{}';
+        } catch (e) {
+          body = '{}';
+        }
         if (isOpenAI) {
           body = sanitizeOpenAIBody(body);
         }
