@@ -1,0 +1,40 @@
+app = "gemini-transparent-proxy"
+primary_region = "sin"  # 新加坡，国内访问延迟低
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false  # 不休眠
+  auto_start_machines = true
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 1000
+
+  [http_service.checks]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/health"
+
+[env]
+  PORT = "3000"
+  HOSTNAME = "0.0.0.0"
+
+[metrics]
+  port = 3000
+  path = "/metrics"
+
+[deploy]
+  strategy = "simple"
+
+[mounts]
+  source = "gemini_proxy_data"
+  destination = "/data"
+  auto_extend_size_threshold = 100
+  auto_extend_size_increment = "1GiB"
+  auto_extend_size_limit = "10GiB"
