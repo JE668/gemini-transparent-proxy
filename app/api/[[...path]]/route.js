@@ -1,6 +1,11 @@
 // app/api/[[...path]]/route.js
 // Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
+
+export const runtime = 'nodejs';
+export const maxDuration = 60; // Hobby 上限 60s，Pro 上限 300s
+
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
+
 import { getQuotaDate } from '../../../lib/utils';
 import { getRedis } from '../../../lib/redis';
 
@@ -124,13 +129,21 @@ function buildResponseHeaders(response, req, reqId = '') {
 // 最大 2 次，backoff 0.5s, 1s
 const RETRYABLE_STATUSES = new Set([502, 503]);
 
-async function fetchWithRetry(url, options, maxAttempts = 2) {
+async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   let lastError;
   let retries = 0;
+  const TIMEOUT_THRESHOLD = 45000; // 45秒阈值，超过此时间不再重试，防止触发 Vercel 60s 504
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(url, options);
       if (RETRYABLE_STATUSES.has(response.status)) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed > TIMEOUT_THRESHOLD) {
+          console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}, but elapsed ${elapsed}ms > threshold. Skipping retry to avoid 504.`);
+          response._retries = retries;
+          return response;
+        }
         console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}. Retrying...`);
         retries++;
         if (attempt < maxAttempts) {
@@ -143,8 +156,12 @@ async function fetchWithRetry(url, options, maxAttempts = 2) {
     } catch (error) {
       lastError = error;
       retries++;
-      if (attempt < maxAttempts) {
+      const elapsed = Date.now() - startTime;
+      if (attempt < maxAttempts && elapsed < TIMEOUT_THRESHOLD) {
         await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      } else if (elapsed >= TIMEOUT_THRESHOLD) {
+        console.warn(`[FetchRetry] Catch error ${error.message}, but elapsed ${elapsed}ms > threshold. Skipping retry.`);
+        break;
       }
     }
   }
@@ -265,7 +282,7 @@ async function handleRequest(req) {
       headers: headers,
       body: sanitizedBody,
       cache: 'no-store',
-    });
+    }, startTime);
 
     const latency = Date.now() - startTime;
     const date = getQuotaDate();
@@ -461,8 +478,6 @@ async function handleRequest(req) {
   }
 }
 
-export const runtime = 'nodejs';
-export const maxDuration = 60; // Hobby 上限 60s，Pro 上限 300s
 export async function GET(req) { return handleRequest(req); }
 export async function POST(req) { return handleRequest(req); }
 export async function PUT(req) { return handleRequest(req); }
