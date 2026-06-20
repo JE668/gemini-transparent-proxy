@@ -9,7 +9,11 @@
  *   cd cloudflare-worker && wrangler deploy
  *
  * 使用: https://gemini-proxy.你的子域名.workers.dev/v1/chat/completions
- * 或绑定自定义域名后保持 https://api.170909.xyz/v1/...
+ *
+ * QClaw 配置:
+ *   baseUrl: https://gemini-proxy.你的子域名.workers.dev
+ *   apiKey: 你的-Google-API-Key
+ *   api: openai-completions
  */
 
 // ============================================================
@@ -40,6 +44,14 @@ const HOP_BY_HOP = new Set([
 ]);
 
 // ============================================================
+// 响应头 blocklist — 不输出给客户端
+// ============================================================
+const RESPONSE_BLOCKED = new Set([
+  'content-encoding', 'transfer-encoding', 'connection',
+  'keep-alive', 'strict-transport-security',
+]);
+
+// ============================================================
 // 模型列表
 // ============================================================
 const MODELS = {
@@ -50,16 +62,12 @@ const MODELS = {
       object: 'model',
       created: 1743561600,
       owned_by: 'google',
-      limit: 1500,
-      description: 'Gemma 4 31B (Dense) — 1,500 req/day | 256K ctx ⭐ 主力',
     },
     {
       id: 'gemma-4-26b-a4b-it',
       object: 'model',
       created: 1743561600,
       owned_by: 'google',
-      limit: 1500,
-      description: 'Gemma 4 26B A4B (MoE) — 1,500 req/day | 256K ctx',
     },
   ],
 };
@@ -67,6 +75,14 @@ const MODELS = {
 // ============================================================
 // 工具函数
 // ============================================================
+
+/** 生成请求追踪 ID */
+function generateReqId() {
+  return (
+    Date.now().toString(16).slice(-6) +
+    Math.random().toString(16).slice(2, 6)
+  );
+}
 
 /** 过滤 OpenAI 独有参数，避免 Google API 报 400 */
 function sanitizeOpenAIBody(body) {
@@ -95,7 +111,6 @@ function buildTargetUrl(pathname, queryString) {
   } else if (pathname.startsWith('/v1/')) {
     targetPath = '/v1beta/openai/' + pathname.slice('/v1/'.length);
   }
-  // 注意: CF Workers 的 query string 包含 ? 前缀
   return `${GOOGLE_API_BASE}${targetPath}${queryString || ''}`;
 }
 
@@ -111,7 +126,7 @@ function cleanHeaders(requestHeaders) {
 }
 
 /** CORS 响应头 */
-function getCorsHeaders() {
+function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -120,35 +135,69 @@ function getCorsHeaders() {
   };
 }
 
+/** 构建输出响应头 */
+function buildResponseHeaders(response) {
+  const headers = new Headers();
+  for (const [key, value] of response.headers.entries()) {
+    if (!RESPONSE_BLOCKED.has(key.toLowerCase())) {
+      headers.set(key, value);
+    }
+  }
+  // 添加 CORS
+  const cors = corsHeaders();
+  for (const [k, v] of Object.entries(cors)) {
+    headers.set(k, v);
+  }
+  return headers;
+}
+
 /** 智能重试：仅对可重试的 502/503 重试，backoff 0.5s, 1s */
 const RETRYABLE = new Set([502, 503]);
+const RETRY_TIMEOUT = 25000; // 25s 阈值，防止重试耗尽总时间
 
-async function fetchWithRetry(url, options, maxAttempts = 2) {
-  const startTime = Date.now();
+async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
+  let lastError;
+  let retries = 0;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(url, options);
       if (RETRYABLE.has(response.status) && attempt < maxAttempts) {
         const elapsed = Date.now() - startTime;
-        if (elapsed > 25000) {
-          console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}, but elapsed ${elapsed}ms > threshold. Skipping retry.`);
+        if (elapsed > RETRY_TIMEOUT) {
+          console.warn(
+            `[Retry] Attempt ${attempt} got ${response.status}, ` +
+              `elapsed ${elapsed}ms > threshold. Skipping retry.`
+          );
+          response.retries = retries;
           return response;
         }
-        console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}. Retrying...`);
+        console.warn(`[Retry] Attempt ${attempt} got ${response.status}. Retrying...`);
+        retries++;
         await new Promise((r) => setTimeout(r, attempt * 500));
         continue;
       }
+      response.retries = retries;
       return response;
     } catch (error) {
+      lastError = error;
+      retries++;
       const elapsed = Date.now() - startTime;
-      if (attempt < maxAttempts && elapsed < 25000) {
-        console.warn(`[FetchRetry] Attempt ${attempt} error: ${error.message}. Retrying...`);
+      if (attempt < maxAttempts && elapsed < RETRY_TIMEOUT) {
+        console.warn(`[Retry] Attempt ${attempt} error: ${error.message}. Retrying...`);
         await new Promise((r) => setTimeout(r, attempt * 500));
-        continue;
+      } else {
+        if (elapsed >= RETRY_TIMEOUT) {
+          console.warn(
+            `[Retry] Attempt ${attempt} error: ${error.message}, ` +
+              `elapsed ${elapsed}ms > threshold. Giving up.`
+          );
+        }
+        break;
       }
-      throw error;
     }
   }
+  throw lastError || new Error('Max retry attempts reached');
 }
 
 // ============================================================
@@ -159,9 +208,7 @@ export default {
     const url = new URL(request.url);
     const { pathname, search } = url;
     const startTime = Date.now();
-    const reqId =
-      Date.now().toString(16).slice(-6) +
-      Math.random().toString(16).slice(2, 6);
+    const reqId = generateReqId();
 
     console.log(`[${reqId}] ${request.method} ${pathname}${search}`);
 
@@ -169,7 +216,7 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
-        headers: getCorsHeaders(),
+        headers: corsHeaders(),
       });
     }
 
@@ -183,7 +230,7 @@ export default {
         status: 200,
         headers: {
           'Content-Type': 'application/json',
-          ...getCorsHeaders(),
+          ...corsHeaders(),
         },
       });
     }
@@ -191,72 +238,151 @@ export default {
     try {
       // ---------- 构建上游 URL ----------
       let targetUrl = buildTargetUrl(pathname, search);
+      const isOpenAICompat = targetUrl.includes('/v1beta/openai/');
 
-      // ---------- 注入 API Key（Bearer → ?key=） ----------
+      // ---------- 提取 API Key ----------
       const authHeader = request.headers.get('authorization') || '';
+      let apiKey = '';
       if (authHeader.startsWith('Bearer ')) {
-        const apiKey = authHeader.slice(7).trim();
-        const urlWithKey = new URL(targetUrl);
-        urlWithKey.searchParams.set('key', apiKey);
-        targetUrl = urlWithKey.toString();
+        apiKey = authHeader.slice(7).trim();
       }
 
-      // ---------- 清理请求头 ----------
+      // ---------- 注入 API Key ----------
+      // Google OpenAI 兼容端点: 用 ?key= 参数（和 Authorization 头二选一都行，?key= 更可靠）
+      // 与 Vercel 版逻辑对齐：OpenAI 路径用 Authorization 头保持一致性
       const headers = cleanHeaders(request.headers);
+      if (apiKey) {
+        if (isOpenAICompat) {
+          // OpenAI 兼容路径：保留 Authorization: Bearer 头，Google 官方支持
+          // 不移除 headers，保持原样透传
+        } else {
+          // 原生 Gemini 路径：用 ?key= 传 API Key
+          const urlWithKey = new URL(targetUrl);
+          urlWithKey.searchParams.set('key', apiKey);
+          targetUrl = urlWithKey.toString();
+          headers.delete('authorization');
+        }
+      }
 
       // ---------- 读取并过滤请求体 ----------
       let body = null;
-      const isOpenAI = targetUrl.includes('/v1beta/openai/');
-
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         try {
           const text = await request.text();
-          body = (text && text.trim() !== '') ? text : '{}';
+          body = text && text.trim() !== '' ? text : '{}';
         } catch (e) {
           body = '{}';
         }
-        if (isOpenAI) {
+        if (isOpenAICompat) {
           body = sanitizeOpenAIBody(body);
         }
       }
 
       // ---------- 转发请求 ----------
-      const response = await fetchWithRetry(targetUrl, {
-        method: request.method,
-        headers,
-        body,
-      });
+      const response = await fetchWithRetry(
+        targetUrl,
+        {
+          method: request.method,
+          headers,
+          body,
+          cache: 'no-store',
+        },
+        startTime
+      );
 
       const latency = Date.now() - startTime;
+      const retries = response.retries || 0;
       console.log(
-        `[${reqId}] → ${response.status} (${latency}ms)` +
-          (response._retries ? `, retries=${response._retries}` : '')
+        `[${reqId}] → ${response.status} (${latency}ms` +
+          (retries > 0 ? `, retries=${retries}` : '') +
+          `)`
       );
 
       // ---------- 构建响应 ----------
-      const respHeaders = new Headers();
-
-      // 透传上游响应头（移除 blocklist）
-      for (const [key, value] of response.headers.entries()) {
-        const k = key.toLowerCase();
-        if (
-          !['content-encoding', 'transfer-encoding', 'connection'].includes(k)
-        ) {
-          respHeaders.set(key, value);
-        }
-      }
-
-      // 添加 CORS 头
-      const cors = getCorsHeaders();
-      for (const [k, v] of Object.entries(cors)) {
-        respHeaders.set(k, v);
-      }
-
+      const respHeaders = buildResponseHeaders(response);
       respHeaders.set('X-Request-Id', reqId);
       respHeaders.set('X-Proxy', 'cloudflare-workers');
 
-      // 流式和非流式统一透传 body
-      return new Response(response.body, {
+      // ---------- 流式响应（SSE）处理 ----------
+      const upstreamBody = response.body;
+      const contentType = response.headers.get('content-type') || '';
+
+      if (
+        upstreamBody &&
+        (contentType.includes('text/event-stream') ||
+          contentType.includes('application/x-ndjson'))
+      ) {
+        // SSE 流式：客户端断线时中止上游读取
+        const { readable, writable } = new TransformStream();
+        const writer = writable.getWriter();
+        const reader = upstreamBody.getReader();
+        let aborted = false;
+
+        // 异步读取 + 写入
+        ctx.waitUntil(
+          (async () => {
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done || aborted) {
+                  break;
+                }
+                await writer.write(value);
+              }
+            } catch (err) {
+              if (!aborted) {
+                console.error(`[${reqId}] Stream read error: ${err.message}`);
+              }
+            } finally {
+              try {
+                await writer.close();
+              } catch {}
+              try {
+                reader.cancel();
+              } catch {}
+            }
+          })()
+        );
+
+        // 客户端断线信号
+        request.signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+            console.warn(`[${reqId}] Client disconnected, cancelling stream`);
+            reader.cancel().catch(() => {});
+            writer.close().catch(() => {});
+          },
+          { once: true }
+        );
+
+        return new Response(readable, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: respHeaders,
+        });
+      }
+
+      // ---------- 非流式响应 ----------
+      let finalBody = upstreamBody || null;
+
+      // ⭐ 关键修复：Google 有时对 4xx/5xx 返回空 body
+      // 客户端（QClaw、Hermes）看到的就是 "400 no body"
+      // 这里补一个结构化错误体
+      if (!finalBody && response.status >= 400) {
+        finalBody = JSON.stringify({
+          error: {
+            message: `上游返回 HTTP ${response.status}（空响应体）`,
+            type: 'upstream_error',
+            code: response.status,
+            reqId,
+          },
+        });
+        // 确保 Content-Type 是 JSON
+        respHeaders.set('Content-Type', 'application/json');
+      }
+
+      return new Response(finalBody, {
         status: response.status,
         statusText: response.statusText,
         headers: respHeaders,
@@ -283,7 +409,7 @@ export default {
           headers: {
             'Content-Type': 'application/json',
             'X-Request-Id': reqId,
-            ...getCorsHeaders(),
+            ...corsHeaders(),
           },
         }
       );
