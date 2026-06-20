@@ -1,15 +1,17 @@
 // app/api/dashboard/route.js
-import { Redis } from '@upstash/redis';
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
+import getRedis from '../../../lib/redis';
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+export const runtime = 'nodejs';
+export const maxDuration = 30;
 
 export async function GET() {
   try {
+    const redis = getRedis();
+    if (!redis) {
+      return Response.json({ error: 'Redis not configured' }, { status: 500 });
+    }
     const date = getQuotaDate();
     const now = new Date();
     const currentHour = (now.getUTCHours() + 8) % 24; // 北京时间小时
