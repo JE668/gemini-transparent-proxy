@@ -559,13 +559,21 @@ async function handleRequest(req) {
     c.close();
     }
     });
-    // 覆盖 finalBody 让下方逻辑直接返回这个 SSE Response
-    // 但我们需要直接 return，避免走到下面的非流式逻辑
-    // 所以直接返回
+    // 手动构造 SSE 响应头（Google 原始响应头是 application/json，不能复用）
+    const sseHeaders = new Headers({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    });
+    const cors = getCorsHeaders(req);
+    for (const [k, v] of Object.entries(cors)) {
+    sseHeaders.set(k, v);
+    }
+    if (reqId) sseHeaders.set('X-Request-Id', reqId);
     return new Response(ss, {
     status: 200,
     statusText: 'OK',
-    headers: buildResponseHeaders(response, req, reqId),
+    headers: sseHeaders,
     });
     }
     } catch (e) {
