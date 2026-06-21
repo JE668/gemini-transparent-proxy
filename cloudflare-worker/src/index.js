@@ -4,7 +4,7 @@
  * 修复重点：
  * 1. 彻底解决 QClaw 400 错误：实现“错误 SSE 包装”。如果客户端请求 stream=true 但上游返回 400，将错误信息包装成 SSE 格式返回，避免客户端解析崩溃。
  * 2. 增强稳定性：引入 Body 白名单机制，剔除所有可能引起 Google API 400 报错的冗余字段。
- * 3. 保持 Real-time Stream：继续使用 TransformStream 实时剥离 <thought> 标签。
+ * 3. 保持 Real-time Stream: TransformStream 实时转发响应，保留 <thought> 标签供客户端识别。
  */
 
 const GOOGLE_OPENAI_WHITELIST = new Set([
@@ -228,9 +228,7 @@ export default {
                     if (parsed.choices && Array.isArray(parsed.choices)) {
                       for (const choice of parsed.choices) {
                         if (choice.delta && typeof choice.delta.content === 'string') {
-                          choice.delta.content = choice.delta.content
-                            .replace(/<\/thought>/g, '')
-                            .replace(/<thought[^>]*>/g, '');
+                          // 保留 <thought> 标签，客户端（如WorkBuddy/QClaw）据此识别思考过程
                         }
                       }
                     }
