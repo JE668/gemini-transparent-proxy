@@ -422,10 +422,9 @@ async function handleRequest(req) {
     let aborted = false;
     let leftover = ''; // 跨 chunk 的残片段
 
-    const processLines = (chunk) => {
+        const processLines = (chunk) => {
     leftover += chunk;
     const lines = leftover.split('\n');
-    // 最后一段可能不完整，保留到下次
     leftover = lines.pop() || '';
 
     for (const line of lines) {
@@ -433,23 +432,39 @@ async function handleRequest(req) {
     try {
     const jsonStr = line.slice(6);
     const parsed = JSON.parse(jsonStr);
-    // 剥离 extra_content：某些客户端（如 QClaw）对其处理异常
     delete parsed.extra_content;
     if (parsed.choices && Array.isArray(parsed.choices)) {
     for (const choice of parsed.choices) {
     if (choice.delta) {
     delete choice.delta.extra_content;
+    if (typeof choice.delta.content === 'string') {
+    const raw = choice.delta.content;
+    const cleaned = raw
+    .replace(/<\/thought>/g, '')
+    .replace(/<thought[^>]*>/g, '');
+    if (raw.includes('<thought') || raw.includes('<\/thought>')) {
+    if (cleaned.trim().length > 0) {
+    choice.delta.content = cleaned;
+    } else {
+    delete choice.delta.content;
+    }
+    } else {
+    choice.delta.content = cleaned;
     }
     }
     }
+    }
+    }
+    const hasContent = parsed.choices.some(c => c.delta && c.delta.content !== undefined);
+    const hasFinish = parsed.choices.some(c => c.delta && c.delta.finish_reason);
+    if (hasContent || hasFinish) {
     const newLine = 'data: ' + JSON.stringify(parsed) + '\n';
     controller.enqueue(encoder.encode(newLine));
+    }
     } catch {
-    // JSON 解析失败，原样转发避免破坏流
     controller.enqueue(encoder.encode(line + '\n'));
     }
     } else {
-    // 非 data: 行（空行、[DONE] 等），原样转发
     controller.enqueue(encoder.encode(line + '\n'));
     }
     }
