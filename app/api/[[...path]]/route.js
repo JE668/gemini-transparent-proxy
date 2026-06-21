@@ -61,6 +61,8 @@ const GOOGLE_OPENAI_BLOCKED = new Set([
   'service_tier',            // OpenAI 专用
   'n',                       // Google 用 candidate_count 代替
   'include_reasoning',       // 部分客户端会发
+  'store',                   // OpenAI 会发 store:false，Google 不认识
+  'metadata',                // OpenAI 偶尔会发
 ]);
 
 // Google API 不支持 OpenAI 的某些参数，转发前清理掉
@@ -609,6 +611,26 @@ async function handleRequest(req) {
 
     // 非流式响应：fire-and-forget 遥测，不阻塞响应返回
     telemetryPromise;
+
+    // 对非 200 响应：先读取上游 body 文本，避免 stream 传递时客户端读到空 body
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.log(`[${reqId}] Upstream ${response.status} body: ${(errorBody || '').slice(0, 500)}`);
+      const fallbackBody = errorBody || JSON.stringify({
+        error: {
+          message: `Upstream returned HTTP ${response.status}`,
+          type: 'upstream_error',
+          code: response.status,
+          reqId
+        }
+      });
+      return new Response(fallbackBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: buildResponseHeaders(response, req, reqId),
+      });
+    }
+
     let finalBody = upstreamBody || null;
     // Google 有时对 4xx/5xx 返回空 body，客户端看到 "no body"
     // 这种情况下补一个结构化错误体，方便客户端诊断
