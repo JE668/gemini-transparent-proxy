@@ -294,10 +294,26 @@ async function handleRequest(req) {
     // OpenAI 兼容路径下过滤 reasoning_effort，避免 Google API 报 400
     const sanitizedBody = isOpenAICompat ? sanitizeOpenAIBody(body) : body;
 
+    // QClaw 兼容：如果请求 stream=true，改为非流式发给 Google
+    // 收到完整响应后手动切回 SSE 流，避免 <thought> 和 extra_content 干扰客户端
+    let originalStreamRequested = false;
+    let requestBodyForFetch = sanitizedBody;
+    if (sanitizedBody && sanitizedBody !== '{}') {
+    try {
+    const parsed = JSON.parse(sanitizedBody);
+    if (parsed.stream === true) {
+    originalStreamRequested = true;
+    parsed.stream = false;
+    requestBodyForFetch = JSON.stringify(parsed);
+    console.log(`[${reqId}] Converted stream=true to non-streaming for QClaw compatibility`);
+    }
+    } catch {}
+    }
+
     const response = await fetchWithRetry(targetUrl, {
       method: req.method,
       headers: headers,
-      body: sanitizedBody,
+      body: requestBodyForFetch,
       cache: 'no-store',
     }, startTime);
 
@@ -505,6 +521,57 @@ async function handleRequest(req) {
     statusText: response.statusText,
     headers: buildResponseHeaders(response, req, reqId),
     });
+    }
+
+    // QClaw 兼容：原请求为 stream=true，但已改为非流式发给 Google
+    // 收到完整 JSON 响应后，手动切回 SSE 流式格式返回
+    if (originalStreamRequested && response.ok) {
+    try {
+    const responseText = await response.text();
+    const responseData = responseText ? JSON.parse(responseText) : null;
+    if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
+    let replyContent = responseData.choices[0].message.content || '';
+    // 剥离 <thought> 内容
+    replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+    const createdAt = responseData.created || Math.floor(Date.now() / 1000);
+    const model = responseData.model || modelId || 'unknown';
+    const id = responseData.id || 'chatcmpl-' + Date.now();
+    const encoder = new TextEncoder();
+    const CHUNK_SIZE = 50;
+    const chunks = [];
+    // 切分 SSE chunks
+    for (let i = 0; i < replyContent.length; i += CHUNK_SIZE) {
+    const text = replyContent.slice(i, i + CHUNK_SIZE);
+    chunks.push('data: ' + JSON.stringify({
+    choices: [{ delta: { content: text, role: 'assistant' }, index: 0 }],
+    created: createdAt, id, model, object: 'chat.completion.chunk'
+    }) + '\n\n');
+    }
+    // 结束标记
+    chunks.push('data: ' + JSON.stringify({
+    choices: [{ delta: { role: 'assistant' }, finish_reason: 'stop', index: 0 }],
+    created: createdAt, id, model, object: 'chat.completion.chunk'
+    }) + '\n\n');
+    chunks.push('data: [DONE]\n\n');
+    const ss = new ReadableStream({
+    start(c) {
+    c.enqueue(encoder.encode(chunks.join('')));
+    c.close();
+    }
+    });
+    // 覆盖 finalBody 让下方逻辑直接返回这个 SSE Response
+    // 但我们需要直接 return，避免走到下面的非流式逻辑
+    // 所以直接返回
+    return new Response(ss, {
+    status: 200,
+    statusText: 'OK',
+    headers: buildResponseHeaders(response, req, reqId),
+    });
+    }
+    } catch (e) {
+    console.warn(`[${reqId}] QClaw compat fallback failed: ${e.message}`);
+    // fall through to normal non-streaming handler
+    }
     }
 
     // 非流式响应：fire-and-forget 遥测，不阻塞响应返回
