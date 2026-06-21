@@ -233,7 +233,10 @@ export default {
                       }
                     }
                     const hasContent = parsed.choices?.some(c => c.delta?.content !== undefined);
-                    const hasFinish = parsed.choices?.some(c => c.delta?.finish_reason);
+                    // ⚠️ finish_reason 在 choice 层，不在 choice.delta 里！
+                    // 如果检查 c.delta?.finish_reason 会永远返回 undefined，
+                    // 导致最后一条 SSE 事件被静默丢弃→流结束无 finish_reason→Hermes 报"empty stream"
+                    const hasFinish = parsed.choices?.some(c => c.finish_reason !== undefined);
                     if (hasContent || hasFinish) {
                       await writer.write(encoder.encode('data: ' + JSON.stringify(parsed) + '\n'));
                     }
@@ -247,6 +250,13 @@ export default {
             }
           } catch (err) {
             console.error(`[${reqId}] Stream error: ${err.message}`);
+            // 流被中断，发一条合成 finish_reason 事件
+            // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"
+            try {
+              await writer.write(encoder.encode('data: ' + JSON.stringify({
+                choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
+              }) + '\n\n'));
+            } catch {}
           } finally {
             await writer.close();
             reader.cancel().catch(() => {});

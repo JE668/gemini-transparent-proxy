@@ -456,7 +456,7 @@ async function handleRequest(req) {
     if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
     // SSE 流式：不 await 遥测，fire-and-forget，避免阻塞 first byte
     // Edge Runtime 在返回 Response 后不会立即冻结，遥测有足够时间完成
-    telemetryPromise;
+    telemetryPromise.catch(() => {});
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     const transformed = new ReadableStream({
@@ -499,7 +499,10 @@ async function handleRequest(req) {
     }
     }
     const hasContent = parsed.choices.some(c => c.delta && c.delta.content !== undefined);
-    const hasFinish = parsed.choices.some(c => c.delta && c.delta.finish_reason);
+    // ⚠️ finish_reason 在 choice 层（choice.finish_reason），不是 choice.delta.finish_reason
+    // Google 返回的最后一条 SSE 的 finish_reason 是在 choice 级，
+    // 检查 c.delta.finish_reason 永远为 undefined → 事件被丢弃 → 流结束无 finish_reason
+    const hasFinish = parsed.choices.some(c => c.finish_reason !== undefined);
     if (hasContent || hasFinish) {
     const newLine = 'data: ' + JSON.stringify(parsed) + '\n';
     controller.enqueue(encoder.encode(newLine));
@@ -552,9 +555,13 @@ async function handleRequest(req) {
 
     // QClaw 兼容：原请求为 stream=true，但已改为非流式发给 Google
     // 收到完整 JSON 响应后，手动切回 SSE 流式格式返回
+    // 用一个变量保存 body 文本，防止 fallthrough 后 upstreamBody 已被消费（disturbed）
+    // 导致 Hermes 收到空 stream → "empty stream with no finish_reason"
+    let qclawCompatBody = null;
     if (originalStreamRequested && response.ok) {
     try {
     const responseText = await response.text();
+    qclawCompatBody = responseText;  // ✅ 保存，后面 fallthrough 时用
     const responseData = responseText ? JSON.parse(responseText) : null;
     if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
     let replyContent = responseData.choices[0].message.content || '';
@@ -610,7 +617,9 @@ async function handleRequest(req) {
     }
 
     // 非流式响应：fire-and-forget 遥测，不阻塞响应返回
-    telemetryPromise;
+    // 用 catch 兜底而不是裸的 telemetryPromise; —— 后者是空语句，若函数先返回，
+    // V8 可能在微任务执行前就冻结了，遥测数据可能丢失
+    telemetryPromise.catch(() => {});
 
     // 对非 200 响应：先读取上游 body 文本，避免 stream 传递时客户端读到空 body
     if (!response.ok) {
@@ -631,7 +640,11 @@ async function handleRequest(req) {
       });
     }
 
-    let finalBody = upstreamBody || null;
+    // ⚠️ 优先用 qclawCompatBody（如果 QClav 兼容路径已消费了 body）
+    // 此变量在 QClav 兼容块的 try 中赋值为 response.text() 的结果。
+    // 若 QClav 兼容成功返回则用不到；若 fallthrough 下来，upstreamBody 已被 consumed（disturbed），
+    // 此时 qclawCompatBody 里保存着已读取的 body 文本。
+    let finalBody = qclawCompatBody || upstreamBody || null;
     // Google 有时对 4xx/5xx 返回空 body，客户端看到 "no body"
     // 这种情况下补一个结构化错误体，方便客户端诊断
     if (!finalBody && response.status >= 400) {
