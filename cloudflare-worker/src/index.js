@@ -250,12 +250,16 @@ export default {
             }
           } catch (err) {
             console.error(`[${reqId}] Stream error: ${err.message}`);
+            // 刷新残留的 leftover 数据，避免半截线丢失
+            if (leftover) {
+              try { await writer.write(encoder.encode(leftover + '\n')); } catch {}
+            }
             // 流被中断，发一条合成 finish_reason 事件
             // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"
             try {
               await writer.write(encoder.encode('data: ' + JSON.stringify({
                 choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
-              }) + '\n\n'));
+              }) + '\n'));
             } catch {}
           } finally {
             await writer.close();

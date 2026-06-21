@@ -532,6 +532,17 @@ async function handleRequest(req) {
     }).catch(err => {
     if (!aborted) {
     console.error(`[${reqId}] Upstream read error: ${err.message}`);
+    // 刷新残留的 leftover 数据
+    if (leftover) {
+    try { controller.enqueue(encoder.encode(leftover + '\n')); } catch {}
+    }
+    // 流被中断，先发一条合成 finish_reason 事件
+    // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"
+    try {
+    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
+    choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
+    }) + '\n'));
+    } catch {}
     try { controller.error(err); } catch {}
     }
     });
@@ -542,6 +553,13 @@ async function handleRequest(req) {
     aborted = true;
     console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
     reader.cancel().catch(() => {});
+    // 客户端断开 → 流被迫中断，发一条合成 finish_reason
+    // 避免 Hermes 看到流中断且无 finish_reason → 可能误判
+    try {
+    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
+    choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
+    }) + '\n'));
+    } catch {}
     try { controller.close(); } catch {}
     });
     },
