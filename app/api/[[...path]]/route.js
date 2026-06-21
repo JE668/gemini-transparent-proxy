@@ -11,6 +11,10 @@ import { getRedis } from '../../../lib/redis';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
+// 调试：记录最近的请求信息（全局变量，Vercel serverless 实例内有效）
+globalThis.__LAST_REQUEST = null;
+globalThis.__LAST_RESPONSE = null;
+
 const HOP_BY_HOP_HEADERS = [
   'host', 'connection', 'keep-alive', 'proxy-authorization',
   'proxy-authenticate', 'te', 'trailers', 'transfer-encoding',
@@ -257,6 +261,19 @@ async function handleRequest(req) {
 
     const body = await getRequestBody(req);
 
+    // 调试：记录请求信息到全局变量
+    const reqHeaders = {};
+    req.headers.forEach((v, k) => { if (k !== 'authorization') reqHeaders[k] = v; });
+    globalThis.__LAST_REQUEST = {
+      reqId,
+      method: req.method,
+      pathname,
+      targetUrl,
+      headers: reqHeaders,
+      body: body ? (body.length > 2000 ? body.slice(0, 2000) + '...(truncated)' : body) : null,
+      timestamp: new Date().toISOString()
+    };
+
     // 调试日志：记录收到的请求（仅日志不敏感字段）
     console.log(`[${reqId}] Request: ${req.method} ${pathname}`);
     if (body && body !== '{}') {
@@ -316,6 +333,14 @@ async function handleRequest(req) {
       body: requestBodyForFetch,
       cache: 'no-store',
     }, startTime);
+
+    // 调试：记录上游响应状态
+    globalThis.__LAST_RESPONSE = {
+      status: response.status,
+      statusText: response.statusText,
+      contentType: response.headers.get('content-type'),
+      timestamp: new Date().toISOString()
+    };
 
     const latency = Date.now() - startTime;
     const date = getQuotaDate();
