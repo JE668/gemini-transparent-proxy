@@ -257,6 +257,18 @@ async function handleRequest(req) {
 
     const body = await getRequestBody(req);
 
+    // 调试日志：记录收到的请求（仅日志不敏感字段）
+    console.log(`[${reqId}] Request: ${req.method} ${pathname}`);
+    if (body && body !== '{}') {
+      try {
+        const bodyPreview = JSON.parse(body);
+        console.log(`[${reqId}] Body keys: ${Object.keys(bodyPreview).join(', ')}`);
+        if (bodyPreview.model) console.log(`[${reqId}] Model: ${bodyPreview.model}`);
+        if (bodyPreview.stream !== undefined) console.log(`[${reqId}] Stream: ${bodyPreview.stream}`);
+      } catch {}
+    }
+    console.log(`[${reqId}] Target URL: ${targetUrl}`);
+
     let modelId = 'unknown';
     if (body) {
       try {
