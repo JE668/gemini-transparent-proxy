@@ -414,18 +414,61 @@ async function handleRequest(req) {
     // SSE 流式：不 await 遥测，fire-and-forget，避免阻塞 first byte
     // Edge Runtime 在返回 Response 后不会立即冻结，遥测有足够时间完成
     telemetryPromise;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
     const transformed = new ReadableStream({
     start(controller) {
     const reader = upstreamBody.getReader();
     let aborted = false;
+    let leftover = ''; // 跨 chunk 的残片段
+
+    const processLines = (chunk) => {
+    leftover += chunk;
+    const lines = leftover.split('\n');
+    // 最后一段可能不完整，保留到下次
+    leftover = lines.pop() || '';
+
+    for (const line of lines) {
+    if (line.startsWith('data: ') && !line.startsWith('data: [DONE]')) {
+    try {
+    const jsonStr = line.slice(6);
+    const parsed = JSON.parse(jsonStr);
+    // 剥离 extra_content：某些客户端（如 QClaw）对其处理异常
+    delete parsed.extra_content;
+    if (parsed.choices && Array.isArray(parsed.choices)) {
+    for (const choice of parsed.choices) {
+    if (choice.delta) {
+    delete choice.delta.extra_content;
+    }
+    }
+    }
+    const newLine = 'data: ' + JSON.stringify(parsed) + '\n';
+    controller.enqueue(encoder.encode(newLine));
+    } catch {
+    // JSON 解析失败，原样转发避免破坏流
+    controller.enqueue(encoder.encode(line + '\n'));
+    }
+    } else {
+    // 非 data: 行（空行、[DONE] 等），原样转发
+    controller.enqueue(encoder.encode(line + '\n'));
+    }
+    }
+    };
+
     const pump = () => {
     if (aborted) return;
     reader.read().then(({ done, value }) => {
-    if (done) { controller.close(); return; }
-    controller.enqueue(value);
+    if (done) {
+    // 处理最后的残片段
+    if (leftover) {
+    controller.enqueue(encoder.encode(leftover));
+    }
+    controller.close();
+    return;
+    }
+    processLines(decoder.decode(value, { stream: true }));
     pump();
     }).catch(err => {
-    // 上游读取错误（如服务端断线），如果客户端已断线则静默处理
     if (!aborted) {
     console.error(`[${reqId}] Upstream read error: ${err.message}`);
     try { controller.error(err); } catch {}
@@ -434,7 +477,6 @@ async function handleRequest(req) {
     };
     pump();
 
-    // 客户端断线时中止上游读取
     req.signal.addEventListener('abort', () => {
     aborted = true;
     console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
