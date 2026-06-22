@@ -1,6 +1,24 @@
 'use client';
-import React, { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, Suspense, useRef } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+
+// =============================================================================
+// CSS 动画与全局样式
+// =============================================================================
+const styles = `
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes pulse-glow { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes ring-fill { from { stroke-dashoffset: var(--circ); } to { stroke-dashoffset: var(--off); } }
+.dashboard-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
+.dashboard-scroll::-webkit-scrollbar-track { background: transparent; }
+.dashboard-scroll::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 2px; }
+.dashboard-scroll::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
+`;
 
 // =============================================================================
 // 工具函数
@@ -305,6 +323,127 @@ const darkCheck = (t) => {
   const bg = t?.card?.backgroundColor || '#1e293b';
   return bg === '#1e293b' || bg === '#131c31' || bg.includes('13');
 };
+
+// =============================================================================
+// AnimatedCounter — 数字跳数动画
+// =============================================================================
+function AnimatedCounter({ value, duration = 800, color, prefix = '', suffix = '' }) {
+  const [display, setDisplay] = useState(0);
+  const ref = useRef(null);
+  
+  useEffect(() => {
+    const target = Number(value) || 0;
+    const start = performance.now();
+    let raf;
+    
+    // 如果值太小就不动画（ms 级别的值直接显示）
+    if (target < 5) {
+      setDisplay(target);
+      return;
+    }
+    
+    const animate = (now) => {
+      const elapsed = now - start;
+      const progress = Math.min(elapsed / duration, 1);
+      // ease-out
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplay(Math.round(target * eased));
+      if (progress < 1) {
+        raf = requestAnimationFrame(animate);
+      } else {
+        setDisplay(target);
+      }
+    };
+    raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+
+  return <span style={color ? { color } : {}}>{prefix}{display.toLocaleString()}{suffix}</span>;
+}
+
+// =============================================================================
+// DonutChart — 环形进度图
+// =============================================================================
+function DonutChart({ percent, size = 80, strokeWidth = 6, color, bgColor = 'rgba(99,102,241,0.12)', animate = true, children }) {
+  const r = (size / 2) - (strokeWidth / 2);
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (Math.min(percent, 100) / 100) * circ;
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={bgColor} strokeWidth={strokeWidth} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none"
+          stroke={color} strokeWidth={strokeWidth} strokeLinecap="round"
+          strokeDasharray={circ}
+          strokeDashoffset={animate ? circ : offset}
+          style={{
+            transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
+          ref={el => { if (el && animate) requestAnimationFrame(() => el.style.strokeDashoffset = offset); }}
+        />
+      </svg>
+      {children && <div style={{
+        position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+        justifyContent: 'center', fontSize: '13px', fontWeight: '700',
+        fontFamily: 'monospace', color,
+        transform: 'rotate(0deg)',
+      }}>{children}</div>}
+    </div>
+  );
+}
+
+// =============================================================================
+// MiniStatusPie — HTTP 状态码迷你饼图（简化版小圆比分部）
+// =============================================================================
+function MiniStatusPie({ counts, size = 100 }) {
+  const segments = [
+    { key: '2xx', value: counts[2], color: '#22c55e' },
+    { key: '4xx', value: counts[4], color: '#f59e0b' },
+    { key: '5xx', value: counts[5], color: '#ef4444' },
+  ].filter(s => s.value > 0);
+  const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
+  let cumulative = 0;
+  const slices = segments.map((seg, i) => {
+    const startAngle = (cumulative / total) * 360;
+    const angle = (seg.value / total) * 360;
+    cumulative += seg.value;
+    return { ...seg, startAngle, angle, isLast: i === segments.length - 1 };
+  });
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {slices.length === 1 ? (
+        <circle cx={size / 2} cy={size / 2} r={size / 2 - 2} fill={slices[0].color} />
+      ) : (() => {
+        const r = size / 2 - 2;
+        return slices.map((seg, i) => {
+          if (seg.isLast) {
+            const startRad = ((seg.startAngle - 90) * Math.PI) / 180;
+            const endRad = ((seg.startAngle + seg.angle - 90) * Math.PI) / 180;
+            const x1 = size / 2 + r * Math.cos(startRad);
+            const y1 = size / 2 + r * Math.sin(startRad);
+            const x2 = size / 2 + r * Math.cos(endRad);
+            const y2 = size / 2 + r * Math.sin(endRad);
+            return (
+              <path key={i} d={`M${size/2},${size/2} L${x1},${y1} A${r},${r} 0 0 1 ${x2},${y2} Z`}
+                fill={seg.color} />
+            );
+          }
+          const startRad = ((seg.startAngle - 90) * Math.PI) / 180;
+          const endRad = ((seg.startAngle + seg.angle - 90) * Math.PI) / 180;
+          const x1 = size / 2 + r * Math.cos(startRad);
+          const y1 = size / 2 + r * Math.sin(startRad);
+          const x2 = size / 2 + r * Math.cos(endRad);
+          const y2 = size / 2 + r * Math.sin(endRad);
+          const largeArc = seg.angle > 180 ? 1 : 0;
+          return (
+            <path key={i} d={`M${size/2},${size/2} L${x1},${y1} A${r},${r} ${largeArc} 1 ${x2},${y2} Z`}
+              fill={seg.color} />
+          );
+        });
+      })()}
+    </svg>
+  );
+}
 
 // =============================================================================
 // 小组件
@@ -641,6 +780,17 @@ function DashboardContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [authed, fetchData, toggleDark]);
+
+  // 注入 CSS 动画
+  useEffect(() => {
+    const id = 'dashboard-animations';
+    if (!document.getElementById(id)) {
+      const el = document.createElement('style');
+      el.id = id;
+      el.textContent = styles;
+      document.head.appendChild(el);
+    }
+  }, []);
 
   const toggleSection = (key) => {
     setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
@@ -1167,21 +1317,20 @@ function DashboardContent() {
           gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           gap: '14px', marginBottom: '24px'
         }}>
-          <MetricCard icon="📡" label="总请求数" value={formatNumber(globalRequests)}
+          <MetricCard icon="📡" label="总请求数" value={<AnimatedCounter value={globalRequests} color="#6366f1" />}
             sub={`今日累计`} color="#6366f1" theme={theme} />
-          <MetricCard icon="✅" label="成功请求" value={formatNumber(successCount)}
+          <MetricCard icon="✅" label="成功请求" value={<AnimatedCounter value={successCount} color="#22c55e" />}
             sub={`成功率 ${successCount > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100'}%`}
             color="#22c55e" theme={theme} />
-          <MetricCard icon="⚠️" label="错误数" value={formatNumber(errorCount)}
+          <MetricCard icon="⚠️" label="错误数" value={<AnimatedCounter value={errorCount} color={errorCount > 0 ? '#ef4444' : '#22c55e'} />}
             sub={`错误率 ${errorRate}%`}
             color={errorCount > 0 ? '#ef4444' : '#22c55e'} 
             theme={theme} 
-            style={errorCount > 0 && errorRate > 5 ? { animation: 'pulse-glow 2s ease-in-out infinite' } : {}}
             badge={unreadErrors}
           />
-          <MetricCard icon="⏱️" label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)}ms` : '—'}
+          <MetricCard icon="⏱️" label="平均延迟" value={avgLatency ? <span style={{ color: '#f59e0b' }}>{Math.round(avgLatency)}<span style={{ fontSize: '14px', fontWeight: 500 }}>ms</span></span> : <span style={{ color: '#f59e0b' }}>—</span>}
             sub="所有模型综合" color="#f59e0b" theme={theme} />
-          <MetricCard icon="🔄" label="配额重置" value={formatCountdown(countdown)}
+          <MetricCard icon="🔄" label="配额重置" value={<span style={{ color: '#8b5cf6', fontFamily: 'monospace', fontWeight: 800 }}>{formatCountdown(countdown)}</span>}
             sub="UTC+8 07:00 重置" color="#8b5cf6" theme={theme} />
         </div>
 
@@ -1265,18 +1414,74 @@ function DashboardContent() {
                       </div>
                     </div>
 
-          {/* 模型分布 */}
+          {/* 模型分布 + HTTP 状态分布 */}
           <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🧬 模型路由分布
                 {quota?.data && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>共 {quota.data.length} 个模型</span>}
               </h2>
+              {errors?.statusBreakdown && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#22c55e' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e' }} />2xx
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#f59e0b' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b' }} />4xx
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#ef4444' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ef4444' }} />5xx
+                  </div>
+                </div>
+              )}
             </div>
-            <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px', scrollbarWidth: 'thin' }}>
-              {modelDistribution.length > 0 ? modelDistribution.map((d, i) => (
-                <ProgressBar key={i} label={d.label} value={d.value} max={d.max} color={d.color} theme={theme} />
-              )) : <EmptyCard emoji="📭" text="暂无模型数据" theme={theme} />}
+            <div style={{ display: 'flex', gap: '14px', alignItems: 'stretch', minHeight: '140px' }}>
+              {/* 模型小环形图 */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', justifyContent: 'center' }}>
+                {modelDistribution.length > 0 ? modelDistribution.slice(0, 4).map((d, i) => {
+                  const pct = d.max > 0 ? (d.value / d.max) * 100 : 0;
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      padding: '8px 10px', borderRadius: '10px',
+                      backgroundColor: theme.bar.bg,
+                    }}>
+                      <DonutChart percent={pct} size={32} strokeWidth={4} color={d.color}>
+                        <span style={{ fontSize: '9px', fontWeight: '700', color: d.color }}>
+                          {(d.value / (d.max || 1) * 100).toFixed(0)}%
+                        </span>
+                      </DonutChart>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '12px', fontWeight: '600', color: theme.text.main, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {d.label}
+                        </div>
+                        <div style={{ fontSize: '10px', color: theme.text.muted, fontFamily: 'monospace' }}>
+                          {d.value.toLocaleString()} 次
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }) : <EmptyCard emoji="📭" text="暂无模型数据" theme={theme} />}
+              </div>
+              {/* HTTP 状态迷你饼图 */}
+              {errors?.statusBreakdown && (() => {
+                const pieCounts = { 2: errors.statusBreakdown['2xx'] || 0, 4: errors.statusBreakdown['4xx'] || 0, 5: errors.statusBreakdown['5xx'] || 0 };
+                return (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    padding: '0 12px', gap: '8px',
+                    borderLeft: `1px solid ${theme.bar.bg}`,
+                  }}>
+                    <MiniStatusPie counts={pieCounts} size={80} />
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '11px', fontWeight: '600', color: theme.text.main }}>状态分布</div>
+                      <div style={{ fontSize: '10px', color: theme.text.muted }}>
+                        成功 {pieCounts[2] || 0} · 客户端 {pieCounts[4] || 0} · 服务端 {pieCounts[5] || 0}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             {quota?.errorAlert && quota.errorAlert.level !== 'normal' && (
               <div style={{
@@ -1335,20 +1540,14 @@ function DashboardContent() {
                   color: theme.text.muted, cursor: 'pointer',
                   transition: 'all 0.2s ease'
                 }}
-                onMouseEnter={e => {
-                  e.target.style.background = theme.bar.bg;
-                  e.target.style.borderColor = theme.text.muted;
-                }}
-                onMouseLeave={e => {
-                  e.target.style.background = 'transparent';
-                  e.target.style.borderColor = `${theme.text.muted}40`;
-                }}
+                onMouseEnter={e => { e.target.style.background = theme.bar.bg; e.target.style.borderColor = theme.text.muted; }}
+                onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.borderColor = `${theme.text.muted}40`; }}
               >清除筛选 ✕</button>
             )}
           </div>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
             gap: '12px'
           }}>
             {quota?.data?.map((item, i) => {
@@ -1357,162 +1556,114 @@ function DashboardContent() {
               const isSelected = selectedModel === shortModel(item.model);
               const isHigh = pct > 90;
               const isMedium = pct > 70;
-              const barColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color;
-              const warningLevel = isHigh ? 'critical' : isMedium ? 'warning' : 'normal';
+              const ringColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color;
               return (
                 <div key={i}
                   onClick={() => setSelectedModel(isSelected ? null : shortModel(item.model))}
                   style={{
-                    borderRadius: '16px', padding: '18px', cursor: 'pointer',
-                    background: isSelected ? `linear-gradient(135deg, ${color}12, ${color}06)` : theme.card.backgroundColor,
+                    borderRadius: '16px', padding: '16px', cursor: 'pointer',
+                    background: isSelected ? `linear-gradient(135deg, ${color}10, ${color}05)` : theme.card.backgroundColor,
                     border: isSelected 
                       ? `2px solid ${color}` 
                       : isHigh 
-                        ? `2px solid rgba(239,68,68,0.4)` 
+                        ? `2px solid rgba(239,68,68,0.35)` 
                         : theme.card.border,
                     boxShadow: isSelected 
-                      ? `0 0 24px ${color}12` 
+                      ? `0 0 20px ${color}10, ${theme.card.boxShadow}`
                       : isHigh
-                        ? `0 0 20px rgba(239,68,68,0.2), 0 4px 24px rgba(0,0,0,0.2)`
+                        ? `0 0 16px rgba(239,68,68,0.15), ${theme.card.boxShadow}`
                         : theme.card.boxShadow,
                     transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     position: 'relative',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '14px',
+                    overflow: 'hidden',
                   }}
                   onMouseEnter={e => { 
                     if (!isSelected) { 
-                      e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)'; 
-                      e.currentTarget.style.borderColor = isHigh ? '#ef4444' : `${color}60`; 
+                      e.currentTarget.style.transform = 'translateY(-3px)'; 
+                      e.currentTarget.style.borderColor = isHigh ? '#ef4444' : `${color}50`; 
                     } 
                   }}
                   onMouseLeave={e => { 
                     if (!isSelected) { 
-                      e.currentTarget.style.transform = 'translateY(0) scale(1)'; 
-                      e.currentTarget.style.borderColor = isHigh ? 'rgba(239,68,68,0.4)' : theme.card.border; 
+                      e.currentTarget.style.transform = 'translateY(0)'; 
+                      e.currentTarget.style.borderColor = isHigh ? 'rgba(239,68,68,0.35)' : theme.card.border; 
                     } 
                   }}
                 >
-                  {/* 配额告警角标 */}
-                  {isHigh && (
-                    <div style={{
-                      position: 'absolute', top: '10px', right: '10px',
-                      width: '8px', height: '8px', borderRadius: '50%',
-                      backgroundColor: '#ef4444',
-                      boxShadow: '0 0 12px rgba(239,68,68,0.6)',
-                      animation: 'pulse-glow 1s ease-in-out infinite'
-                    }} />
-                  )}
-                  {isSelected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', background: `linear-gradient(90deg, ${color}, ${color}60)`, borderRadius: '16px 16px 0 0' }} />}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                    <div style={{ fontSize: '13px', fontWeight: '700', color: theme.text.main, fontFamily: 'monospace' }}>
+                  {/* 左侧选中装饰条 */}
+                  {isSelected && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: `linear-gradient(180deg, ${color}, ${color}60)`, borderRadius: '0 2px 2px 0' }} />}
+                  
+                  {/* 环形图 */}
+                  <DonutChart percent={pct} size={60} strokeWidth={5} color={ringColor}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '15px', fontWeight: '800', color: ringColor, lineHeight: 1 }}>{pct.toFixed(0)}</div>
+                      <div style={{ fontSize: '8px', color: ringColor, opacity: 0.7 }}>%</div>
+                    </div>
+                  </DonutChart>
+
+                  {/* 右侧信息 */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '13px', fontWeight: '700', color: theme.text.main, fontFamily: 'monospace', marginBottom: '2px' }}>
                       {shortModel(item.model)}
                     </div>
-                    <div style={{
-                      fontSize: '20px', fontWeight: '800',
-                      color: barColor, fontFamily: 'monospace', letterSpacing: '-0.02em'
-                    }}>
-                      {pct.toFixed(1)}<span style={{ fontSize: '12px', fontWeight: '600' }}>%</span>
+                    <div style={{ fontSize: '11px', color: theme.text.muted, fontFamily: 'monospace', marginBottom: '6px' }}>
+                      <span style={{ color: isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color, fontWeight: '600' }}>{(item.used || 0).toLocaleString()}</span>
+                      {' / '}{(item.limit || '∞').toLocaleString()}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {item.avgLatency != null && (
+                        <span style={{
+                          fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                          backgroundColor: item.avgLatency > 3000 ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
+                          color: item.avgLatency > 3000 ? '#ef4444' : '#f59e0b',
+                        }}>⏱ {item.avgLatency}ms</span>
+                      )}
+                      {item.errorRate > 0 && (
+                        <span style={{
+                          fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                          backgroundColor: 'rgba(239,68,68,0.12)', color: '#ef4444',
+                        }}>⚠ {item.errorRate}%</span>
+                      )}
                     </div>
                   </div>
-                  <div style={{
-                    backgroundColor: theme.bar.bg, height: '6px', borderRadius: '3px',
-                    overflow: 'hidden', marginBottom: '10px'
-                  }}>
-                    <div style={{
-                      height: '100%', width: `${pct}%`,
-                      background: `linear-gradient(90deg, ${barColor}, ${isHigh ? '#dc2626' : isMedium ? '#d97706' : `${color}80`})`,
-                      borderRadius: '3px', transition: 'width 0.8s ease'
-                    }} />
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted }}>
-                    <span>{(item.used || 0).toLocaleString()} / {(item.limit || '∞').toLocaleString()}</span>
-                    <span>{item.limit - (item.used || 0) > 0 ? `余 ${(item.limit - (item.used || 0)).toLocaleString()}` : '已耗尽'}</span>
-                  </div>
-                  
-                  {/* 配额预测 */}
+
+                  {/* 配额预测条（底部） */}
                   {item.prediction && !item.prediction.exhausted && (
                     <div style={{
-                      marginTop: '8px',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      backgroundColor: item.prediction.minutes < 120 
-                        ? 'rgba(239,68,68,0.1)' 
+                      position: 'absolute', bottom: '0', left: '0', right: '0',
+                      padding: '3px 14px',
+                      background: item.prediction.minutes < 120 
+                        ? 'linear-gradient(90deg, rgba(239,68,68,0.1), transparent)'
                         : item.prediction.minutes < 240
-                          ? 'rgba(245,158,11,0.1)'
-                          : 'rgba(34,197,94,0.1)',
-                      border: `1px solid ${
-                        item.prediction.minutes < 120 
-                          ? 'rgba(239,68,68,0.3)' 
-                          : item.prediction.minutes < 240
-                            ? 'rgba(245,158,11,0.3)'
-                            : 'rgba(34,197,94,0.3)'
-                      }`,
-                      fontSize: '11px',
-                      color: item.prediction.minutes < 120 
-                        ? '#ef4444' 
-                        : item.prediction.minutes < 240
-                          ? '#f59e0b'
-                          : '#22c55e',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
+                          ? 'linear-gradient(90deg, rgba(245,158,11,0.1), transparent)'
+                          : 'linear-gradient(90deg, rgba(34,197,94,0.1), transparent)',
+                      fontSize: '10px', color: item.prediction.minutes < 120 ? '#ef4444' : item.prediction.minutes < 240 ? '#f59e0b' : '#22c55e',
+                      display: 'flex', alignItems: 'center', gap: '4px',
                     }}>
-                      <span>🔮</span>
-                      <span style={{ fontWeight: '600' }}>预计耗尽:</span>
-                      <span>{formatDuration(item.prediction.minutes)}</span>
+                      🔮 预计 {formatDuration(item.prediction.minutes)} 后耗尽
                     </div>
                   )}
                   {item.prediction?.exhausted && (
                     <div style={{
-                      marginTop: '8px',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      backgroundColor: 'rgba(239,68,68,0.15)',
-                      border: '1px solid rgba(239,68,68,0.3)',
-                      fontSize: '11px',
-                      color: '#ef4444',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontWeight: '700',
+                      position: 'absolute', bottom: '0', left: '0', right: '0',
+                      padding: '3px 14px',
+                      background: 'linear-gradient(90deg, rgba(239,68,68,0.1), transparent)',
+                      fontSize: '10px', color: '#ef4444',
+                      display: 'flex', alignItems: 'center', gap: '4px', fontWeight: '600',
                     }}>
-                      <span>⚠️</span>
-                      <span>配额已耗尽或今日无法用完</span>
+                      ⚠ 配额已耗尽
                     </div>
                   )}
-                  
-                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: '3px',
-                      padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
-                      backgroundColor: `${color}12`, color, border: `1px solid ${color}25`
-                    }}>
-                      📡 {(item.used || 0).toLocaleString()}
-                    </span>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: '3px',
-                      padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
-                      backgroundColor: '#f59e0b12', color: item.avgLatency > 3000 ? '#ef4444' : '#f59e0b',
-                      border: `1px solid ${item.avgLatency > 3000 ? '#ef444425' : '#f59e0b25'}`
-                    }}>
-                      ⏱ {item.avgLatency ? `${item.avgLatency}ms` : '—'}
-                    </span>
-                    {item.errorRate > 0 && (
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '3px',
-                        padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
-                        backgroundColor: '#ef444412', color: '#ef4444', border: '1px solid #ef444425'
-                      }}>
-                        ⚠ {(item.errorRate || 0)}%
-                      </span>
-                    )}
-                  </div>
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* ====== 最近请求（全宽） ====== */}
+        {/* ====== 最近请求（全宽） ====== */}{/* ====== 最近请求（全宽） ====== */}
         <div style={{ borderRadius: '16px', padding: '20px', marginBottom: '20px', ...theme.card }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
