@@ -1,3 +1,5 @@
+import { HIGH_QUOTA_MODELS } from '../../../lib/models';
+
 export const runtime = 'edge';
 
 export async function GET() {
@@ -7,7 +9,7 @@ export async function GET() {
     deploy_timestamp: new Date().toISOString(),
     proxyBase: process.env.NEXT_PUBLIC_BASE_URL || 'https://api.170909.xyz',
     defaultModel: process.env.DEFAULT_MODEL || 'gemma-4-31b-it',
-    modelsCount: 5,
+    modelsCount: HIGH_QUOTA_MODELS.length,
     features: {
       streaming: true,
       openAICompat: true,

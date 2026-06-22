@@ -233,7 +233,6 @@ function isHighDemand503(bodyText) {
 
 export default {
   async fetch(request, env, ctx) {
-  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname, search } = url;
     const startTime = Date.now();

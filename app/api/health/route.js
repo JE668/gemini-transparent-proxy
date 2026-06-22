@@ -37,7 +37,7 @@ export async function GET(req) {
   const dashboardPassword = process.env.DASHBOARD_PASSWORD;
   if (dashboardPassword) {
     const authHeader = req.headers.get('authorization') || '';
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
     if (token !== dashboardPassword) {
       return Response.json({ status: 'error', message: '未授权访问，请提供正确的 Bearer Token' }, { status: 401 });
     }
