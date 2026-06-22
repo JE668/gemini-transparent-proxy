@@ -367,6 +367,7 @@ async function handleRequest(req) {
           console.log(`[${reqId}] Model fallback: ${originalModel} → ${fallbackModel} (${fallbackResp.status})`);
           if (fallbackResp.status !== 503) {
             response = fallbackResp;
+            modelId = fallbackModel; // 配额按实际消耗的模型统计
           } else {
             const origHeaders = buildResponseHeaders(response, req, reqId);
             response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
