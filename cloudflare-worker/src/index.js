@@ -232,7 +232,7 @@ function isHighDemand503(bodyText) {
 function getQuotaDate() {
   const now = new Date();
   const offsetDate = new Date(now.getTime() - 15 * 60 * 60 * 1000);
-  return offsetDate.toISOString().split('T')[0].replace(/-/g, '');
+  return offsetDate.toISOString().split('T')[0];
 }
 
 // Upstash Redis REST pipeline：不阻塞、不抛错，fire-and-forget
