@@ -720,7 +720,7 @@ function DashboardContent() {
     setRefreshing(true);
     setLastRefreshTime(new Date());
     try {
-      const [q, h, e, t, c, r, ch] = await Promise.all([
+      const [q, h, e, t, r, ch] = await Promise.all([
         authFetch('/api/quota').then(r => r?.json()),
         authFetch('/api/health').then(r => r?.json()).catch(() => null),
         authFetch('/api/errors').then(r => r?.json()).catch(() => null),
@@ -1663,7 +1663,7 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* ====== 最近请求（全宽） ====== */}{/* ====== 最近请求（全宽） ====== */}
+        {/* ====== 最近请求（全宽） ====== */}
         <div style={{ borderRadius: '16px', padding: '20px', marginBottom: '20px', ...theme.card }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
