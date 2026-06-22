@@ -440,26 +440,16 @@ async function handleRequest(req) {
     );
     }
 
-    // 增量更新平均延迟
+    // 增量更新平均延迟（原子化：INCRBY sum + INCR count，避免 read-then-write 竞态）
     if (redis) {
-    (async () => {
-    try {
-    const existing = await redis.get(`avgLatency:${date}:${finalModelId}`);
-    let count = 0, avg = latency;
-    if (existing && typeof existing === 'string') {
-    const parts = existing.split(':');
-    const prevCount = parseInt(parts[0]) || 0;
-    const prevAvg = parseInt(parts[1]) || latency;
-    count = prevCount + 1;
-    avg = Math.round((prevAvg * prevCount + latency) / count);
-    } else {
-    count = 1;
-    }
-    await redis.set(`avgLatency:${date}:${finalModelId}`, `${count}:${avg}`, { ex: TTL });
-    } catch (e) {
-    console.error(`[AvgLatency Error] ${e}`);
-    }
-    })();
+      telemetryOps.push(
+        redis.incrby(`latencySum:${date}:${finalModelId}`, latency).then(() =>
+          redis.expire(`latencySum:${date}:${finalModelId}`, TTL)
+        ),
+        redis.incr(`latencyCount:${date}:${finalModelId}`).then(() =>
+          redis.expire(`latencyCount:${date}:${finalModelId}`, TTL)
+        ),
+      );
     }
 
  // 遥测 fire-and-forget：不阻塞响应返回

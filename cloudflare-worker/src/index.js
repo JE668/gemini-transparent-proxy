@@ -164,6 +164,30 @@ function logRequest(reqId, method, pathname, status, durationMs, extra = '') {
   console.log(`[${reqId}] ${method} ${pathname} → ${status} (${durationMs}ms)${extra ? ' ' + extra : ''}`);
 }
 
+// IPv6 地址归一化：展开压缩形式，避免同一网络的 IPv6 前缀被识别为不同 IP
+function normalizeIP(ip) {
+  if (!ip || ip === 'unknown') return ip;
+  if (ip.includes(':')) {
+    try {
+      const clean = ip.split('%')[0]; // 去掉 zone-id（eth0 等）
+      if (clean.includes('::')) {
+        const parts = clean.split(':');
+        const emptyIdx = parts.indexOf('');
+        const nonEmptyBeforeEmpty = parts.slice(0, emptyIdx).filter(p => p !== '').length;
+        const nonEmptyAfterEmpty = parts.slice(emptyIdx + 1).filter(p => p !== '').length;
+        const left = parts.slice(0, emptyIdx).filter(p => p !== '');
+        const right = parts.slice(emptyIdx + 1).filter(p => p !== '');
+        const midCount = 8 - nonEmptyBeforeEmpty - nonEmptyAfterEmpty;
+        return [].concat(left, Array(midCount).fill('0'), right).map(p => p.padStart(4, '0')).join(':');
+      }
+      return clean.split(':').map(p => p.padStart(4, '0')).join(':');
+    } catch {
+      return ip;
+    }
+  }
+  return ip; // IPv4 保持原样
+}
+
 async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   let lastError;
   let retries = 0;
@@ -215,7 +239,8 @@ export default {
     }
 
     // 限流检查（基于客户端 IP）
-    const clientIP = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
+    const rawIP = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
+    const clientIP = normalizeIP(rawIP);
     if (!rateLimiter.check(clientIP)) {
       logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `rate-limited ${clientIP}`);
       return new Response(JSON.stringify({
