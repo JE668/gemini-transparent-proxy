@@ -227,8 +227,23 @@ export default {
                     delete parsed.extra_content;
                     if (parsed.choices && Array.isArray(parsed.choices)) {
                       for (const choice of parsed.choices) {
-                        if (choice.delta && typeof choice.delta.content === 'string') {
-                          // 保留 <thought> 标签，客户端（如WorkBuddy/QClaw）据此识别思考过程
+                        if (choice.delta) {
+                          delete choice.delta.extra_content;
+                          if (typeof choice.delta.content === 'string') {
+                            const raw = choice.delta.content;
+                            const cleaned = raw
+                              .replace(/<\/thought>/g, '')
+                              .replace(/<thought[^>]*>/g, '');
+                            if (raw.includes('<thought') || raw.includes('<\/thought>')) {
+                              if (cleaned.trim().length > 0) {
+                                choice.delta.content = cleaned;
+                              } else {
+                                delete choice.delta.content;
+                              }
+                            } else {
+                              choice.delta.content = cleaned;
+                            }
+                          }
                         }
                       }
                     }
