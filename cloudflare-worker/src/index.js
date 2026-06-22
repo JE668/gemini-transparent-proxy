@@ -156,9 +156,6 @@ class RateLimiter {
 
 const rateLimiter = new RateLimiter(60 * 1000, 60);
 
-// 每 5 分钟清理一次过期条目
-setInterval(() => rateLimiter.cleanup(), 5 * 60 * 1000);
-
 // 请求日志
 function logRequest(reqId, method, pathname, status, durationMs, extra = '') {
   console.log(`[${reqId}] ${method} ${pathname} → ${status} (${durationMs}ms)${extra ? ' ' + extra : ''}`);
@@ -259,6 +256,8 @@ export default {
     const url = new URL(request.url);
     const { pathname, search } = url;
     const startTime = Date.now();
+    // 清理过期限流条目（轻量操作，每个请求执行一次）
+    ctx.waitUntil(Promise.resolve(rateLimiter.cleanup()));
     const reqId = generateReqId();
 
     if (request.method === 'OPTIONS') {
