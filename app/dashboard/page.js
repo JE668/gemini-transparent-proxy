@@ -591,8 +591,93 @@ function EmptyCard({ emoji, text, theme }) {
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       padding: '40px', color: theme.text.muted, gap: '8px'
     }}>
-      <span style={{ fontSize: '28px' }}>{emoji}</span>
+      <span style={{ fontSize: '28px', animation: 'float 3s ease-in-out infinite' }}>{emoji}</span>
       <span style={{ fontSize: '13px' }}>{text}</span>
+    </div>
+  );
+}
+
+// =============================================================================
+// Skeleton skeleton components
+// =============================================================================
+function SkeletonBar({ w = '60%', h = '12px', theme }) {
+  return (
+    <div style={{
+      width: w, height: h, borderRadius: '6px',
+      background: `linear-gradient(90deg, ${theme.bar.bg}, ${theme.card.backgroundColor}, ${theme.bar.bg})`,
+      backgroundSize: '200% 100%',
+      animation: 'shimmer 1.5s ease-in-out infinite',
+    }} />
+  );
+}
+
+function SkeletonMetricCard({ theme }) {
+  return (
+    <div style={{
+      borderRadius: '16px', padding: '18px 20px',
+      backgroundColor: theme.card.backgroundColor,
+      border: theme.card.border,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+        <SkeletonBar w="32px" h="32px" theme={theme} />
+        <SkeletonBar w="60px" h="26px" theme={theme} />
+      </div>
+      <SkeletonBar w="50%" h="13px" theme={theme} style={{ marginBottom: '8px' }} />
+      <SkeletonBar w="35%" h="11px" theme={theme} />
+    </div>
+  );
+}
+
+function SkeletonRow({ theme }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: `1px solid ${theme.bar.bg}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <SkeletonBar w="40px" h="20px" theme={theme} />
+        <SkeletonBar w="120px" h="12px" theme={theme} />
+      </div>
+      <SkeletonBar w="60px" h="11px" theme={theme} />
+    </div>
+  );
+}
+
+function SkeletonQuotaCard({ theme }) {
+  return (
+    <div style={{
+      borderRadius: '16px', padding: '16px', display: 'flex', alignItems: 'center', gap: '14px',
+      backgroundColor: theme.card.backgroundColor, border: theme.card.border,
+    }}>
+      <div style={{
+        width: '60px', height: '60px', borderRadius: '50%', flexShrink: 0,
+        background: `conic-gradient(${theme.bar.bg} 75%, ${theme.bar.bg}40 25%)`,
+      }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <SkeletonBar w="70%" h="13px" theme={theme} style={{ marginBottom: '6px' }} />
+        <SkeletonBar w="50%" h="11px" theme={theme} style={{ marginBottom: '8px' }} />
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <SkeletonBar w="50px" h="18px" theme={theme} />
+          <SkeletonBar w="50px" h="18px" theme={theme} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonTimeline({ theme }) {
+  return (
+    <div style={{ padding: '8px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+        <SkeletonBar w="120px" h="16px" theme={theme} />
+        <SkeletonBar w="80px" h="14px" theme={theme} />
+      </div>
+      <div style={{ display: 'flex', gap: '4px', alignItems: 'flex-end', height: '120px' }}>
+        {Array.from({length: 24}).map((_, i) => (
+          <div key={i} style={{
+            flex: 1, borderRadius: '3px 3px 0 0',
+            height: `${25 + (i * 3) % 60}%`,
+            background: `linear-gradient(to top, ${theme.bar.bg}, ${theme.bar.bg}60)`,
+          }} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1055,6 +1140,9 @@ function DashboardContent() {
     );
   }
 
+  // 已认证但数据加载中 → 在页面上显示骨架屏
+  const showSkeleton = loading && authed;
+
   // ============= 主界面 =============
   return (
     <div style={{
@@ -1317,7 +1405,9 @@ function DashboardContent() {
           gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           gap: '14px', marginBottom: '24px'
         }}>
-          <MetricCard icon="📡" label="总请求数" value={<AnimatedCounter value={globalRequests} color="#6366f1" />}
+                    {showSkeleton ? [1,2,3,4,5].map(i => <SkeletonMetricCard key={i} theme={theme} />)
+          : <>
+<MetricCard icon="📡" label="总请求数" value={<AnimatedCounter value={globalRequests} color="#6366f1" />}
             sub={`今日累计`} color="#6366f1" theme={theme} />
           <MetricCard icon="✅" label="成功请求" value={<AnimatedCounter value={successCount} color="#22c55e" />}
             sub={`成功率 ${successCount > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100'}%`}
@@ -1332,6 +1422,8 @@ function DashboardContent() {
             sub="所有模型综合" color="#f59e0b" theme={theme} />
           <MetricCard icon="🔄" label="配额重置" value={<span style={{ color: '#8b5cf6', fontFamily: 'monospace', fontWeight: 800 }}>{formatCountdown(countdown)}</span>}
             sub="UTC+8 07:00 重置" color="#8b5cf6" theme={theme} />
+          </>}
+          
         </div>
 
         {/* ====== 双列布局 ====== */}
@@ -1339,7 +1431,9 @@ function DashboardContent() {
 
           {/* 请求时间线 */}
                     <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+
+                      {showSkeleton ? <SkeletonTimeline theme={theme} /> : <>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                         <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                           📊 请求时间线
                           {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
@@ -1412,6 +1506,7 @@ function DashboardContent() {
                           </div>
                         </div>
                       </div>
+                      </>}
                     </div>
 
           {/* 模型分布 + HTTP 状态分布 */}
@@ -1517,6 +1612,8 @@ function DashboardContent() {
 
         {/* ====== 模型配额监控 ====== */}
         <div style={{ marginBottom: '20px' }}>
+          {showSkeleton ? [1,2,3,4].map(i => <SkeletonQuotaCard key={i} theme={theme} />) : <>
+          
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               ⚡ 模型配额监控
@@ -1661,10 +1758,11 @@ function DashboardContent() {
               );
             })}
           </div>
-        </div>
+        </>}</div>
 
         {/* ====== 最近请求（全宽） ====== */}
         <div style={{ borderRadius: '16px', padding: '20px', marginBottom: '20px', ...theme.card }}>
+          {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3,4,5].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               📋 最近请求
@@ -1697,12 +1795,14 @@ function DashboardContent() {
                 })
               : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} theme={theme} />}
           </div>
+          </>}
         </div>
 
         {/* ====== 双列：错误日志 + status 码 ====== */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
           {/* 错误日志 */}
           <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+            {showSkeleton ? <div>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🚨 错误日志
@@ -1746,7 +1846,7 @@ function DashboardContent() {
                   })
                 : <EmptyCard emoji="✅" text="今日无错误，一切正常" theme={theme} />}
             </div>
-          </div>
+          </>}</div>
 
           {/* HTTP 状态码速查 + Gemini/Redis 状态 */}
           <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
