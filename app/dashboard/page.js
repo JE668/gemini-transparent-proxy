@@ -488,7 +488,6 @@ function DashboardContent() {
   const [health, setHealth] = useState(null);
   const [errors, setErrors] = useState(null);
   const [timeline, setTimeline] = useState(null);
-  const [clients, setClients] = useState(null);
   const [recent, setRecent] = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
   const [authError, setAuthError] = useState('');
@@ -587,12 +586,11 @@ function DashboardContent() {
         authFetch('/api/health').then(r => r?.json()).catch(() => null),
         authFetch('/api/errors').then(r => r?.json()).catch(() => null),
         authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
-        authFetch('/api/clients').then(r => r?.json()).catch(() => null),
         authFetch('/api/recent').then(r => r?.json()).catch(() => null),
         authFetch('/api/cherry').then(r => r?.json()).catch(() => null),
       ]);
-      if (!q && !h && !e && !t && !c && !r && !ch) return;
-      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setClients(c); setRecent(r); setCherry(ch);
+      if (!q && !h && !e && !t && !r && !ch) return;
+      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setRecent(r); setCherry(ch);
     } catch (err) { console.error(err); }
     finally { setRefreshing(false); setLoading(false); }
   }, [authed, authFetch]);
@@ -699,7 +697,6 @@ function DashboardContent() {
             totalErrors: errors?.count,
             errors: errors?.errors?.slice(0, 100),
           },
-          clientStats: clients?.clients,
         };
         const blob = new Blob([JSON.stringify(allExport, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
@@ -713,7 +710,7 @@ function DashboardContent() {
     } finally {
       setExporting(false);
     }
-  }, [quota, timeline, errors, clients, exportToCSV, shortModel, formatTime]);
+  }, [quota, timeline, errors, exportToCSV, shortModel, formatTime]);
 
   // 派生数据
   const modelDistribution = useMemo(() => {
@@ -1515,72 +1512,39 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* ====== 底部双列：来源 + 重试/请求 ====== */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-          {/* 来源统计 */}
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                🔑 来源统计
-              </h2>
-              <span style={{ fontSize: '11px', color: theme.text.muted }}>
-                {clients?.totalClients || 0} 个密钥 / {clients?.totalRequests?.toLocaleString() || 0} 次
-              </span>
-            </div>
-            <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px', scrollbarWidth: 'thin' }}>
-              {clients?.clients?.length > 0 ? clients.clients.map((c, i) => (
-                <div key={i} style={{ marginBottom: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', fontSize: '13px' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '500' }}>
-                      <span>{c.uaIcon || '🔌'}</span>
-                      <span style={{ color: theme.text.main }}>{c.ua || '未知'}</span>
-                    </span>
-                    <span style={{ fontSize: '11px', color: theme.text.muted }}>{c.ip || '***'}</span>
-                  </div>
-                  <ProgressBar label={c.fingerprint?.length > 30 ? c.fingerprint.slice(0, 30) + '…' : c.fingerprint || 'unknown'}
-                    value={c.requests}
-                    max={Math.max(...clients.clients.map(x => x.requests), 1)}
-                    color={['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81'][i % 10]}
-                    theme={theme} />
-                </div>
-              )) : <EmptyCard emoji="🔒" text="暂无来源数据" theme={theme} />}
+        {/* ====== 最近请求（全宽） ====== */}
+        <div style={{ borderRadius: '16px', padding: '20px', marginBottom: '20px', ...theme.card }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              📋 最近请求
+              {selectedModel && <span style={{ fontSize: '11px', fontWeight: '400', color: '#6366f1' }}>筛选: {selectedModel}</span>}
+            </h2>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {retryCount > 0 && (
+                <span style={{
+                  fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                  backgroundColor: '#f59e0b18', color: '#f59e0b',
+                  border: '1px solid #f59e0b30', fontWeight: '600'
+                }}>
+                  重试 {retryCount} 次
+                </span>
+              )}
             </div>
           </div>
-
-          {/* 最近请求 + 重试 */}
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                📋 最近请求
-                {selectedModel && <span style={{ fontSize: '11px', fontWeight: '400', color: '#6366f1' }}>筛选: {selectedModel}</span>}
-              </h2>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {retryCount > 0 && (
-                  <span style={{
-                    fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
-                    backgroundColor: '#f59e0b18', color: '#f59e0b',
-                    border: '1px solid #f59e0b30', fontWeight: '600'
-                  }}>
-                    重试 {retryCount} 次
-                  </span>
-                )}
-              </div>
-            </div>
-            <div style={{ maxHeight: '300px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
-              {(selectedModel ? filteredRecent : recent?.recent)?.length > 0
-                ? (selectedModel ? filteredRecent : recent?.recent).slice(0, 20).map((r, i) => {
-                    const label = getStatusLabel(r.status);
-                    const uaInfo = r.ua ? parseUserAgent(r.ua) : null;
-                    return (
-                      <LogRow key={i} time={formatTime(r.ts)} badge={r.status}
-                        label={`${shortModel(r.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}`}
-                        badgeColor={label.color}
-                        sub={r.ip ? r.ip : (r.latency != null ? `${r.latency}ms` : undefined)}
-                        color={label.color} theme={theme} />
-                    );
-                  })
-                : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} theme={theme} />}
-            </div>
+          <div style={{ maxHeight: '300px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
+            {(selectedModel ? filteredRecent : recent?.recent)?.length > 0
+              ? (selectedModel ? filteredRecent : recent?.recent).slice(0, 20).map((r, i) => {
+                  const label = getStatusLabel(r.status);
+                  const uaInfo = r.ua ? parseUserAgent(r.ua) : null;
+                  return (
+                    <LogRow key={i} time={formatTime(r.ts)} badge={r.status}
+                      label={`${shortModel(r.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}`}
+                      badgeColor={label.color}
+                      sub={r.ip ? r.ip : (r.latency != null ? `${r.latency}ms` : undefined)}
+                      color={label.color} theme={theme} />
+                  );
+                })
+              : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} theme={theme} />}
           </div>
         </div>
 
