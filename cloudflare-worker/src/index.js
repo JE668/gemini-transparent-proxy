@@ -235,20 +235,21 @@ function getQuotaDate() {
   return offsetDate.toISOString().split('T')[0];
 }
 
-// Upstash Redis REST pipeline：不阻塞、不抛错，fire-and-forget
-// commands：[['INCR', 'key1'], ['INCR', 'key2'], ...]
+// Upstash Redis REST：逐条发送，不报错
+// 注意：Upstash REST API 不识别 pipeline 格式 [['INCR','k1'],['INCR','k2']]，
+// 必须逐条发送单条命令 ['INCR', 'key'] — 但可以并行发起多个请求
 async function upstashPipe(env, commands) {
   if (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN) return;
-  try {
-    await fetch(env.UPSTASH_REDIS_REST_URL, {
+  await Promise.all(commands.map(cmd => {
+    return fetch(env.UPSTASH_REDIS_REST_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${env.UPSTASH_REDIS_REST_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(commands),
-    });
-  } catch {}
+      body: JSON.stringify(cmd),
+    }).catch(() => {});
+  }));
 }
 
 export default {
@@ -283,16 +284,17 @@ export default {
         const token = env.UPSTASH_REDIS_REST_TOKEN;
         let upstashResult = 'not called';
         if (url && token) {
+          // 单条 GET 命令（与 telemetry 的 INCR 同理，验证 REST 格式）
           const resp = await fetch(url, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify([['PING']]),
+            body: JSON.stringify(['INCR', 'debug:ping:test']),
           });
           const text = await resp.text();
-          upstashResult = text.slice(0, 100);
+          upstashResult = text;
         }
         return new Response(JSON.stringify({
           UPSTASH_REDIS_REST_URL: !!url,
