@@ -114,6 +114,56 @@ function buildResponseHeaders(response) {
 const RETRYABLE = new Set([502, 503]);
 const RETRY_TIMEOUT = 25000;
 
+// 内存滑动窗口限流器（每个 Worker 实例独立计数，CF 的多实例间不共享）
+// 限制：每分钟每 IP 最多 60 次请求，覆盖常见用量但防止刷爆
+class RateLimiter {
+  constructor(windowMs, maxRequests) {
+    this.windowMs = windowMs;
+    this.maxRequests = maxRequests;
+    this.requests = new Map();
+  }
+
+  check(key) {
+    const now = Date.now();
+    const windowStart = now - this.windowMs;
+
+    let timestamps = this.requests.get(key) || [];
+    // 清除窗口外的旧记录
+    timestamps = timestamps.filter(t => t > windowStart);
+
+    if (timestamps.length >= this.maxRequests) {
+      return false;
+    }
+
+    timestamps.push(now);
+    this.requests.set(key, timestamps);
+    return true;
+  }
+
+  // 清理过期条目，防止内存泄漏
+  cleanup() {
+    const windowStart = Date.now() - this.windowMs;
+    for (const [key, timestamps] of this.requests.entries()) {
+      const filtered = timestamps.filter(t => t > windowStart);
+      if (filtered.length === 0) {
+        this.requests.delete(key);
+      } else {
+        this.requests.set(key, filtered);
+      }
+    }
+  }
+}
+
+const rateLimiter = new RateLimiter(60 * 1000, 60);
+
+// 每 5 分钟清理一次过期条目
+setInterval(() => rateLimiter.cleanup(), 5 * 60 * 1000);
+
+// 请求日志
+function logRequest(reqId, method, pathname, status, durationMs, extra = '') {
+  console.log(`[${reqId}] ${method} ${pathname} → ${status} (${durationMs}ms)${extra ? ' ' + extra : ''}`);
+}
+
 async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   let lastError;
   let retries = 0;
@@ -161,6 +211,28 @@ export default {
       return new Response(JSON.stringify(MODELS), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+      });
+    }
+
+    // 限流检查（基于客户端 IP）
+    const clientIP = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
+    if (!rateLimiter.check(clientIP)) {
+      logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `rate-limited ${clientIP}`);
+      return new Response(JSON.stringify({
+        error: {
+          message: '请求过于频繁，请稍后重试',
+          type: 'rate_limit_error',
+          code: 429,
+          reqId
+        }
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+          'X-Request-Id': reqId,
+          ...corsHeaders(),
+        }
       });
     }
 
@@ -309,6 +381,7 @@ export default {
           writer.close().catch(() => {});
         }, { once: true });
 
+        logRequest(reqId, request.method, pathname, response.status, Date.now() - startTime, 'stream');
         return new Response(readable, {
           status: response.status,
           statusText: response.statusText,
@@ -330,6 +403,7 @@ export default {
         sseHeaders.set('Cache-Control', 'no-cache');
         sseHeaders.set('Connection', 'keep-alive');
 
+        logRequest(reqId, request.method, pathname, response.status, Date.now() - startTime, 'error-sse');
         return new Response(sseError, {
           status: response.status,
           statusText: response.statusText,
@@ -346,12 +420,14 @@ export default {
         respHeaders.set('Content-Type', 'application/json');
       }
 
+      logRequest(reqId, request.method, pathname, response.status, Date.now() - startTime);
       return new Response(finalBody, {
         status: response.status,
         statusText: response.statusText,
         headers: respHeaders,
       });
     } catch (error) {
+      logRequest(reqId, request.method, pathname, 502, Date.now() - startTime, error.message);
       return new Response(
         JSON.stringify({ error: { message: '代理请求失败', type: 'proxy_error', code: 502, reqId } }),
         { status: 502, headers: { 'Content-Type': 'application/json', 'X-Request-Id': reqId, ...corsHeaders() } }
