@@ -276,6 +276,41 @@ export default {
       });
     }
 
+    // 调试端点：测试 Upstash 连通性
+    if (pathname.endsWith('/v1/debug-upstash')) {
+      try {
+        const url = env.UPSTASH_REDIS_REST_URL;
+        const token = env.UPSTASH_REDIS_REST_TOKEN;
+        let upstashResult = 'not called';
+        if (url && token) {
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify([['PING']]),
+          });
+          const text = await resp.text();
+          upstashResult = text.slice(0, 100);
+        }
+        return new Response(JSON.stringify({
+          UPSTASH_REDIS_REST_URL: !!url,
+          UPSTASH_REDIS_REST_TOKEN: !!token,
+          urlPrefix: url ? url.slice(0, 30) + '...' : null,
+          upstashResult,
+        }, null, 2), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message, stack: e.stack }, null, 2), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+        });
+      }
+    }
+
     if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
       return new Response(JSON.stringify(MODELS), {
         status: 200,
