@@ -219,7 +219,7 @@ export default {
         const reader = upstreamBody.getReader();
         let aborted = false;
 
-        ctx.waitUntil((async () => {
+        const streamPromise = (async () => {
           const decoder = new TextDecoder();
           const encoder = new TextEncoder();
           let leftover = '';
@@ -296,7 +296,10 @@ export default {
             await writer.close();
             reader.cancel().catch(() => {});
           }
-        })()).catch(err => console.error(`[${reqId}] ctx.waitUntil error: ${err.message}`));
+        })();
+        // ⚠️ ctx.waitUntil 返回 void！不能链式 .catch()，必须先保存 promise 变量
+        streamPromise.catch(err => console.error(`[${reqId}] ctx.waitUntil error: ${err.message}`));
+        ctx.waitUntil(streamPromise);
 
         request.signal.addEventListener('abort', () => {
           aborted = true;
