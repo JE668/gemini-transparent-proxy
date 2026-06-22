@@ -231,6 +231,29 @@ function isHighDemand503(bodyText) {
   return bodyText.includes('UNAVAILABLE') || bodyText.includes('high demand');
 }
 
+// 获取配额日期（YYYYMMDD，15 小时偏移与 Vercel 端对齐）
+function getQuotaDate() {
+  const now = new Date();
+  const offsetDate = new Date(now.getTime() - 15 * 60 * 60 * 1000);
+  return offsetDate.toISOString().split('T')[0].replace(/-/g, '');
+}
+
+// Upstash Redis REST pipeline：不阻塞、不抛错，fire-and-forget
+// commands：[['INCR', 'key1'], ['INCR', 'key2'], ...]
+async function upstashPipe(env, commands) {
+  if (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN) return;
+  try {
+    await fetch(env.UPSTASH_REDIS_REST_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.UPSTASH_REDIS_REST_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(commands),
+    });
+  } catch {}
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -294,6 +317,7 @@ export default {
       let body = null;
       let originalStreamRequested = false;
       let requestBodyText = null; // 保存原始请求体，供模型降级用
+      let modelId = 'unknown'; // 用于遥测的模型 ID
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         try {
           const text = await request.text();
@@ -303,6 +327,7 @@ export default {
           if (isOpenAICompat) {
             const parsed = JSON.parse(body);
             if (parsed.stream === true) originalStreamRequested = true;
+            if (parsed.model) modelId = parsed.model;
             body = sanitizeOpenAIBodyStrict(body);
           }
         } catch {
@@ -336,6 +361,7 @@ export default {
               `fallback ${originalModel} → ${fallbackModel}`);
             if (fallbackResp.status !== 503) {
               response = fallbackResp; // 直接用降级响应
+              modelId = fallbackModel; // 遥测按实际消耗的模型统计
             } else {
               // 降级也 503，恢复原响应（body 已被 text() 消费，重建）
               const origHeaders = buildResponseHeaders(response);
@@ -349,6 +375,24 @@ export default {
           }
         }
       }
+
+      // Upstash 遥测（fire-and-forget）：写同样的 key，数据与 Vercel 端打通
+      // 写入：status + timeline（always）+ quota（仅成功，含 global + per-model）
+      const date = getQuotaDate();
+      const bjHour = (new Date().getUTCHours() + 8) % 24;
+      const isSuccess = response.status < 400;
+      const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
+      const telemetryCmds = [
+        ['INCR', `status:${date}:${response.status}`],
+        ['INCR', `timeline:${date}:h${bjHour}`],
+      ];
+      if (isSuccess) {
+        telemetryCmds.push(
+          ['INCR', `quota:${date}:${finalModelId}`],
+          ['INCR', `quota:global:${date}`],
+        );
+      }
+      ctx.waitUntil(upstashPipe(env, telemetryCmds));
 
       const respHeaders = buildResponseHeaders(response);
       respHeaders.set('X-Request-Id', reqId);

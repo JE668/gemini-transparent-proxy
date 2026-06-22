@@ -395,106 +395,23 @@ async function handleRequest(req) {
   // 北京时间整点小时 (0-23)，用于时间线分桶
   const bjHour = (new Date().getUTCHours() + 8) % 24;
 
-  // 来源统计：clientFingerprint 已在上方限流逻辑中计算
-
-  // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
-  const TTL = 48 * 60 * 60; // 48 小时（秒）
-
-  // 遥测：仅在成功响应（status < 400）时才递增配额
-  // 错误请求不计入配额消耗，避免测试误触时配额被吃掉
+  // 精简遥测：只写 3 个原子计数器 + timeline，无 expire/list/hash/sorted-set
+  // 每条请求 2~4 INCR，3K 请求/天约 8~12K 命令，适配免费层
   const isSuccess = response.status < 400;
 
-  // 将遥测写入从 pipeline 改为 Promise.all 单独写入
-  // Upstash Redis 的 auto-pipelining 会自动合并这些请求
   const telemetryOps = redis ? [
-      // 状态码统计（无论成功/失败都记录，用于错误率分析）
-      redis.incr(`status:${date}:${response.status}`).then(() => redis.expire(`status:${date}:${response.status}`, TTL)),
-      redis.incr('proxy:heartbeat'),
-      redis.lpush(`latency:${finalModelId}`, latency).then(() => redis.ltrim(`latency:${finalModelId}`, 0, 99)).then(() => redis.expire(`latency:${finalModelId}`, TTL)),
-      redis.incr(`timeline:${date}:h${bjHour}`).then(() => redis.expire(`timeline:${date}:h${bjHour}`, TTL)),
-      redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
-      // 慢请求追踪也在条件外，方便诊断
-    ] : [];
+    // 状态码（不论成败，用于错误率计算）
+    redis.incr(`status:${date}:${response.status}`),
+    // 时间线（不论成败，Dashboard 趋势图）
+    redis.incr(`timeline:${date}:h${bjHour}`),
+    // 配额（仅成功计入，避免测试误触消耗配额）
+    ...(isSuccess ? [
+      redis.incr(`quota:${date}:${finalModelId}`),
+      redis.incr(`quota:global:${date}`),
+    ] : []),
+  ] : [];
 
-    // 仅在成功时才计入配额和客户端统计
-    if (redis && isSuccess) {
-      telemetryOps.push(
-        redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
-        redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
-        redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
-        redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
-        // 记录客户端详细信息（IP、UA、最后 seen 时间）
-        redis.hset(`client:info:${clientFingerprint}`, {
-          ip: clientIP,
-          ua: userAgent,
-          lastSeen: new Date().toISOString(),
-        }).then(() => redis.expire(`client:info:${clientFingerprint}`, TTL)),
-      );
-    }
-
-    // 重试计数
-    const retries = response._retries || 0;
-    if (retries > 0 && redis) {
-    telemetryOps.push(redis.incr(`retries:${date}`).then(() => redis.expire(`retries:${date}`, TTL)));
-    }
-
-    // 最近请求摘要
-    const recentEntry = JSON.stringify({
-    ts: new Date().toISOString(),
-    reqId,
-    model: finalModelId,
-    status: response.status,
-    latency: latency,
-    retries: retries,
-    client: clientFingerprint,
-    ip: clientIP,
-    ua: userAgent,
-    });
-    if (redis) {
-    telemetryOps.push(
-    redis.lpush(`recent:${date}`, recentEntry).then(() => redis.ltrim(`recent:${date}`, 0, 49)).then(() => redis.expire(`recent:${date}`, TTL))
-    );
-    }
-    
-    // 慢请求追踪：延迟 >3000ms 的记录到 sorted set
-    if (latency > 3000 && redis) {
-    telemetryOps.push(
-    redis.zadd(`slow:${date}`, latency, recentEntry)
-    .then(() => redis.zremrangebyrank(`slow:${date}`, 0, -11)) // 只保留 Top 10
-    .then(() => redis.expire(`slow:${date}`, TTL))
-    );
-    }
-
-    // 错误日志：4xx/5xx 写入 Redis List
-    if (response.status >= 400 && redis) {
-    const errorEntry = JSON.stringify({
-    ts: new Date().toISOString(),
-    reqId,
-    model: finalModelId,
-    status: response.status,
-    latency: latency,
-    ip: clientIP,
-    ua: userAgent,
-    });
-    telemetryOps.push(
-    redis.lpush(`errors:${date}`, errorEntry).then(() => redis.ltrim(`errors:${date}`, 0, 99)).then(() => redis.expire(`errors:${date}`, TTL))
-    );
-    }
-
-    // 增量更新平均延迟（原子化：INCRBY sum + INCR count，避免 read-then-write 竞态）
-    if (redis) {
-      telemetryOps.push(
-        redis.incrby(`latencySum:${date}:${finalModelId}`, latency).then(() =>
-          redis.expire(`latencySum:${date}:${finalModelId}`, TTL)
-        ),
-        redis.incr(`latencyCount:${date}:${finalModelId}`).then(() =>
-          redis.expire(`latencyCount:${date}:${finalModelId}`, TTL)
-        ),
-      );
-    }
-
- // 遥测 fire-and-forget：不阻塞响应返回
- // Edge Runtime 在返回 Response 后会给异步操作足够时间完成
+ // 遥测 fire-and-forget，不阻塞响应
  const telemetryPromise = Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
 
     // 流式响应：检测客户端断线，中止上游读取
