@@ -87,8 +87,9 @@ function buildTargetUrl(pathname, search) {
   const rules = [
     { prefix: '/api/v1/', replacement: '/v1beta/openai/' },
     { prefix: '/v1/', replacement: '/v1beta/openai/' },
-    // 不再盲目映射 /api/ → /，避免构造出无效 URL
-  // 标准路径如 /api/v1/ 和 /v1/ 已由前两条规则覆盖
+    // 处理客户端发 POST /api/chat/completions（无 v1 前缀）
+    // Google API 不认识 /api/ 开头的路径，映射到 /v1beta/openai/
+    { prefix: '/api/', replacement: '/v1beta/openai/' },
   ];
   let targetPath = pathname;
   for (const { prefix, replacement } of rules) {
@@ -356,25 +357,37 @@ async function handleRequest(req) {
   // 48h TTL：遥测数据按日期分桶，隔天仍可查看，两天后自动清理
   const TTL = 48 * 60 * 60; // 48 小时（秒）
 
+  // 遥测：仅在成功响应（status < 400）时才递增配额
+  // 错误请求不计入配额消耗，避免测试误触时配额被吃掉
+  const isSuccess = response.status < 400;
+
   // 将遥测写入从 pipeline 改为 Promise.all 单独写入
   // Upstash Redis 的 auto-pipelining 会自动合并这些请求
   const telemetryOps = redis ? [
-      redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
-      redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
-      redis.incr('proxy:heartbeat'),
+      // 状态码统计（无论成功/失败都记录，用于错误率分析）
       redis.incr(`status:${date}:${response.status}`).then(() => redis.expire(`status:${date}:${response.status}`, TTL)),
+      redis.incr('proxy:heartbeat'),
       redis.lpush(`latency:${finalModelId}`, latency).then(() => redis.ltrim(`latency:${finalModelId}`, 0, 99)).then(() => redis.expire(`latency:${finalModelId}`, TTL)),
       redis.incr(`timeline:${date}:h${bjHour}`).then(() => redis.expire(`timeline:${date}:h${bjHour}`, TTL)),
       redis.sadd(`timeline:${date}:hours`, `h${bjHour}`).then(() => redis.expire(`timeline:${date}:hours`, TTL)),
-      redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
-      redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
-      // 记录客户端详细信息（IP、UA、最后 seen 时间）
-      redis.hset(`client:info:${clientFingerprint}`, {
-        ip: clientIP,
-        ua: userAgent,
-        lastSeen: new Date().toISOString(),
-      }).then(() => redis.expire(`client:info:${clientFingerprint}`, TTL)),
+      // 慢请求追踪也在条件外，方便诊断
     ] : [];
+
+    // 仅在成功时才计入配额和客户端统计
+    if (redis && isSuccess) {
+      telemetryOps.push(
+        redis.incr(`quota:${date}:${finalModelId}`).then(() => redis.expire(`quota:${date}:${finalModelId}`, TTL)),
+        redis.incr(`quota:global:${date}`).then(() => redis.expire(`quota:global:${date}`, TTL)),
+        redis.incr(`clients:${date}:${clientFingerprint}`).then(() => redis.expire(`clients:${date}:${clientFingerprint}`, TTL)),
+        redis.sadd(`clients:${date}:keys`, clientFingerprint).then(() => redis.expire(`clients:${date}:keys`, TTL)),
+        // 记录客户端详细信息（IP、UA、最后 seen 时间）
+        redis.hset(`client:info:${clientFingerprint}`, {
+          ip: clientIP,
+          ua: userAgent,
+          lastSeen: new Date().toISOString(),
+        }).then(() => redis.expire(`client:info:${clientFingerprint}`, TTL)),
+      );
+    }
 
     // 重试计数
     const retries = response._retries || 0;
@@ -552,7 +565,10 @@ async function handleRequest(req) {
     req.signal.addEventListener('abort', () => {
     aborted = true;
     console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
-    reader.cancel().catch(() => {});
+    // 确保 reader 已初始化再 cancel（上游响应可能还没返回）
+    if (reader) {
+      reader.cancel().catch(() => {});
+    }
     // 客户端断开 → 流被迫中断，发一条合成 finish_reason
     // 避免 Hermes 看到流中断且无 finish_reason → 可能误判
     try {
