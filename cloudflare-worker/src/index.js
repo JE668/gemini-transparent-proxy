@@ -7,8 +7,22 @@
  * 3. 保持 Real-time Stream: TransformStream 实时转发响应，保留 <thought> 标签供客户端识别。
  */
 
-const GOOGLE_OPENAI_WHITELIST = new Set([
-  'model', 'messages', 'stream', 'temperature', 'top_p', 'top_k', 'max_tokens', 'stop'
+// Google Gemini OpenAI-compatible API 不支持的字段黑名单（黑名单 vs 白名单：只删明确不支持的字段，其他全部透传）
+const GOOGLE_OPENAI_BLOCKED = new Set([
+  'stream_options',          // Google API 不认识
+  'reasoning_effort',        // OpenAI 推理强度
+  'frequency_penalty',       // Google 不支持
+  'presence_penalty',        // Google 不支持
+  'logit_bias',              // Google 不支持
+  'logprobs',                // Google 不支持
+  'top_logprobs',            // Google 不支持
+  'seed',                    // Google 不支持
+  'user',                    // Google 不支持
+  'service_tier',            // OpenAI 专用
+  'n',                       // Google 用 candidate_count 代替
+  'include_reasoning',       // 部分客户端会发
+  'store',                   // OpenAI 会发 store:false，Google 不认识
+  'metadata',                // OpenAI 偶尔会发
 ]);
 
 const HOP_BY_HOP = new Set([
@@ -34,14 +48,14 @@ function generateReqId() {
   return Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
 }
 
-/** 使用白名单过滤请求体，极其严格，防止任何不支持的字段导致 400 */
+/** 黑名单过滤：仅删除 Google 明确不支持的字段，其他全部透传 */
 function sanitizeOpenAIBodyStrict(body) {
   if (!body) return body;
   try {
     const json = JSON.parse(body);
     const cleaned = {};
     for (const key in json) {
-      if (GOOGLE_OPENAI_WHITELIST.has(key)) {
+      if (!GOOGLE_OPENAI_BLOCKED.has(key) && json[key] !== null) {
         cleaned[key] = json[key];
       }
     }
@@ -282,7 +296,7 @@ export default {
             await writer.close();
             reader.cancel().catch(() => {});
           }
-        })());
+        })()).catch(err => console.error(`[${reqId}] ctx.waitUntil error: ${err.message}`));
 
         request.signal.addEventListener('abort', () => {
           aborted = true;
