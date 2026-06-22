@@ -143,6 +143,16 @@ function buildResponseHeaders(response, req, reqId = '') {
 // 最大 2 次，backoff 0.5s, 1s
 const RETRYABLE_STATUSES = new Set([502, 503]);
 
+/** 模型降级链：Google 503 high demand 时自动尝试更小模型 */
+const MODEL_FALLBACKS = {
+  'gemma-4-31b-it': 'gemma-4-26b-a4b-it',
+  'gemma-4-26b-a4b-it': 'gemini-2.5-flash',
+};
+
+function isHighDemand503(bodyText) {
+  return bodyText.includes('UNAVAILABLE') || bodyText.includes('high demand');
+}
+
 async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   let lastError;
   let retries = 0;
@@ -332,12 +342,42 @@ async function handleRequest(req) {
     } catch {}
     }
 
-    const response = await fetchWithRetry(targetUrl, {
+    let response = await fetchWithRetry(targetUrl, {
       method: req.method,
       headers: headers,
       body: requestBodyForFetch,
       cache: 'no-store',
     }, startTime);
+
+    // === 模型降级：Google 503 high demand → 自动切换更小模型 ===
+    if (response.status === 503 && isOpenAICompat && body) {
+      const respText = await response.text();
+      if (isHighDemand503(respText)) {
+        const originalModel = JSON.parse(body).model;
+        const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
+        if (fallbackModel) {
+          const newBody = JSON.parse(requestBodyForFetch);
+          newBody.model = fallbackModel;
+          const fallbackResp = await fetchWithRetry(targetUrl, {
+            method: req.method,
+            headers: headers,
+            body: JSON.stringify(newBody),
+            cache: 'no-store',
+          }, startTime);
+          console.log(`[${reqId}] Model fallback: ${originalModel} → ${fallbackModel} (${fallbackResp.status})`);
+          if (fallbackResp.status !== 503) {
+            response = fallbackResp;
+          } else {
+            const origHeaders = buildResponseHeaders(response, req, reqId);
+            response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
+          }
+        }
+        if (response.status === 503 && response.bodyUsed) {
+          const origHeaders = buildResponseHeaders(response, req, reqId);
+          response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
+        }
+      }
+    }
 
     // 调试：记录上游响应状态
     globalThis.__LAST_RESPONSE = {

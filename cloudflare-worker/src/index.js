@@ -220,7 +220,19 @@ async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   throw lastError || new Error('Max retry attempts reached');
 }
 
+/** 模型降级链：Google 503 high demand 时自动尝试更小模型 */
+const MODEL_FALLBACKS = {
+  'gemma-4-31b-it': 'gemma-4-26b-a4b-it',
+  'gemma-4-26b-a4b-it': 'gemini-2.5-flash',
+};
+
+/** 检测 Google 503 UNAVAILABLE 错误体 */
+function isHighDemand503(bodyText) {
+  return bodyText.includes('UNAVAILABLE') || bodyText.includes('high demand');
+}
+
 export default {
+  async fetch(request, env, ctx) {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname, search } = url;
@@ -282,9 +294,11 @@ export default {
 
       let body = null;
       let originalStreamRequested = false;
+      let requestBodyText = null; // 保存原始请求体，供模型降级用
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         try {
           const text = await request.text();
+          requestBodyText = text;
           body = text && text.trim() !== '' ? text : '{}';
           
           if (isOpenAICompat) {
@@ -297,12 +311,45 @@ export default {
         }
       }
 
-      const response = await fetchWithRetry(targetUrl, {
+      let response = await fetchWithRetry(targetUrl, {
         method: request.method,
         headers,
         body,
         cache: 'no-store',
       }, startTime);
+
+      // === 模型降级：Google 503 high demand → 自动切换更小模型 ===
+      if (response.status === 503 && isOpenAICompat && requestBodyText) {
+        const respText = await response.text();
+        if (isHighDemand503(respText)) {
+          const originalModel = JSON.parse(requestBodyText).model;
+          const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
+          if (fallbackModel) {
+            const newBody = JSON.parse(body);
+            newBody.model = fallbackModel;
+            const fallbackResp = await fetchWithRetry(targetUrl, {
+              method: request.method,
+              headers,
+              body: JSON.stringify(newBody),
+              cache: 'no-store',
+            }, startTime);
+            logRequest(reqId, request.method, pathname, fallbackResp.status, Date.now() - startTime,
+              `fallback ${originalModel} → ${fallbackModel}`);
+            if (fallbackResp.status !== 503) {
+              response = fallbackResp; // 直接用降级响应
+            } else {
+              // 降级也 503，恢复原响应（body 已被 text() 消费，重建）
+              const origHeaders = buildResponseHeaders(response);
+              response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
+            }
+          }
+          // 无降级模型可试，body 已被消费，重建原 503 响应
+          if (response.status === 503 && response.bodyUsed) {
+            const origHeaders = buildResponseHeaders(response);
+            response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
+          }
+        }
+      }
 
       const respHeaders = buildResponseHeaders(response);
       respHeaders.set('X-Request-Id', reqId);
