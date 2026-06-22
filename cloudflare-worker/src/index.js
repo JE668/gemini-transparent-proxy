@@ -264,6 +264,18 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
+    // 调试端点：返回环境变量状态（不暴露值）
+    if (pathname.endsWith('/v1/env') || pathname.endsWith('/env')) {
+      return new Response(JSON.stringify({
+        UPSTASH_REDIS_REST_URL: !!env.UPSTASH_REDIS_REST_URL,
+        UPSTASH_REDIS_REST_TOKEN: !!env.UPSTASH_REDIS_REST_TOKEN,
+        NODE_ENV: env.NODE_ENV || 'not set',
+      }, null, 2), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+      });
+    }
+
     if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
       return new Response(JSON.stringify(MODELS), {
         status: 200,
