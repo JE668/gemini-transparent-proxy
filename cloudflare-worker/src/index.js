@@ -391,14 +391,43 @@ export default {
 
       // Upstash 遥测（fire-and-forget）：写同样的 key，数据与 Vercel 端打通
       // 写入：status + timeline（always）+ quota（仅成功，含 global + per-model）
+      //       + recent + errors（仅 status >= 400）
       const date = getQuotaDate();
       const bjHour = (new Date().getUTCHours() + 8) % 24;
       const isSuccess = response.status < 400;
       const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
+      const nowMs = Date.now();
+      const latency = nowMs - startTime;
+      const ua = request.headers.get('user-agent') || 'unknown';
       const telemetryCmds = [
         ['INCR', `status:${date}:${response.status}`],
         ['INCR', `timeline:${date}:h${bjHour}`],
+        // 最近请求列表（LPUSH + LTRIM 保留最新 30 条）
+        ['LPUSH', `recent:${date}`, JSON.stringify({
+          ts: new Date().toISOString(),
+          status: response.status,
+          model: finalModelId,
+          latency,
+          ua,
+          ip: clientIP,
+        })],
+        ['LTRIM', `recent:${date}`, 0, 29],
       ];
+      // 错误日志（仅 status >= 400，保留最新 20 条）
+      if (response.status >= 400) {
+        telemetryCmds.push(
+          ['LPUSH', `errors:${date}`, JSON.stringify({
+            ts: new Date().toISOString(),
+            status: response.status,
+            model: finalModelId,
+            latency,
+            message: `${response.status} ${response.statusText}`,
+            ua,
+            ip: clientIP,
+          })],
+          ['LTRIM', `errors:${date}`, 0, 19],
+        );
+      }
       if (isSuccess) {
         telemetryCmds.push(
           ['INCR', `quota:${date}:${finalModelId}`],
@@ -561,6 +590,23 @@ export default {
       });
     } catch (error) {
       logRequest(reqId, request.method, pathname, 502, Date.now() - startTime, error.message);
+      // 也写遥测，让 Dashboard 看到代理错误
+      const errDate = getQuotaDate();
+      const errHour = (new Date().getUTCHours() + 8) % 24;
+      ctx.waitUntil(upstashPipe(env, [
+        ['INCR', `status:${errDate}:502`],
+        ['INCR', `timeline:${errDate}:h${errHour}`],
+        ['LPUSH', `errors:${errDate}`, JSON.stringify({
+          ts: new Date().toISOString(),
+          status: 502,
+          model: 'proxy-error',
+          latency: Date.now() - startTime,
+          message: error.message,
+          ua: request.headers.get('user-agent') || 'unknown',
+          ip: clientIP,
+        })],
+        ['LTRIM', `errors:${errDate}`, 0, 19],
+      ]));
       return new Response(
         JSON.stringify({ error: { message: '代理请求失败', type: 'proxy_error', code: 502, reqId } }),
         { status: 502, headers: { 'Content-Type': 'application/json', 'X-Request-Id': reqId, ...corsHeaders() } }
