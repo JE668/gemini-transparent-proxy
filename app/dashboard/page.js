@@ -58,6 +58,21 @@ const getStatusLabel = (code) => {
   return { text: '成功', color: '#22c55e' };
 };
 
+// =============================================================================
+// 响应式 Hook
+// =============================================================================
+function useResponsive() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    setIsMobile(mq.matches);
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isMobile;
+}
+
 const getTimeUntilReset = () => {
   const now = new Date();
   const reset = new Date(now); reset.setUTCHours(7, 0, 0, 0);
@@ -585,14 +600,27 @@ function LogRow({ time, badge, label, sub, color, badgeColor, theme }) {
   );
 }
 
-function EmptyCard({ emoji, text, theme }) {
+function EmptyCard({ emoji, text, sub, tips, theme }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      padding: '40px', color: theme.text.muted, gap: '8px'
+      padding: '48px 24px', color: theme.text.muted, gap: '8px'
     }}>
-      <span style={{ fontSize: '28px', animation: 'float 3s ease-in-out infinite' }}>{emoji}</span>
-      <span style={{ fontSize: '13px' }}>{text}</span>
+      <div style={{
+        fontSize: '48px', lineHeight: 1, marginBottom: '4px',
+        animation: 'float 3s ease-in-out infinite',
+        filter: 'grayscale(0.3)'
+      }}>{emoji}</div>
+      <span style={{ fontSize: '14px', fontWeight: '600', color: theme.text.sub }}>{text}</span>
+      {sub && <span style={{ fontSize: '12px', color: theme.text.muted, textAlign: 'center', maxWidth: '280px', lineHeight: 1.5 }}>{sub}</span>}
+      {tips && <div style={{
+        marginTop: '12px', padding: '8px 14px', borderRadius: '8px',
+        backgroundColor: theme.bar?.bg || 'rgba(99,102,241,0.08)',
+        fontSize: '11px', color: '#6366f1', maxWidth: '300px', textAlign: 'center',
+        lineHeight: 1.5
+      }}>
+        💡 {tips}
+      </div>}
     </div>
   );
 }
@@ -730,6 +758,9 @@ function DashboardContent() {
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [cherry, setCherry] = useState(null);
   const [unreadErrors, setUnreadErrors] = useState(0);
+
+  const isMobile = useResponsive();
+
 
   const theme = getTheme(dark);
 
@@ -1165,11 +1196,14 @@ function DashboardContent() {
         pointerEvents: 'none', zIndex: 0
       }} />
 
-      <div style={{ position: 'relative', zIndex: 1, maxWidth: '1360px', margin: '0 auto', padding: '28px 24px' }}>
+      <div style={{ position: 'relative', zIndex: 1, maxWidth: '1360px', margin: '0 auto', padding: isMobile ? '16px 12px' : '28px 24px' }}>
         {/* ====== 顶部导航 ====== */}
         <header style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          marginBottom: '28px', paddingBottom: '20px',
+          display: 'flex', flexDirection: isMobile ? 'column' : 'row',
+          justifyContent: isMobile ? 'flex-start' : 'space-between',
+          alignItems: isMobile ? 'stretch' : 'center',
+          gap: isMobile ? '16px' : 0,
+          marginBottom: isMobile ? '20px' : '28px', paddingBottom: isMobile ? '16px' : '20px',
           borderBottom: `1px solid ${dark ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.08)'}`,
           position: 'relative'
         }}>
@@ -1199,7 +1233,7 @@ function DashboardContent() {
                 boxShadow: `0 0 12px ${health?.status === 'ok' ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'}`,
                 animation: health?.status === 'ok' ? 'pulse-glow 2s ease-in-out infinite' : 'none'
               }} />
-              <h1 style={{ fontSize: '28px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
+              <h1 style={{ fontSize: isMobile ? '22px' : '28px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
                 Gemini <span style={{ 
                   background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                   WebkitBackgroundClip: 'text',
@@ -1217,7 +1251,7 @@ function DashboardContent() {
               </p>
             )}
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
             <span style={{ 
               fontSize: '12px', 
               color: theme.text.muted, 
@@ -1402,7 +1436,7 @@ function DashboardContent() {
         {/* ====== 核心指标行 ====== */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(200px, 1fr))',
           gap: '14px', marginBottom: '24px'
         }}>
                     {showSkeleton ? [1,2,3,4,5].map(i => <SkeletonMetricCard key={i} theme={theme} />)
@@ -1427,10 +1461,10 @@ function DashboardContent() {
         </div>
 
         {/* ====== 双列布局 ====== */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
           {/* 请求时间线 */}
-                    <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+                    <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
 
                       {showSkeleton ? <SkeletonTimeline theme={theme} /> : <>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -1510,7 +1544,7 @@ function DashboardContent() {
                     </div>
 
           {/* 模型分布 + HTTP 状态分布 */}
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🧬 模型路由分布
@@ -1556,7 +1590,7 @@ function DashboardContent() {
                       </div>
                     </div>
                   );
-                }) : <EmptyCard emoji="📭" text="暂无模型数据" theme={theme} />}
+                }) : <EmptyCard emoji="📭" text="暂无模型数据" sub="模型在首次请求后才会出现在这里" tips="发送一次 API 调用即可激活模型统计" theme={theme} />}
               </div>
               {/* HTTP 状态迷你饼图 */}
               {errors?.statusBreakdown && (() => {
@@ -1761,7 +1795,7 @@ function DashboardContent() {
         </>}</div>
 
         {/* ====== 最近请求（全宽） ====== */}
-        <div style={{ borderRadius: '16px', padding: '20px', marginBottom: '20px', ...theme.card }}>
+        <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
           {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3,4,5].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1793,15 +1827,15 @@ function DashboardContent() {
                       color={label.color} theme={theme} />
                   );
                 })
-              : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} theme={theme} />}
+              : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} sub={selectedModel ? '切换到「全部模型」可查看所有请求' : '当你发送 API 请求后，这里会实时显示'} tips={selectedModel ? '试试切换模型筛选' : '请求数据每 30 秒自动刷新'} theme={theme} />}
           </div>
           </>}
         </div>
 
         {/* ====== 双列：错误日志 + status 码 ====== */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
           {/* 错误日志 */}
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
             {showSkeleton ? <div>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1844,12 +1878,12 @@ function DashboardContent() {
                         color={label.color} theme={theme} />
                     );
                   })
-                : <EmptyCard emoji="✅" text="今日无错误，一切正常" theme={theme} />}
+                : <EmptyCard emoji="✅" text="今日无错误，一切正常" sub="系统运行状态良好，继续保持" tips="有拦截或错误请求时会自动记录在此" theme={theme} />}
             </div>
           </>}</div>
 
           {/* HTTP 状态码速查 + Gemini/Redis 状态 */}
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card }}>
+          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🔗 系统状态
@@ -1939,7 +1973,7 @@ function DashboardContent() {
 
         {/* ====== Cherry 集群状态 ====== */}
         {cherry && (
-          <div style={{ borderRadius: '16px', padding: '20px', ...theme.card, marginBottom: '20px' }}>
+          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card, marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 🍒 Cherry 集群状态
@@ -1956,7 +1990,7 @@ function DashboardContent() {
             </div>
             
             {/* 节点列表 */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(280px, 1fr))', gap: isMobile ? '8px' : '12px' }}>
               {cherry.nodes?.map((node, i) => (
                 <div key={node.id} style={{
                   padding: '14px', borderRadius: '10px',
