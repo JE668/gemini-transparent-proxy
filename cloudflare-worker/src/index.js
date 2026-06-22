@@ -355,10 +355,9 @@ export default {
         cache: 'no-store',
       }, startTime);
 
-      // === 模型降级：Google 503 high demand → 自动切换更小模型 ===
-      if (response.status === 503 && isOpenAICompat && requestBodyText) {
-        const respText = await response.text();
-        if (isHighDemand503(respText)) {
+      // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
+      if ((response.status === 503 || response.status === 524) && isOpenAICompat && requestBodyText) {
+        if (response.status === 524 || isHighDemand503(await response.text())) {
           const originalModel = JSON.parse(requestBodyText).model;
           const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
           if (fallbackModel) {
@@ -372,19 +371,14 @@ export default {
             }, startTime);
             logRequest(reqId, request.method, pathname, fallbackResp.status, Date.now() - startTime,
               `fallback ${originalModel} → ${fallbackModel}`);
-            if (fallbackResp.status !== 503) {
-              response = fallbackResp; // 直接用降级响应
-              modelId = fallbackModel; // 遥测按实际消耗的模型统计
+            if (fallbackResp.status !== 503 && fallbackResp.status !== 524) {
+              response = fallbackResp;
+              modelId = fallbackModel;
             } else {
-              // 降级也 503，恢复原响应（body 已被 text() 消费，重建）
+              // 降级也失败，重建原响应
               const origHeaders = buildResponseHeaders(response);
-              response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
+              response = new Response('', { status: response.status, statusText: response.statusText, headers: origHeaders });
             }
-          }
-          // 无降级模型可试，body 已被消费，重建原 503 响应
-          if (response.status === 503 && response.bodyUsed) {
-            const origHeaders = buildResponseHeaders(response);
-            response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
           }
         }
       }

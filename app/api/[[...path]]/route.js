@@ -349,10 +349,9 @@ async function handleRequest(req) {
       cache: 'no-store',
     }, startTime);
 
-    // === 模型降级：Google 503 high demand → 自动切换更小模型 ===
-    if (response.status === 503 && isOpenAICompat && body) {
-      const respText = await response.text();
-      if (isHighDemand503(respText)) {
+    // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
+    if ((response.status === 503 || response.status === 524) && isOpenAICompat && body) {
+      if (response.status === 524 || isHighDemand503(await response.text())) {
         const originalModel = JSON.parse(body).model;
         const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
         if (fallbackModel) {
@@ -365,17 +364,13 @@ async function handleRequest(req) {
             cache: 'no-store',
           }, startTime);
           console.log(`[${reqId}] Model fallback: ${originalModel} → ${fallbackModel} (${fallbackResp.status})`);
-          if (fallbackResp.status !== 503) {
+          if (fallbackResp.status !== 503 && fallbackResp.status !== 524) {
             response = fallbackResp;
-            modelId = fallbackModel; // 配额按实际消耗的模型统计
+            modelId = fallbackModel;
           } else {
             const origHeaders = buildResponseHeaders(response, req, reqId);
-            response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
+            response = new Response('', { status: response.status, statusText: response.statusText, headers: origHeaders });
           }
-        }
-        if (response.status === 503 && response.bodyUsed) {
-          const origHeaders = buildResponseHeaders(response, req, reqId);
-          response = new Response(respText, { status: 503, statusText: response.statusText, headers: origHeaders });
         }
       }
     }
