@@ -63,6 +63,8 @@ const GOOGLE_OPENAI_BLOCKED = new Set([
   'include_reasoning',       // 部分客户端会发
   'store',                   // OpenAI 会发 store:false，Google 不认识
   'metadata',                // OpenAI 偶尔会发
+  'parallel_tool_calls',     // Google 不支持此字段
+  'response_format',         // 某些格式（如 json_schema）会导致 Google 500
 ]);
 
 // Google API 不支持 OpenAI 的某些参数，转发前清理掉

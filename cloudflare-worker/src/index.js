@@ -23,6 +23,8 @@ const GOOGLE_OPENAI_BLOCKED = new Set([
   'include_reasoning',       // 部分客户端会发
   'store',                   // OpenAI 会发 store:false，Google 不认识
   'metadata',                // OpenAI 偶尔会发
+  'parallel_tool_calls',     // Google 不支持此字段
+  'response_format',         // OpenAI 结构化输出（Google 可能不兼容）
 ]);
 
 const HOP_BY_HOP = new Set([
