@@ -215,7 +215,7 @@ export default {
     }
 
     // 限流检查（基于客户端 IP）
-    const clientIP = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
     if (!rateLimiter.check(clientIP)) {
       logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `rate-limited ${clientIP}`);
       return new Response(JSON.stringify({
@@ -288,6 +288,11 @@ export default {
 
       // --- 情况 1: 正常流式响应 ---
       if (upstreamBody && (contentType.includes('text/event-stream') || contentType.includes('application/x-ndjson'))) {
+        // 确保 SSE 响应头完整
+        if (!respHeaders.has('Cache-Control') || respHeaders.get('Cache-Control') === 'no-store') {
+          respHeaders.set('Cache-Control', 'no-cache');
+        }
+        respHeaders.set('X-Accel-Buffering', 'no');
         const { readable, writable } = new TransformStream();
         const writer = writable.getWriter();
         const reader = upstreamBody.getReader();
