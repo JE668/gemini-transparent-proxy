@@ -475,24 +475,24 @@ async function handleRequest(req) {
     try {
     const jsonStr = line.slice(6);
     const parsed = JSON.parse(jsonStr);
-    delete parsed.extra_content;
+    // 保留 extra_content，从 content 剥离 <thought> 块并迁移到 extra_content
     if (parsed.choices && Array.isArray(parsed.choices)) {
     for (const choice of parsed.choices) {
     if (choice.delta) {
-    delete choice.delta.extra_content;
     if (typeof choice.delta.content === 'string') {
     const raw = choice.delta.content;
-    const cleaned = raw
-    .replace(/<\/thought>/g, '')
-    .replace(/<thought[^>]*>/g, '');
-    if (raw.includes('<thought') || raw.includes('<\/thought>')) {
-    if (cleaned.trim().length > 0) {
+    let extracted = '';
+    const cleaned = raw.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
+    extracted += m.replace(/<\/?thought[^>]*>/g, '');
+    return '';
+    });
     choice.delta.content = cleaned;
+    if (extracted) {
+    if (choice.delta.extra_content) {
+    choice.delta.extra_content += '\n' + extracted;
     } else {
-    delete choice.delta.content;
+    choice.delta.extra_content = extracted;
     }
-    } else {
-    choice.delta.content = cleaned;
     }
     }
     }
@@ -583,8 +583,12 @@ async function handleRequest(req) {
     const responseData = responseText ? JSON.parse(responseText) : null;
     if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
     let replyContent = responseData.choices[0].message.content || '';
-    // 剥离 <thought> 内容
-    replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+    // 提取 <thought> 内容到 extra_content，再从正文剥离
+    let extraContent = '';
+    replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
+    extraContent += m.replace(/<\/?thought[^>]*>/g, '');
+    return '';
+    }).trim();
     const createdAt = responseData.created || Math.floor(Date.now() / 1000);
     const model = responseData.model || modelId || 'unknown';
     const id = responseData.id || 'chatcmpl-' + Date.now();
@@ -594,10 +598,17 @@ async function handleRequest(req) {
     // 切分 SSE chunks
     for (let i = 0; i < replyContent.length; i += CHUNK_SIZE) {
     const text = replyContent.slice(i, i + CHUNK_SIZE);
-    chunks.push('data: ' + JSON.stringify({
-    choices: [{ delta: { content: text, role: 'assistant' }, index: 0 }],
+    const chunkBody = {
+    choices: [{
+    delta: { content: text, role: 'assistant' },
+    index: 0
+    }],
     created: createdAt, id, model, object: 'chat.completion.chunk'
-    }) + '\n\n');
+    };
+    if (extraContent) {
+    chunkBody.choices[0].extra_content = extraContent;
+    }
+    chunks.push('data: ' + JSON.stringify(chunkBody) + '\n\n');
     }
     // 结束标记
     chunks.push('data: ' + JSON.stringify({

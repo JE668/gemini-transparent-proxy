@@ -224,24 +224,26 @@ export default {
                   try {
                     const jsonStr = line.slice(6);
                     const parsed = JSON.parse(jsonStr);
-                    delete parsed.extra_content;
+                    // 保留 extra_content（Gemini 可能把思考内容放在这个字段），
+                    // 同时从 content 剥离 <thought> 标签及其内容，
+                    // 提取出的思考内容追加到 extra_content，供客户端识别
                     if (parsed.choices && Array.isArray(parsed.choices)) {
                       for (const choice of parsed.choices) {
                         if (choice.delta) {
-                          delete choice.delta.extra_content;
                           if (typeof choice.delta.content === 'string') {
                             const raw = choice.delta.content;
-                            const cleaned = raw
-                              .replace(/<\/thought>/g, '')
-                              .replace(/<thought[^>]*>/g, '');
-                            if (raw.includes('<thought') || raw.includes('<\/thought>')) {
-                              if (cleaned.trim().length > 0) {
-                                choice.delta.content = cleaned;
+                            let extracted = '';
+                            const cleaned = raw.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
+                              extracted += m.replace(/<\/?thought[^>]*>/g, '');
+                              return '';
+                            });
+                            choice.delta.content = cleaned;
+                            if (extracted) {
+                              if (choice.delta.extra_content) {
+                                choice.delta.extra_content += '\n' + extracted;
                               } else {
-                                delete choice.delta.content;
+                                choice.delta.extra_content = extracted;
                               }
-                            } else {
-                              choice.delta.content = cleaned;
                             }
                           }
                         }
