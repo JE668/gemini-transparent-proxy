@@ -44,7 +44,8 @@ export async function GET() {
     const pipeline = getRedis()?.pipeline();
     for (const modelId of allModelIds) {
       pipeline.get(`quota:${date}:${modelId}`);
-      pipeline.get(`avgLatency:${date}:${modelId}`);
+      pipeline.get(`latencySum:${date}:${modelId}`);
+      pipeline.get(`latencyCount:${date}:${modelId}`);
     }
     // 批量获取状态码计数
     const statusCodes = [200, 400, 401, 403, 404, 429, 500, 502, 503];
@@ -57,17 +58,15 @@ export async function GET() {
     const quotaData = [];
     for (let i = 0; i < allModelIds.length; i++) {
       const modelId = allModelIds[i];
-      const used = results[i * 2] || 0;
-      const avgLatencyRaw = results[i * 2 + 1];
+      const base = i * 3;
+      const used = results[base] || 0;
+      const latencySum = parseInt(results[base + 1]) || 0;
+      const latencyCount = parseInt(results[base + 2]) || 0;
       const limit = limitMap[modelId] || 1500;
       const percent = parseFloat(((used / limit) * 100).toFixed(2));
 
-      // 从 avgLatency key 读取: "count:avg" 格式
-      let avgLatency = null;
-      if (avgLatencyRaw && typeof avgLatencyRaw === 'string') {
-        const parts = avgLatencyRaw.split(':');
-        avgLatency = parseInt(parts[1]) || null;
-      }
+      // 平均延迟 = sum / count
+      const avgLatency = latencyCount > 0 ? Math.round(latencySum / latencyCount) : null;
 
       quotaData.push({
         model: modelId,
@@ -82,7 +81,7 @@ export async function GET() {
     quotaData.sort((a, b) => b.used - a.used);
 
     // 计算全局错误率
-    const statusOffset = allModelIds.length * 2;
+    const statusOffset = allModelIds.length * 3; // 3 pipeline cmds per model: quota + latencySum + latencyCount
     let totalRequests = 0;
     let totalErrors = 0;
     for (let i = 0; i < statusCodes.length; i++) {

@@ -15,12 +15,6 @@ export async function GET() {
     const date = getQuotaDate();
     const yesterday = getYesterdayDate();
 
-    // 获取今天和昨天的数据
-    const [todayHours, yesterdayHours] = await Promise.all([
-      redis?.smembers(`timeline:${date}:hours`),
-      redis?.smembers(`timeline:${yesterday}:hours`),
-    ]);
-
     // 并行拉取今天和昨天每个小时的计数
     const todayPipeline = redis?.pipeline();
     const yesterdayPipeline = redis?.pipeline();

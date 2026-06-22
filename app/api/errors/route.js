@@ -5,7 +5,7 @@ import getRedis from '../../../lib/redis';
 export async function GET() {
   try {
     const date = getQuotaDate();
-    const rawEntries = await getRedis()?.lrange(`errors:${date}`, 0, 19);
+    const rawEntries = (await getRedis()?.lrange(`errors:${date}`, 0, 19)) || [];
 
     const errors = rawEntries.map(entry => {
       try {
