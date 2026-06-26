@@ -1,3 +1,5 @@
+import { handleResponses } from './responses.js';
+
 /**
  * Gemini Transparent Proxy — Cloudflare Workers Edition (Ultra-Compatible Version)
  * 
@@ -282,6 +284,17 @@ export default {
       return new Response(JSON.stringify(MODELS), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+      });
+    }
+
+    // ── Responses API (Codex 客户端) ──
+    if (pathname === '/v1/responses' && request.method === 'POST') {
+      logRequest(reqId, request.method, pathname, 200, 0, 'responses-api');
+      return handleResponses(request, env);
+    }
+    if (pathname === '/v1/responses' && request.method === 'GET') {
+      return new Response(JSON.stringify({ endpoint: '/v1/responses', methods: ['POST'], streaming: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders() },
       });
     }
 

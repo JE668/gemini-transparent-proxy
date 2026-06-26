@@ -8,6 +8,7 @@ import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 
 import { getQuotaDate } from '../../../lib/utils';
 import { getRedis } from '../../../lib/redis';
+import { handleResponsesApi } from '../../../lib/responses-handler';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -214,6 +215,18 @@ async function handleRequest(req) {
       'Content-Type': 'application/json',
       ...getCorsHeaders(req),
       }
+      });
+    }
+
+    // ── Responses API (Codex 客户端) ──
+    if ((pathname === '/v1/responses' || pathname === '/api/v1/responses') && req.method === 'POST') {
+      console.log(`[${reqId}] Responses API detected, delegating`);
+      return handleResponsesApi(req, reqId);
+    }
+    if ((pathname === '/v1/responses' || pathname === '/api/v1/responses') && req.method === 'GET') {
+      return new Response(JSON.stringify({ endpoint: '/v1/responses', methods: ['POST'], streaming: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
       });
     }
 
