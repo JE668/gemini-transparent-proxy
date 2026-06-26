@@ -66,11 +66,21 @@ function convertTools(tools) {
   for (const t of tools) {
     const kind = t.type || '';
     if (kind === 'function') {
-      out.push(t.function ? t : { type: 'function', function: t });
+      const srcFn = t.function || t;
+      const fn = {};
+      for (const k of ['name', 'description', 'parameters', 'strict']) {
+        if (k in srcFn) fn[k] = srcFn[k];
+      }
+      out.push({ type: 'function', function: fn });
     } else if (kind === 'namespace') {
       for (const sub of (t.tools || [])) {
         if (sub.type === 'function') {
-          out.push(sub.function ? sub : { type: 'function', function: sub });
+          const srcFn = sub.function || sub;
+          const fn = {};
+          for (const k of ['name', 'description', 'parameters', 'strict']) {
+            if (k in srcFn) fn[k] = srcFn[k];
+          }
+          out.push({ type: 'function', function: fn });
         }
       }
     }
