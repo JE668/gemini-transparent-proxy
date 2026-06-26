@@ -437,6 +437,54 @@ async function handleRequest(req) {
     let leftover = ''; // 跨 chunk 的残片段
     let thoughtBuffer = ''; // 跨 SSE 事件的 <thought> 标签缓冲
     let inThought = false; // 是否正在累积 <thought> 块
+    let thoughtTag = ''; // 当前正在处理的标签类型
+
+    // 统一的 thought 标签剥离函数
+    // 支持：<thought>...</thought> 和 <|thought>...<|/thought>
+    function stripThought(raw) {
+      let reasoning = '';
+      let content = '';
+      if (inThought) {
+        const closeTag = thoughtTag === '<|thought>' ? '<|/thought>' : '</thought>';
+        const endIdx = raw.indexOf(closeTag);
+        if (endIdx >= 0) {
+          thoughtBuffer += raw.slice(0, endIdx);
+          reasoning = thoughtBuffer;
+          thoughtBuffer = '';
+          inThought = false;
+          thoughtTag = '';
+          const after = raw.slice(endIdx + closeTag.length);
+          if (after) content = after;
+        } else {
+          thoughtBuffer += raw;
+        }
+      } else {
+        let startIdx = raw.indexOf('<thought>');
+        let detectedTag = '<thought>';
+        if (startIdx < 0) {
+          startIdx = raw.indexOf('<|thought>');
+          detectedTag = '<|thought>';
+        }
+        if (startIdx >= 0) {
+          content = raw.slice(0, startIdx);
+          const afterTag = raw.slice(startIdx + detectedTag.length);
+          const closeTag = detectedTag === '<|thought>' ? '<|/thought>' : '</thought>';
+          const endIdx = afterTag.indexOf(closeTag);
+          if (endIdx >= 0) {
+            reasoning = afterTag.slice(0, endIdx);
+            const after = afterTag.slice(endIdx + closeTag.length);
+            if (after) content += after;
+          } else {
+            inThought = true;
+            thoughtTag = detectedTag;
+            thoughtBuffer = afterTag;
+          }
+        } else {
+          content = raw;
+        }
+      }
+      return { reasoning, content };
+    }
 
         const processLines = (chunk) => {
     leftover += chunk;
@@ -456,49 +504,7 @@ async function handleRequest(req) {
     if (choice.delta) {
     if (typeof choice.delta.content === 'string') {
     let raw = choice.delta.content;
-    let reasoning = '';
-    let content = '';
-    
-    if (inThought) {
-    // 正在累积 <thought> 块，寻找结束标签
-    const endIdx = raw.indexOf('</thought>');
-    if (endIdx >= 0) {
-    // 找到结束标签
-    thoughtBuffer += raw.slice(0, endIdx);
-    reasoning = thoughtBuffer;
-    thoughtBuffer = '';
-    inThought = false;
-    // 处理结束标签后的内容
-    const after = raw.slice(endIdx + '</thought>'.length);
-    if (after) content = after;
-    } else {
-    // 还没找到结束标签，继续累积
-    thoughtBuffer += raw;
-    // 不输出任何内容，等结束标签
-    }
-    } else {
-    // 不在 <thought> 块中，检测是否有新的 <thought> 开始
-    const startIdx = raw.indexOf('<thought>');
-    if (startIdx >= 0) {
-    // 找到开始标签
-    content = raw.slice(0, startIdx);
-    const afterTag = raw.slice(startIdx + '<thought>'.length);
-    const endIdx = afterTag.indexOf('</thought>');
-    if (endIdx >= 0) {
-    // 同一个 delta 内有完整的 <thought> 块
-    reasoning = afterTag.slice(0, endIdx);
-    const after = afterTag.slice(endIdx + '</thought>'.length);
-    if (after) content += after;
-    } else {
-    // <thought> 块未结束，开始累积
-    inThought = true;
-    thoughtBuffer = afterTag;
-    }
-    } else {
-    // 没有 <thought> 标签，直接输出
-    content = raw;
-    }
-    }
+    const { reasoning, content } = stripThought(raw);
     
     choice.delta.content = content;
     if (reasoning) {
@@ -538,6 +544,14 @@ async function handleRequest(req) {
     if (leftover) {
     controller.enqueue(encoder.encode(leftover));
     }
+    // 流正常结束时，如果有未闭合的 <thought> 缓冲，必须 flush
+    if (inThought && thoughtBuffer) {
+    try {
+    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
+    choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
+    }) + '\n'));
+    } catch {}
+    }
     controller.close();
     return;
     }
@@ -549,6 +563,14 @@ async function handleRequest(req) {
     // 刷新残留的 leftover 数据
     if (leftover) {
     try { controller.enqueue(encoder.encode(leftover + '\n')); } catch {}
+    }
+    // 流被中断时，如果有未闭合的 <thought> 缓冲，先 flush 为 reasoning_content
+    if (inThought && thoughtBuffer) {
+    try {
+    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
+    choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
+    }) + '\n'));
+    } catch {}
     }
     // 流被中断，先发一条合成 finish_reason 事件
     // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"

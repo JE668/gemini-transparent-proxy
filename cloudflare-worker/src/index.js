@@ -463,6 +463,61 @@ export default {
         let aborted = false;
         let thoughtBuffer = '';
         let inThought = false;
+        let thoughtTag = ''; // 当前正在处理的标签类型：'<thought>' 或 '<|thought>'
+
+        // 统一的 thought 标签剥离函数
+        // 支持两种格式：<thought>...</thought> 和 <|thought>...<|/thought>
+        // 返回 { reasoning, content }
+        function stripThought(raw) {
+          let reasoning = '';
+          let content = '';
+
+          if (inThought) {
+            // 寻找闭合标签：</thought> 或 <|/thought>
+            const closeTag = thoughtTag === '<|thought>' ? '<|/thought>' : '</thought>';
+            const endIdx = raw.indexOf(closeTag);
+            if (endIdx >= 0) {
+              thoughtBuffer += raw.slice(0, endIdx);
+              reasoning = thoughtBuffer;
+              thoughtBuffer = '';
+              inThought = false;
+              thoughtTag = '';
+              const after = raw.slice(endIdx + closeTag.length);
+              if (after) content = after;
+            } else {
+              thoughtBuffer += raw;
+            }
+          } else {
+            // 检测开始标签
+            let startIdx = raw.indexOf('<thought>');
+            let detectedTag = '<thought>';
+            if (startIdx < 0) {
+              startIdx = raw.indexOf('<|thought>');
+              detectedTag = '<|thought>';
+            }
+            if (startIdx >= 0) {
+              content = raw.slice(0, startIdx);
+              const afterTag = raw.slice(startIdx + detectedTag.length);
+              const closeTag = detectedTag === '<|thought>' ? '<|/thought>' : '</thought>';
+              const endIdx = afterTag.indexOf(closeTag);
+              if (endIdx >= 0) {
+                // 同一 delta 内闭合
+                reasoning = afterTag.slice(0, endIdx);
+                const after = afterTag.slice(endIdx + closeTag.length);
+                if (after) content += after;
+              } else {
+                // 跨 delta，进入缓冲模式
+                inThought = true;
+                thoughtTag = detectedTag;
+                thoughtBuffer = afterTag;
+              }
+            } else {
+              content = raw;
+            }
+          }
+
+          return { reasoning, content };
+        }
 
         const streamPromise = (async () => {
           const decoder = new TextDecoder();
@@ -491,39 +546,7 @@ export default {
                         if (choice.delta) {
                           if (typeof choice.delta.content === 'string') {
                             let raw = choice.delta.content;
-                            let reasoning = '';
-                            let content = '';
-
-                            if (inThought) {
-                              const endIdx = raw.indexOf('</thought>');
-                              if (endIdx >= 0) {
-                                thoughtBuffer += raw.slice(0, endIdx);
-                                reasoning = thoughtBuffer;
-                                thoughtBuffer = '';
-                                inThought = false;
-                                const after = raw.slice(endIdx + '</thought>'.length);
-                                if (after) content = after;
-                              } else {
-                                thoughtBuffer += raw;
-                              }
-                            } else {
-                              const startIdx = raw.indexOf('<thought>');
-                              if (startIdx >= 0) {
-                                content = raw.slice(0, startIdx);
-                                const afterTag = raw.slice(startIdx + '<thought>'.length);
-                                const endIdx = afterTag.indexOf('</thought>');
-                                if (endIdx >= 0) {
-                                  reasoning = afterTag.slice(0, endIdx);
-                                  const after = afterTag.slice(endIdx + '</thought>'.length);
-                                  if (after) content += after;
-                                } else {
-                                  inThought = true;
-                                  thoughtBuffer = afterTag;
-                                }
-                              } else {
-                                content = raw;
-                              }
-                            }
+                            const { reasoning, content } = stripThought(raw);
 
                             choice.delta.content = content;
                             if (reasoning) {
@@ -559,6 +582,16 @@ export default {
             if (leftover) {
               try { await writer.write(encoder.encode(leftover + '\n')); } catch {}
             }
+            // 流被中断时，如果有未闭合的 <thought> 缓冲，先 flush 为 reasoning_content
+            if (inThought && thoughtBuffer) {
+              try {
+                await writer.write(encoder.encode('data: ' + JSON.stringify({
+                  choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
+                }) + '\n'));
+              } catch {}
+              thoughtBuffer = '';
+              inThought = false;
+            }
             // 流被中断，发一条合成 finish_reason 事件
             // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"
             try {
@@ -567,6 +600,15 @@ export default {
               }) + '\n'));
             } catch {}
           } finally {
+            // 流正常结束时，如果有未闭合的 <thought> 缓冲，也必须 flush
+            // 否则思考内容会丢失，或更糟——作为裸文本泄漏到下一个请求
+            if (inThought && thoughtBuffer) {
+              try {
+                await writer.write(encoder.encode('data: ' + JSON.stringify({
+                  choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
+                }) + '\n'));
+              } catch {}
+            }
             await writer.close();
             reader.cancel().catch(() => {});
           }
