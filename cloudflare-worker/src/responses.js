@@ -281,6 +281,12 @@ export async function handleResponsesStream(env, inBody, chatBody, apiKey) {
       const decoder = new TextDecoder();
       let leftover = '';
 
+      // <thought> 跨 chunk 缓冲状态机
+      let inThought = false;
+      let contentBuffer = '';
+      const OPEN_TAG = '<thought>';
+      const CLOSE_TAG = '</thought>';
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -321,35 +327,102 @@ export async function handleResponsesStream(env, inBody, chatBody, apiKey) {
               })));
             }
 
-            // text content
-            const content = delta.content || '';
-            if (content) {
-              if (!emittedMessageItem) {
-                if (emittedReasoningItem) {
-                  await writer.write(encoder.encode(sseEvent('response.reasoning_summary_text.done', {
-                    type: 'response.reasoning_summary_text.done', item_id: reasoningItemId,
-                    output_index: 0, summary_index: 0, text: accumulatedReasoning,
-                  })));
-                  await writer.write(encoder.encode(sseEvent('response.reasoning_summary_part.done', {
-                    type: 'response.reasoning_summary_part.done', item_id: reasoningItemId,
-                    output_index: 0, summary_index: 0, part: { type: 'summary_text', text: accumulatedReasoning },
-                  })));
-                  await writer.write(encoder.encode(sseEvent('response.output_item.done', {
-                    type: 'response.output_item.done', output_index: 0,
-                    item: { type: 'reasoning', id: reasoningItemId, summary: [{ type: 'summary_text', text: accumulatedReasoning }] },
-                  })));
+            // text content (可能包含 <thought> 标签)
+            const rawContent = delta.content || '';
+            if (rawContent) {
+              contentBuffer += rawContent;
+              let processedContent = '';
+              let processedReasoning = '';
+
+              while (contentBuffer.length > 0) {
+                if (inThought) {
+                  const closeIdx = contentBuffer.indexOf(CLOSE_TAG);
+                  if (closeIdx !== -1) {
+                    processedReasoning += contentBuffer.slice(0, closeIdx);
+                    contentBuffer = contentBuffer.slice(closeIdx + CLOSE_TAG.length);
+                    inThought = false;
+                  } else {
+                    const partialClose = contentBuffer.lastIndexOf('<');
+                    if (partialClose !== -1 && CLOSE_TAG.startsWith(contentBuffer.slice(partialClose))) {
+                      processedReasoning += contentBuffer.slice(0, partialClose);
+                      contentBuffer = contentBuffer.slice(partialClose);
+                      break;
+                    } else {
+                      processedReasoning += contentBuffer;
+                      contentBuffer = '';
+                    }
+                  }
+                } else {
+                  const openIdx = contentBuffer.indexOf(OPEN_TAG);
+                  if (openIdx !== -1) {
+                    processedContent += contentBuffer.slice(0, openIdx);
+                    contentBuffer = contentBuffer.slice(openIdx + OPEN_TAG.length);
+                    inThought = true;
+                  } else {
+                    const partialOpen = contentBuffer.lastIndexOf('<');
+                    if (partialOpen !== -1 && OPEN_TAG.startsWith(contentBuffer.slice(partialOpen))) {
+                      processedContent += contentBuffer.slice(0, partialOpen);
+                      contentBuffer = contentBuffer.slice(partialOpen);
+                      break;
+                    } else {
+                      processedContent += contentBuffer;
+                      contentBuffer = '';
+                    }
+                  }
                 }
-                await writer.write(encoder.encode(sseEvent('response.output_item.added', {
-                  type: 'response.output_item.added', output_index: msgOutputIndex,
-                  item: { type: 'message', id: msgItemId, role: 'assistant', status: 'in_progress', content: [] },
-                })));
-                emittedMessageItem = true;
               }
-              accumulatedText += content;
-              await writer.write(encoder.encode(sseEvent('response.output_text.delta', {
-                type: 'response.output_text.delta', item_id: msgItemId,
-                output_index: msgOutputIndex, delta: content,
-              })));
+
+              // 发射 reasoning
+              if (processedReasoning) {
+                if (!emittedReasoningItem) {
+                  reasoningOutputIndex = 0;
+                  msgOutputIndex = 1;
+                  await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                    type: 'response.output_item.added', output_index: 0,
+                    item: { type: 'reasoning', id: reasoningItemId, summary: [] },
+                  })));
+                  await writer.write(encoder.encode(sseEvent('response.reasoning_summary_part.added', {
+                    type: 'response.reasoning_summary_part.added', item_id: reasoningItemId,
+                    output_index: 0, summary_index: 0, part: { type: 'summary_text', text: '' },
+                  })));
+                  emittedReasoningItem = true;
+                }
+                accumulatedReasoning += processedReasoning;
+                await writer.write(encoder.encode(sseEvent('response.reasoning_summary_text.delta', {
+                  type: 'response.reasoning_summary_text.delta', item_id: reasoningItemId,
+                  output_index: 0, summary_index: 0, delta: processedReasoning,
+                })));
+              }
+
+              // 发射 text content
+              if (processedContent) {
+                if (!emittedMessageItem) {
+                  if (emittedReasoningItem) {
+                    await writer.write(encoder.encode(sseEvent('response.reasoning_summary_text.done', {
+                      type: 'response.reasoning_summary_text.done', item_id: reasoningItemId,
+                      output_index: 0, summary_index: 0, text: accumulatedReasoning,
+                    })));
+                    await writer.write(encoder.encode(sseEvent('response.reasoning_summary_part.done', {
+                      type: 'response.reasoning_summary_part.done', item_id: reasoningItemId,
+                      output_index: 0, summary_index: 0, part: { type: 'summary_text', text: accumulatedReasoning },
+                    })));
+                    await writer.write(encoder.encode(sseEvent('response.output_item.done', {
+                      type: 'response.output_item.done', output_index: 0,
+                      item: { type: 'reasoning', id: reasoningItemId, summary: [{ type: 'summary_text', text: accumulatedReasoning }] },
+                    })));
+                  }
+                  await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                    type: 'response.output_item.added', output_index: msgOutputIndex,
+                    item: { type: 'message', id: msgItemId, role: 'assistant', status: 'in_progress', content: [] },
+                  })));
+                  emittedMessageItem = true;
+                }
+                accumulatedText += processedContent;
+                await writer.write(encoder.encode(sseEvent('response.output_text.delta', {
+                  type: 'response.output_text.delta', item_id: msgItemId,
+                  output_index: msgOutputIndex, delta: processedContent,
+                })));
+              }
             }
 
             // tool calls
