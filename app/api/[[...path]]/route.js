@@ -422,6 +422,8 @@ async function handleRequest(req) {
     const reader = upstreamBody.getReader();
     let aborted = false;
     let leftover = ''; // 跨 chunk 的残片段
+    let thoughtBuffer = ''; // 跨 SSE 事件的 <thought> 标签缓冲
+    let inThought = false; // 是否正在累积 <thought> 块
 
         const processLines = (chunk) => {
     leftover += chunk;
@@ -433,30 +435,71 @@ async function handleRequest(req) {
     try {
     const jsonStr = line.slice(6);
     const parsed = JSON.parse(jsonStr);
-    // 保留 extra_content，从 content 剥离 <thought> 块并迁移到 extra_content
+    // 从 content 剥离 <thought> 块，迁移到标准的 reasoning_content 字段
+    // qclaw/workbuddy 等客户端通过 delta.reasoning_content 识别思考过程
+    // 处理跨 SSE 事件的 <thought> 标签：可能被 Google 分成多个 delta
     if (parsed.choices && Array.isArray(parsed.choices)) {
     for (const choice of parsed.choices) {
     if (choice.delta) {
     if (typeof choice.delta.content === 'string') {
-    const raw = choice.delta.content;
-    let extracted = '';
-    const cleaned = raw.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
-    extracted += m.replace(/<\/?thought[^>]*>/g, '');
-    return '';
-    });
-    choice.delta.content = cleaned;
-    if (extracted) {
-    if (choice.delta.extra_content) {
-    choice.delta.extra_content += '\n' + extracted;
+    let raw = choice.delta.content;
+    let reasoning = '';
+    let content = '';
+    
+    if (inThought) {
+    // 正在累积 <thought> 块，寻找结束标签
+    const endIdx = raw.indexOf('</thought>');
+    if (endIdx >= 0) {
+    // 找到结束标签
+    thoughtBuffer += raw.slice(0, endIdx);
+    reasoning = thoughtBuffer;
+    thoughtBuffer = '';
+    inThought = false;
+    // 处理结束标签后的内容
+    const after = raw.slice(endIdx + '</thought>'.length);
+    if (after) content = after;
     } else {
-    choice.delta.extra_content = extracted;
+    // 还没找到结束标签，继续累积
+    thoughtBuffer += raw;
+    // 不输出任何内容，等结束标签
+    }
+    } else {
+    // 不在 <thought> 块中，检测是否有新的 <thought> 开始
+    const startIdx = raw.indexOf('<thought>');
+    if (startIdx >= 0) {
+    // 找到开始标签
+    content = raw.slice(0, startIdx);
+    const afterTag = raw.slice(startIdx + '<thought>'.length);
+    const endIdx = afterTag.indexOf('</thought>');
+    if (endIdx >= 0) {
+    // 同一个 delta 内有完整的 <thought> 块
+    reasoning = afterTag.slice(0, endIdx);
+    const after = afterTag.slice(endIdx + '</thought>'.length);
+    if (after) content += after;
+    } else {
+    // <thought> 块未结束，开始累积
+    inThought = true;
+    thoughtBuffer = afterTag;
+    }
+    } else {
+    // 没有 <thought> 标签，直接输出
+    content = raw;
+    }
+    }
+    
+    choice.delta.content = content;
+    if (reasoning) {
+    if (choice.delta.reasoning_content) {
+    choice.delta.reasoning_content += reasoning;
+    } else {
+    choice.delta.reasoning_content = reasoning;
     }
     }
     }
     }
     }
     }
-    const hasContent = parsed.choices.some(c => c.delta && c.delta.content !== undefined);
+    const hasContent = parsed.choices.some(c => c.delta && (c.delta.content !== undefined || c.delta.reasoning_content !== undefined));
     // ⚠️ finish_reason 在 choice 层（choice.finish_reason），不是 choice.delta.finish_reason
     // Google 返回的最后一条 SSE 的 finish_reason 是在 choice 级，
     // 检查 c.delta.finish_reason 永远为 undefined → 事件被丢弃 → 流结束无 finish_reason
@@ -544,10 +587,10 @@ async function handleRequest(req) {
     const responseData = responseText ? JSON.parse(responseText) : null;
     if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
     let replyContent = responseData.choices[0].message.content || '';
-    // 提取 <thought> 内容到 extra_content，再从正文剥离
-    let extraContent = '';
+    // 提取 <thought> 内容到 reasoningContent，再从正文剥离
+    let reasoningContent = '';
     replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
-    extraContent += m.replace(/<\/?thought[^>]*>/g, '');
+    reasoningContent += m.replace(/<\/?thought[^>]*>/g, '');
     return '';
     }).trim();
     const createdAt = responseData.created || Math.floor(Date.now() / 1000);
@@ -556,20 +599,29 @@ async function handleRequest(req) {
     const encoder = new TextEncoder();
     const CHUNK_SIZE = 50;
     const chunks = [];
-    // 切分 SSE chunks
+    // 先发思考内容（reasoning_content 字段），客户端会渲染到思考框
+    if (reasoningContent) {
+    for (let i = 0; i < reasoningContent.length; i += CHUNK_SIZE) {
+    const text = reasoningContent.slice(i, i + CHUNK_SIZE);
+    chunks.push('data: ' + JSON.stringify({
+    choices: [{
+    delta: { reasoning_content: text, role: 'assistant' },
+    index: 0
+    }],
+    created: createdAt, id, model, object: 'chat.completion.chunk'
+    }) + '\n\n');
+    }
+    }
+    // 再发正文内容（content 字段）
     for (let i = 0; i < replyContent.length; i += CHUNK_SIZE) {
     const text = replyContent.slice(i, i + CHUNK_SIZE);
-    const chunkBody = {
+    chunks.push('data: ' + JSON.stringify({
     choices: [{
     delta: { content: text, role: 'assistant' },
     index: 0
     }],
     created: createdAt, id, model, object: 'chat.completion.chunk'
-    };
-    if (extraContent) {
-    chunkBody.choices[0].extra_content = extraContent;
-    }
-    chunks.push('data: ' + JSON.stringify(chunkBody) + '\n\n');
+    }) + '\n\n');
     }
     // 结束标记
     chunks.push('data: ' + JSON.stringify({

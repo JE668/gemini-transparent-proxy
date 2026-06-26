@@ -448,6 +448,8 @@ export default {
         const writer = writable.getWriter();
         const reader = upstreamBody.getReader();
         let aborted = false;
+        let thoughtBuffer = '';
+        let inThought = false;
 
         const streamPromise = (async () => {
           const decoder = new TextDecoder();
@@ -468,32 +470,61 @@ export default {
                   try {
                     const jsonStr = line.slice(6);
                     const parsed = JSON.parse(jsonStr);
-                    // 保留 extra_content（Gemini 可能把思考内容放在这个字段），
-                    // 同时从 content 剥离 <thought> 标签及其内容，
-                    // 提取出的思考内容追加到 extra_content，供客户端识别
+                    // 从 content 剥离 <thought> 标签，迁移到标准的 reasoning_content 字段
+                    // qclaw/workbuddy 等客户端通过 delta.reasoning_content 识别思考过程
+                    // 处理跨 SSE 事件的 <thought> 标签：可能被 Google 分成多个 delta
                     if (parsed.choices && Array.isArray(parsed.choices)) {
                       for (const choice of parsed.choices) {
                         if (choice.delta) {
                           if (typeof choice.delta.content === 'string') {
-                            const raw = choice.delta.content;
-                            let extracted = '';
-                            const cleaned = raw.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
-                              extracted += m.replace(/<\/?thought[^>]*>/g, '');
-                              return '';
-                            });
-                            choice.delta.content = cleaned;
-                            if (extracted) {
-                              if (choice.delta.extra_content) {
-                                choice.delta.extra_content += '\n' + extracted;
+                            let raw = choice.delta.content;
+                            let reasoning = '';
+                            let content = '';
+
+                            if (inThought) {
+                              const endIdx = raw.indexOf('</thought>');
+                              if (endIdx >= 0) {
+                                thoughtBuffer += raw.slice(0, endIdx);
+                                reasoning = thoughtBuffer;
+                                thoughtBuffer = '';
+                                inThought = false;
+                                const after = raw.slice(endIdx + '</thought>'.length);
+                                if (after) content = after;
                               } else {
-                                choice.delta.extra_content = extracted;
+                                thoughtBuffer += raw;
+                              }
+                            } else {
+                              const startIdx = raw.indexOf('<thought>');
+                              if (startIdx >= 0) {
+                                content = raw.slice(0, startIdx);
+                                const afterTag = raw.slice(startIdx + '<thought>'.length);
+                                const endIdx = afterTag.indexOf('</thought>');
+                                if (endIdx >= 0) {
+                                  reasoning = afterTag.slice(0, endIdx);
+                                  const after = afterTag.slice(endIdx + '</thought>'.length);
+                                  if (after) content += after;
+                                } else {
+                                  inThought = true;
+                                  thoughtBuffer = afterTag;
+                                }
+                              } else {
+                                content = raw;
+                              }
+                            }
+
+                            choice.delta.content = content;
+                            if (reasoning) {
+                              if (choice.delta.reasoning_content) {
+                                choice.delta.reasoning_content += reasoning;
+                              } else {
+                                choice.delta.reasoning_content = reasoning;
                               }
                             }
                           }
                         }
                       }
                     }
-                    const hasContent = parsed.choices?.some(c => c.delta?.content !== undefined);
+                    const hasContent = parsed.choices?.some(c => c.delta?.content !== undefined || c.delta?.reasoning_content !== undefined);
                     // ⚠️ finish_reason 在 choice 层，不在 choice.delta 里！
                     // 如果检查 c.delta?.finish_reason 会永远返回 undefined，
                     // 导致最后一条 SSE 事件被静默丢弃→流结束无 finish_reason→Hermes 报"empty stream"
