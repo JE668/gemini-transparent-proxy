@@ -68,7 +68,7 @@ function convertTools(tools) {
     if (kind === 'function') {
       const srcFn = t.function || t;
       const fn = {};
-      for (const k of ['name', 'description', 'parameters', 'strict']) {
+      for (const k of ['name', 'description', 'parameters']) {
         if (k in srcFn) fn[k] = srcFn[k];
       }
       out.push({ type: 'function', function: fn });
@@ -77,7 +77,7 @@ function convertTools(tools) {
         if (sub.type === 'function') {
           const srcFn = sub.function || sub;
           const fn = {};
-          for (const k of ['name', 'description', 'parameters', 'strict']) {
+          for (const k of ['name', 'description', 'parameters']) {
             if (k in srcFn) fn[k] = srcFn[k];
           }
           out.push({ type: 'function', function: fn });
@@ -175,7 +175,9 @@ function buildChatBody(model, messages, body) {
   }
   if (body.stream) {
     chatBody.stream = true;
-    chatBody.stream_options = { include_usage: true };
+    // Google 的 OpenAI 兼容端点不支持 stream_options，会报 500
+    // 只有 OpenAI / Azure 才需要这个字段
+    // chatBody.stream_options = { include_usage: true };
   }
   const rawEffort = body.reasoning_effort || (typeof body.reasoning === 'object' ? body.reasoning?.effort : '');
   if (rawEffort) chatBody.reasoning_effort = rawEffort;
@@ -602,9 +604,12 @@ export async function handleResponses(request, env) {
   if (historyMessages.length > 0) {
     const systemMsgs = chatBody.messages.filter(m => m.role === 'system');
     const nonSystemMsgs = chatBody.messages.filter(m => m.role !== 'system');
+    // 注意：历史中 assistant 消息的 reasoning_content 不再嵌入到 content 里
+    // 之前做法：`<thought>xxx</thought>` + content — 传给 Google 可能触发 500
+    // 现在是直接保持原始字段，responsesToChat 会处理 reasoning 类型 item
     for (const msg of historyMessages) {
       if (msg.role === 'assistant' && msg.reasoning_content) {
-        msg.content = `<thought>${msg.reasoning_content}</thought>\n\n${msg.content || ''}`.trim();
+        // reasoning_content 会由 responsesToChat 中的 reasoning item 处理
         delete msg.reasoning_content;
       }
     }
