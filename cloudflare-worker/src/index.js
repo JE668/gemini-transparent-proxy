@@ -373,10 +373,12 @@ export default {
         }
       }
 
+      // 如果启用了 QClaw 兼容模式（stream=true → 非流式），用改写后的 body
+      const fetchBody = qclawCompatStreamBody || body;
       let response = await fetchWithRetry(targetUrl, {
         method: request.method,
         headers,
-        body,
+        body: fetchBody,
         cache: 'no-store',
       }, startTime);
 
@@ -386,7 +388,7 @@ export default {
           const originalModel = JSON.parse(requestBodyText).model;
           const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
           if (fallbackModel) {
-            const newBody = JSON.parse(body);
+            const newBody = JSON.parse(fetchBody);
             newBody.model = fallbackModel;
             const fallbackResp = await fetchWithRetry(targetUrl, {
               method: request.method,
