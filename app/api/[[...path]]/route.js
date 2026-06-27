@@ -518,7 +518,7 @@ async function handleRequest(req) {
     }
     }
     }
-    const hasContent = parsed.choices.some(c => c.delta && (c.delta.content !== undefined || c.delta.reasoning_content !== undefined));
+    const hasContent = parsed.choices.some(c => c.delta && (c.delta.content !== undefined || c.delta.reasoning_content !== undefined || c.delta.tool_calls !== undefined));
     // ⚠️ finish_reason 在 choice 层（choice.finish_reason），不是 choice.delta.finish_reason
     // Google 返回的最后一条 SSE 的 finish_reason 是在 choice 级，
     // 检查 c.delta.finish_reason 永远为 undefined → 事件被丢弃 → 流结束无 finish_reason
@@ -621,7 +621,9 @@ async function handleRequest(req) {
     qclawCompatBody = responseText;  // ✅ 保存，后面 fallthrough 时用
     const responseData = responseText ? JSON.parse(responseText) : null;
     if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
-    let replyContent = responseData.choices[0].message.content || '';
+    const message = responseData.choices[0].message;
+    const finishReason = responseData.choices[0].finish_reason || 'stop';
+    let replyContent = message.content || '';
     // 提取 <thought> 内容到 reasoningContent，再从正文剥离
     let reasoningContent = '';
     replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
@@ -658,9 +660,51 @@ async function handleRequest(req) {
     created: createdAt, id, model, object: 'chat.completion.chunk'
     }) + '\n\n');
     }
-    // 结束标记
+    // 工具调用（tool_calls）：Google 返回非流式 JSON 时，tool_calls 在 message 层
+    const toolCalls = message.tool_calls;
+    if (toolCalls && toolCalls.length > 0) {
+      for (let idx = 0; idx < toolCalls.length; idx++) {
+        const tc = toolCalls[idx];
+        // 第一条：发送 id + type + function.name（不含 arguments）
+        chunks.push('data: ' + JSON.stringify({
+          choices: [{
+            delta: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                index: idx,
+                id: tc.id,
+                type: 'function',
+                function: { name: tc.function?.name || '', arguments: '' }
+              }]
+            },
+            index: 0
+          }],
+          created: createdAt, id, model, object: 'chat.completion.chunk'
+        }) + '\n\n');
+        // 第二条：发送 arguments（如果非空，按 CHUNK_SIZE 分段避免一次过大）
+        const args = tc.function?.arguments || '';
+        if (args) {
+          for (let j = 0; j < args.length; j += CHUNK_SIZE) {
+            chunks.push('data: ' + JSON.stringify({
+              choices: [{
+                delta: {
+                  tool_calls: [{
+                    index: idx,
+                    function: { arguments: args.slice(j, j + CHUNK_SIZE) }
+                  }]
+                },
+                index: 0
+              }],
+              created: createdAt, id, model, object: 'chat.completion.chunk'
+            }) + '\n\n');
+          }
+        }
+      }
+    }
+    // 结束标记（使用真实的 finish_reason，不是硬编码 'stop'）
     chunks.push('data: ' + JSON.stringify({
-    choices: [{ delta: { role: 'assistant' }, finish_reason: 'stop', index: 0 }],
+    choices: [{ delta: { role: 'assistant' }, finish_reason: finishReason, index: 0 }],
     created: createdAt, id, model, object: 'chat.completion.chunk'
     }) + '\n\n');
     chunks.push('data: [DONE]\n\n');

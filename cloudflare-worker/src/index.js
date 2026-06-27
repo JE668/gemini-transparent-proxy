@@ -560,7 +560,7 @@ export default {
                         }
                       }
                     }
-                    const hasContent = parsed.choices?.some(c => c.delta?.content !== undefined || c.delta?.reasoning_content !== undefined);
+                    const hasContent = parsed.choices?.some(c => c.delta?.content !== undefined || c.delta?.reasoning_content !== undefined || c.delta?.tool_calls !== undefined);
                     // ⚠️ finish_reason 在 choice 层，不在 choice.delta 里！
                     // 如果检查 c.delta?.finish_reason 会永远返回 undefined，
                     // 导致最后一条 SSE 事件被静默丢弃→流结束无 finish_reason→Hermes 报"empty stream"
