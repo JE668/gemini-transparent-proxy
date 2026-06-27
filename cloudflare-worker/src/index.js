@@ -52,6 +52,30 @@ function generateReqId() {
   return Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
 }
 
+/**
+ * 清洗 tools 中的 function 对象，只保留 Google 认识的字段。
+ * Hermes/Workbuddy 可能发 strict、type 等 OpenAI 特有字段，Google 不认识会 400。
+ */
+function cleanTools(tools) {
+  if (!tools || !Array.isArray(tools)) return tools;
+  return tools.map(tool => {
+    if (!tool || !tool.function) return tool;
+    const cleaned = {};
+    for (const key in tool) {
+      if (key !== 'function') {
+        cleaned[key] = tool[key];
+      }
+    }
+    // 只保留 name, description, parameters
+    const fn = {};
+    if (tool.function.name !== undefined) fn.name = tool.function.name;
+    if (tool.function.description !== undefined) fn.description = tool.function.description;
+    if (tool.function.parameters !== undefined) fn.parameters = tool.function.parameters;
+    cleaned.function = fn;
+    return cleaned;
+  });
+}
+
 /** 黑名单过滤：仅删除 Google 明确不支持的字段，其他全部透传 */
 function sanitizeOpenAIBodyStrict(body) {
   if (!body) return body;
@@ -62,6 +86,10 @@ function sanitizeOpenAIBodyStrict(body) {
       if (!GOOGLE_OPENAI_BLOCKED.has(key) && json[key] !== null) {
         cleaned[key] = json[key];
       }
+    }
+    // ⚠️ 递归清洗 tools[].function：只保留 name/description/parameters
+    if (cleaned.tools && Array.isArray(cleaned.tools)) {
+      cleaned.tools = cleanTools(cleaned.tools);
     }
     return JSON.stringify(cleaned);
   } catch {
