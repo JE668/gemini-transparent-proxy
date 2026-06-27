@@ -76,6 +76,9 @@ function buildTargetUrl(pathname, queryString) {
     targetPath = '/v1beta/openai/' + pathname.slice('/api/v1/'.length);
   } else if (pathname.startsWith('/v1/')) {
     targetPath = '/v1beta/openai/' + pathname.slice('/v1/'.length);
+  } else if (pathname.startsWith('/api/')) {
+    // Hermes/Workbuddy 有时发 /api/chat/completions（不带 v1 前缀）
+    targetPath = '/v1beta/openai/' + pathname.slice('/api/'.length);
   }
   return `${GOOGLE_API_BASE}${targetPath}${queryString || ''}`;
 }
@@ -344,6 +347,7 @@ export default {
       let originalStreamRequested = false;
       let requestBodyText = null; // 保存原始请求体，供模型降级用
       let modelId = 'unknown'; // 用于遥测的模型 ID
+      let qclawCompatStreamBody = null; // QClaw 兼容模式下改写的请求体（stream=false）
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         try {
           const text = await request.text();
@@ -355,6 +359,14 @@ export default {
             if (parsed.stream === true) originalStreamRequested = true;
             if (parsed.model) modelId = parsed.model;
             body = sanitizeOpenAIBodyStrict(body);
+            // QClaw 兼容：把 stream=true 改为非流式发给 Google
+            // 拿到完整 JSON 后再手动拆分为 SSE chunks（先 reasoning 后 content 后 tool_calls）
+            // 这样可以正确处理工具调用块和推理内容
+            if (originalStreamRequested) {
+              const qclawParsed = JSON.parse(body);
+              qclawParsed.stream = false;
+              qclawCompatStreamBody = JSON.stringify(qclawParsed);
+            }
           }
         } catch {
           body = '{}';
@@ -446,6 +458,114 @@ export default {
       const respHeaders = buildResponseHeaders(response);
       respHeaders.set('X-Request-Id', reqId);
       respHeaders.set('X-Proxy', 'cloudflare-workers');
+
+      // ═══════════════════════════════════════════════════════
+      // QClaw 兼容模式：客户端请求 stream=true，但已改为非流式发给 Google
+      // 收到完整 JSON 后，手动拆分为 SSE chunks
+      // 顺序：reasoning_content → content → tool_calls → finish_reason
+      // ═══════════════════════════════════════════════════════
+      if (originalStreamRequested && response.ok) {
+        try {
+          const responseText = await response.text();
+          const responseData = responseText ? JSON.parse(responseText) : null;
+          if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
+            const message = responseData.choices[0].message;
+            const finishReason = responseData.choices[0].finish_reason || 'stop';
+            let replyContent = message.content || '';
+            let reasoningContent = '';
+            replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
+              reasoningContent += m.replace(/<\/?thought[^>]*>/g, '');
+              return '';
+            }).trim();
+            const createdAt = responseData.created || Math.floor(Date.now() / 1000);
+            const model = responseData.model || modelId || 'unknown';
+            const id = responseData.id || 'chatcmpl-' + Date.now();
+            const encoder = new TextEncoder();
+            const CHUNK_SIZE = 50;
+            const chunks = [];
+            // 1️⃣ 先发 reasoning_content chunks
+            if (reasoningContent) {
+              for (let i = 0; i < reasoningContent.length; i += CHUNK_SIZE) {
+                const text = reasoningContent.slice(i, i + CHUNK_SIZE);
+                chunks.push('data: ' + JSON.stringify({
+                  choices: [{ delta: { reasoning_content: text, role: 'assistant' }, index: 0 }],
+                  created: createdAt, id, model, object: 'chat.completion.chunk'
+                }) + '\n\n');
+              }
+            }
+            // 2️⃣ 再发 content chunks
+            for (let i = 0; i < replyContent.length; i += CHUNK_SIZE) {
+              const text = replyContent.slice(i, i + CHUNK_SIZE);
+              chunks.push('data: ' + JSON.stringify({
+                choices: [{ delta: { content: text, role: 'assistant' }, index: 0 }],
+                created: createdAt, id, model, object: 'chat.completion.chunk'
+              }) + '\n\n');
+            }
+            // 3️⃣ 工具调用（tool_calls）
+            const toolCalls = message.tool_calls;
+            if (toolCalls && toolCalls.length > 0) {
+              for (let idx = 0; idx < toolCalls.length; idx++) {
+                const tc = toolCalls[idx];
+                chunks.push('data: ' + JSON.stringify({
+                  choices: [{
+                    delta: {
+                      role: 'assistant',
+                      content: null,
+                      tool_calls: [{
+                        index: idx,
+                        id: tc.id,
+                        type: 'function',
+                        function: { name: tc.function?.name || '', arguments: '' }
+                      }]
+                    },
+                    index: 0
+                  }],
+                  created: createdAt, id, model, object: 'chat.completion.chunk'
+                }) + '\n\n');
+                const args = tc.function?.arguments || '';
+                if (args) {
+                  for (let j = 0; j < args.length; j += CHUNK_SIZE) {
+                    chunks.push('data: ' + JSON.stringify({
+                      choices: [{
+                        delta: {
+                          tool_calls: [{
+                            index: idx,
+                            function: { arguments: args.slice(j, j + CHUNK_SIZE) }
+                          }]
+                        },
+                        index: 0
+                      }],
+                      created: createdAt, id, model, object: 'chat.completion.chunk'
+                    }) + '\n\n');
+                  }
+                }
+              }
+            }
+            // 4️⃣ finish_reason
+            chunks.push('data: ' + JSON.stringify({
+              choices: [{ delta: { role: 'assistant' }, finish_reason: finishReason, index: 0 }],
+              created: createdAt, id, model, object: 'chat.completion.chunk'
+            }) + '\n\n');
+            chunks.push('data: [DONE]\n\n');
+            const qclawHeaders = new Headers({
+              'Content-Type': 'text/event-stream; charset=utf-8',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+              'X-Request-Id': reqId,
+              'X-Proxy': 'cloudflare-workers',
+              ...corsHeaders(),
+            });
+            logRequest(reqId, request.method, pathname, 200, Date.now() - startTime, 'qclaw-compat');
+            return new Response(encoder.encode(chunks.join('')), {
+              status: 200,
+              headers: qclawHeaders,
+            });
+          }
+        } catch (e) {
+          console.error(`[${reqId}] QClaw compat error: ${e.message}`);
+          // fall through to normal handling
+        }
+      }
 
       const upstreamBody = response.body;
       const contentType = response.headers.get('content-type') || '';
