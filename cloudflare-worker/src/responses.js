@@ -605,15 +605,26 @@ export async function handleResponses(request, env) {
     const systemMsgs = chatBody.messages.filter(m => m.role === 'system');
     const nonSystemMsgs = chatBody.messages.filter(m => m.role !== 'system');
     // 注意：历史中 assistant 消息的 reasoning_content 不再嵌入到 content 里
-    // 之前做法：`<thought>xxx</thought>` + content — 传给 Google 可能触发 500
-    // 现在是直接保持原始字段，responsesToChat 会处理 reasoning 类型 item
     for (const msg of historyMessages) {
       if (msg.role === 'assistant' && msg.reasoning_content) {
-        // reasoning_content 会由 responsesToChat 中的 reasoning item 处理
         delete msg.reasoning_content;
       }
     }
     chatBody.messages = [...systemMsgs, ...historyMessages, ...nonSystemMsgs];
+    // ⚠️ Google API 强制要求 tool 消息带 name 字段（函数名），否则 400/500
+    // 扫描合并后的所有消息，从前面最近的 assistant tool_calls 中按 call_id 查找
+    for (let i = 0; i < chatBody.messages.length; i++) {
+      const msg = chatBody.messages[i];
+      if (msg.role === 'tool' && !msg.name) {
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = chatBody.messages[j];
+          if (prev.role === 'assistant' && prev.tool_calls) {
+            const matched = prev.tool_calls.find(tc => tc.id === msg.tool_call_id);
+            if (matched) { msg.name = matched.function?.name || ''; break; }
+          }
+        }
+      }
+    }
   }
 
   // 提取 API Key
