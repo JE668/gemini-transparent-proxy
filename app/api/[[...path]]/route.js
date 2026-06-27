@@ -390,8 +390,8 @@ async function handleRequest(req) {
     }, startTime);
 
     // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
-    if ((response.status === 503 || response.status === 524) && isOpenAICompat && body) {
-      if (response.status === 524 || isHighDemand503(await response.text())) {
+    if ((response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && body) {
+      if (response.status === 524 || response.status === 500 || isHighDemand503(await response.text())) {
         const originalModel = JSON.parse(body).model;
         const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
         if (fallbackModel) {
@@ -404,7 +404,7 @@ async function handleRequest(req) {
             cache: 'no-store',
           }, startTime);
           console.log(`[${reqId}] Model fallback: ${originalModel} → ${fallbackModel} (${fallbackResp.status})`);
-          if (fallbackResp.status !== 503 && fallbackResp.status !== 524) {
+          if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524) {
             response = fallbackResp;
             modelId = fallbackModel;
           } else {
