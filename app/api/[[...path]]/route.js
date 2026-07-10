@@ -286,21 +286,46 @@ async function handleRequest(req) {
     // 获取 Redis 实例（如果环境变量缺失则返回 null）
     const redis = getRedis();
 
-    // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
+    // ---- 限流：每个 API Key 指纹 60 秒滑动窗口内最多 RATE_LIMIT_RPM 次请求 ----
+    // 用 Redis 有序集合(ZSET)日志法实现真正的滑动窗口，避免固定窗口在整分钟边界处的突发翻倍问题。
     const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '15', 10);
     if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon' && redis) {
-    // 按「分钟」分桶：Date.now()/60000 每 60 秒变化一次，实现真正的每分钟窗口
-    const minuteBucket = Math.floor(Date.now() / 60000);
-    const windowKey = `ratelimit:${clientFingerprint}:${minuteBucket}`;
-    const count = await redis.incr(windowKey);
-    if (count === 1) {
-    await redis.expire(windowKey, 120); // 最多保留 2 分钟
+    const WINDOW_MS = 60 * 1000;
+    const rlKey = `ratelimit:${clientFingerprint}`;
+    const nowMs = Date.now();
+    // Lua 脚本：原子化「清理过期 → 计数 → 判定 → 写入」，单次往返，避免并发竞态
+    // 被拒绝的请求不写入 ZSET，不会污染窗口计数
+    const rlScript = `
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local member = ARGV[4]
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+local count = redis.call('ZCARD', key)
+if count >= limit then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  return {1, oldest[2]}
+end
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, math.ceil(window / 1000) + 60)
+return {0, count + 1}
+`;
+    try {
+    const member = `${nowMs}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await redis.eval(rlScript, [rlKey], [String(nowMs), String(WINDOW_MS), String(RATE_LIMIT_RPM), member]);
+    const rejected = Array.isArray(res) && Number(res[0]) === 1;
+    if (rejected) {
+    // 最老一条何时滑出窗口 → 精确 Retry-After（秒），至少 1 秒
+    const oldestScore = Number(res[1]);
+    let retryAfter = 60;
+    if (Number.isFinite(oldestScore) && oldestScore > 0) {
+    retryAfter = Math.max(1, Math.ceil((oldestScore + WINDOW_MS - nowMs) / 1000));
     }
-    if (count > RATE_LIMIT_RPM) {
-    console.warn(`[${reqId}] Rate Limit: ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (current: ${count})`);
+    console.warn(`[${reqId}] Rate Limit: ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (retry after ${retryAfter}s)`);
     return new Response(JSON.stringify({
     error: {
-    message: `请求过于频繁，每分钟最多 ${RATE_LIMIT_RPM} 次，请稍后重试`,
+    message: `请求过于频繁，每分钟最多 ${RATE_LIMIT_RPM} 次，请 ${retryAfter} 秒后重试`,
     type: 'rate_limit_exceeded',
     code: 429
     }
@@ -308,10 +333,14 @@ async function handleRequest(req) {
     status: 429,
     headers: {
     'Content-Type': 'application/json',
-    'Retry-After': '60',
+    'Retry-After': String(retryAfter),
     ...getCorsHeaders(req),
     }
     });
+    }
+    } catch (e) {
+    // 限流基础设施异常时放行（fail-open），避免 Redis 故障拖垮正常请求
+    console.error(`[${reqId}] Rate limiter error (fail-open): ${e?.message || e}`);
     }
     }
 

@@ -372,7 +372,7 @@ CORS_ALLOWED_ORIGINS=https://your-frontend.com
 | 机制 | 说明 |
 |------|------|
 | **Dashboard 认证** | 密码 + Bearer Token，API 401 自动退回登录 |
-| **API 限流** | 基于 API Key SHA-1 指纹的每分钟固定窗口（Redis 计数），默认 15 RPM，可用 `RATE_LIMIT_RPM` 调整 / 设 `0` 关闭 |
+| **API 限流** | 基于 API Key SHA-1 指纹的 60 秒滑动窗口（Redis ZSET 日志法，无边界突发），默认 15 RPM，可用 `RATE_LIMIT_RPM` 调整 / 设 `0` 关闭；Redis 故障时自动放行（fail-open） |
 | **CF Worker 限流** | 基于 IP 的内存滑动窗口，60 RPM（与上面按 Key 的限流是独立的两层） |
 | **CORS 控制** | `CORS_ALLOWED_ORIGINS` 白名单，未配置时允许 `*` |
 | **错误脱敏** | 生产环境不暴露内部错误细节 |
