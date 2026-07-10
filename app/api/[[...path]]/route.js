@@ -430,19 +430,51 @@ async function handleRequest(req) {
   // 北京时间整点小时 (0-23)，用于时间线分桶
   const bjHour = (new Date().getUTCHours() + 8) % 24;
 
-  // 精简遥测：只写 3 个原子计数器 + timeline，无 expire/list/hash/sorted-set
-  // 每条请求 2~4 INCR，3K 请求/天约 8~12K 命令，适配免费层
+  // 遥测：状态码 + 时间线 + 配额 + 最近请求 + 错误日志
+  // 与 Cloudflare Worker 端写入相同的 key（recent:/errors:），
+  // 保证 Dashboard 「最近请求」「错误日志」面板在两种部署下都能正常显示
+  // 每条请求约 4~8 条命令（INCR×2~4 + LPUSH/LTRIM×1~2），3K 请求/天约 15~25K 命令，适配免费层
   const isSuccess = response.status < 400;
+  const nowIso = new Date().toISOString();
+
+  // 最近请求条目（Dashboard 「最近请求」面板，不论成败都记录）
+  const recentEntry = JSON.stringify({
+    ts: nowIso,
+    status: response.status,
+    model: finalModelId,
+    latency,
+    ua: userAgent,
+    ip: clientIP,
+  });
+
+  // 错误日志条目（Dashboard 「错误日志」面板，仅失败计入）
+  const errorEntry = JSON.stringify({
+    ts: nowIso,
+    status: response.status,
+    model: finalModelId,
+    latency,
+    message: `${response.status} ${response.statusText}`,
+    ua: userAgent,
+    ip: clientIP,
+  });
 
   const telemetryOps = redis ? [
     // 状态码（不论成败，用于错误率计算）
     redis.incr(`status:${date}:${response.status}`),
     // 时间线（不论成败，Dashboard 趋势图）
     redis.incr(`timeline:${date}:h${bjHour}`),
+    // 最近请求列表（不论成败，Dashboard 「最近请求」面板）
+    redis.lpush(`recent:${date}`, recentEntry),
+    redis.ltrim(`recent:${date}`, 0, 29),
     // 配额（仅成功计入，避免测试误触消耗配额）
     ...(isSuccess ? [
       redis.incr(`quota:${date}:${finalModelId}`),
       redis.incr(`quota:global:${date}`),
+    ] : []),
+    // 错误日志（仅失败计入，Dashboard 「错误日志」面板）
+    ...(response.status >= 400 ? [
+      redis.lpush(`errors:${date}`, errorEntry),
+      redis.ltrim(`errors:${date}`, 0, 19),
     ] : []),
   ] : [];
 
