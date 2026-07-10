@@ -224,14 +224,56 @@ curl https://your-domain/v1/responses \
 
 ---
 
-## 📋 支持的模型
+## 📋 免费层额度速查表
 
-| 模型 | 日配额 | RPM | 上下文 | 说明 |
-|------|--------|-----|--------|------|
-| `gemma-4-31b-it` | 1,500 | 15 | 256K | ⭐ 主力模型（Dense） |
-| `gemma-4-26b-a4b-it` | 1,500 | 15 | 256K | MoE 备选 |
+> 数据来源：`generativelanguage.googleapis.com` 控制台配额导出（2026-07-10 快照）+ Google ListModels（`GET /v1beta/models`）实测——每个模型名均为该 key 下**真实可调用**的 id（非配额统计维度名）。
+> RPM = 次/分钟，RPD = 次/天，TPM = 输入 token/分钟。数值为「该项目」快照，正式使用请以你控制台的实时配额为准。
 
-> 配额为 Google AI Studio 免费层级限制。代理在主力模型配额耗尽时自动降级。
+### 💬 文本对话（Chat Completions · `generateContent`）
+
+> `/v1/models` 目录仅列出这一类模型，可直接用作 `/v1/chat/completions` 与 `/v1/responses` 的 `model`。
+
+| 模型 | RPM | RPD | TPM(输入) | 说明 |
+|------|-----|-----|-----------|------|
+| `gemma-4-31b-it` | 15 | 1,500 | 无限 | ⭐ 主力（Dense），降级链首选 |
+| `gemma-4-26b-a4b-it` | 15 | 1,500 | 无限 | MoE 备选，降级链次选 |
+| `gemini-3.1-flash-lite` | 15 | 500 | 250,000 | 高频次备选 |
+| `gemini-2.5-pro` | 75 | 500 | 1,000,000 | 免费经 `1p-freebie` 特殊桶（基础额度为 0） |
+| `gemini-2.5-flash` | 5 | 20 | 250,000 | 降级链兜底 |
+| `gemini-2.5-flash-lite` | 10 | 20 | 250,000 | — |
+| `gemini-3.5-flash` | 5 | 20 | 250,000 | — |
+| `gemini-3-flash-preview` | 5 | 20 | 250,000 | Preview |
+| `gemini-2.5-flash-preview-tts` | 3 | 10 | 10,000 | 🔊 语音合成（TTS） |
+| `gemini-3.1-flash-tts-preview` | 3 | 10 | 10,000 | 🔊 语音合成（TTS） |
+
+### 🎨 图像生成（Imagen · `predict` 端点）
+
+> ⚠️ 走 `:predict` 端点，**不是** Chat Completions，需经 `/api/*` 原生透传调用；因端点形态不同，未纳入 `/v1/models` 目录。
+
+| 模型 | 免费额度 | 说明 |
+|------|----------|------|
+| `imagen-4.0-fast-generate-001` | 70 张/天 | 文生图，快速版 |
+| `imagen-4.0-generate-001` | 70 张/天 | 文生图，标准版 |
+| `imagen-4.0-ultra-generate-001` | 30 张/天 | 文生图，Ultra 版 |
+
+### 🧬 向量嵌入（Embedding · `embedContent` 端点）
+
+> ⚠️ 走 `:embedContent` 端点，需经 `/api/*` 原生透传调用；同样未纳入 `/v1/models` 目录。
+
+| 模型 | RPM | RPD | TPM(输入) |
+|------|-----|-----|-----------|
+| `gemini-embedding-001` | 100 | 1,000 | 30,000 |
+| `gemini-embedding-2` | 100 | 1,000 | 30,000 |
+
+### 🧭 各模态调用端点说明
+
+| 模态 | Google 端点 | 经代理调用方式 | 是否在 `/v1/models` |
+|------|-------------|----------------|:---:|
+| 文本对话 / TTS | `:generateContent` | `/v1/chat/completions`、`/v1/responses` | ✅ |
+| 图像 Imagen | `:predict` | `/api/v1beta/models/{model}:predict`（原生透传） | ❌ |
+| 向量 Embedding | `:embedContent` | `/api/v1beta/models/{model}:embedContent`（原生透传） | ❌ |
+
+> 代理在主力模型（`gemma-4-31b-it`）配额耗尽或上游 5xx 时，按 `gemma-4-31b-it → gemma-4-26b-a4b-it → gemini-2.5-flash` 自动降级。
 
 ---
 

@@ -43,6 +43,8 @@ const RESPONSE_BLOCKED = new Set([
 // 免费层可用模型目录（与 lib/models.js 的 HIGH_QUOTA_MODELS 保持 id 一致）。
 // 数据来源：控制台配额导出 + Google ListModels 实测（每个 id 均为该 key 下真实可调用名）。
 // 仅用于 /v1/models 对外展示，真实请求模型名来自客户端请求体。
+// 注：仅列出走文本 Chat Completions（generateContent）端点的模型；
+//     Imagen（predict）/ Embedding（embedContent）端点不同，详见 README「免费层额度速查表」。
 const MODELS = {
   object: 'list',
   data: [
@@ -50,13 +52,6 @@ const MODELS = {
     { id: 'gemma-4-31b-it', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemma-4-26b-a4b-it', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
-    // 嵌入 Embedding
-    { id: 'gemini-embedding-001', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-embedding-2', object: 'model', created: 1743561600, owned_by: 'google' },
-    // 图像 Imagen
-    { id: 'imagen-4.0-fast-generate-001', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'imagen-4.0-generate-001', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'imagen-4.0-ultra-generate-001', object: 'model', created: 1743561600, owned_by: 'google' },
     // 文本对话 · 低配额 (RPD 20)
     { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
