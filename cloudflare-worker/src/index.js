@@ -409,6 +409,8 @@ export default {
         body: fetchBody,
         cache: 'no-store',
       }, startTime);
+      // 累计本次请求发生的重试次数（主请求 + 可能的降级请求），用于 Dashboard 「重试」统计
+      let totalRetries = Number(response.retries) || 0;
 
       // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
       if ((response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && requestBodyText) {
@@ -424,6 +426,7 @@ export default {
               body: JSON.stringify(newBody),
               cache: 'no-store',
             }, startTime);
+            totalRetries += Number(fallbackResp.retries) || 0;
             logRequest(reqId, request.method, pathname, fallbackResp.status, Date.now() - startTime,
               `fallback ${originalModel} → ${fallbackModel}`);
             if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524) {
@@ -481,6 +484,24 @@ export default {
         telemetryCmds.push(
           ['INCR', `quota:${date}:${finalModelId}`],
           ['INCR', `quota:global:${date}`],
+        );
+      }
+      // 重试次数累加（仅发生过重试时计入，Dashboard 顶部「重试 N 次」徽标）
+      if (totalRetries > 0) {
+        telemetryCmds.push(['INCRBY', `retries:${date}`, totalRetries]);
+      }
+      // 慢请求（仅超阈值时计入，sorted set：score=延迟 ms，member=请求信息；只保留最慢的 50 条）
+      const SLOW_THRESHOLD_MS = 10000;
+      if (latency >= SLOW_THRESHOLD_MS) {
+        telemetryCmds.push(
+          ['ZADD', `slow:${date}`, latency, JSON.stringify({
+            ts: new Date().toISOString(),
+            status: response.status,
+            model: finalModelId,
+            ua,
+            ip: clientIP,
+          })],
+          ['ZREMRANGEBYRANK', `slow:${date}`, 0, -51],
         );
       }
       ctx.waitUntil(upstashPipe(env, telemetryCmds));

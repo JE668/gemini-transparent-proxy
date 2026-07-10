@@ -388,6 +388,8 @@ async function handleRequest(req) {
       body: requestBodyForFetch,
       cache: 'no-store',
     }, startTime);
+    // 累计本次请求发生的重试次数（主请求 + 可能的降级请求），用于 Dashboard 「重试」统计
+    let totalRetries = Number(response._retries) || 0;
 
     // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
     if ((response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && body) {
@@ -403,6 +405,7 @@ async function handleRequest(req) {
             body: JSON.stringify(newBody),
             cache: 'no-store',
           }, startTime);
+          totalRetries += Number(fallbackResp._retries) || 0;
           console.log(`[${reqId}] Model fallback: ${originalModel} → ${fallbackModel} (${fallbackResp.status})`);
           if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524) {
             response = fallbackResp;
@@ -458,6 +461,19 @@ async function handleRequest(req) {
     ip: clientIP,
   });
 
+  // 慢请求条目（Dashboard /api/recent slowRequests，sorted set：member=请求信息，score=延迟 ms）
+  // latency 会在 /api/recent 读取时由 score 回填，这里 member 只存请求元信息
+  const slowEntry = JSON.stringify({
+    ts: nowIso,
+    status: response.status,
+    model: finalModelId,
+    ua: userAgent,
+    ip: clientIP,
+  });
+
+  // 慢请求阈值（ms）：超过此值记入 slow sorted set
+  const SLOW_THRESHOLD_MS = 10000;
+
   const telemetryOps = redis ? [
     // 状态码（不论成败，用于错误率计算）
     redis.incr(`status:${date}:${response.status}`),
@@ -466,6 +482,15 @@ async function handleRequest(req) {
     // 最近请求列表（不论成败，Dashboard 「最近请求」面板）
     redis.lpush(`recent:${date}`, recentEntry),
     redis.ltrim(`recent:${date}`, 0, 29),
+    // 重试次数累加（仅发生过重试时计入，Dashboard 顶部「重试 N 次」徽标）
+    ...(totalRetries > 0 ? [
+      redis.incrby(`retries:${date}`, totalRetries),
+    ] : []),
+    // 慢请求（仅超阈值时计入，ZADD 后 ZREMRANGEBYRANK 只保留最慢的 50 条）
+    ...(latency >= SLOW_THRESHOLD_MS ? [
+      redis.zadd(`slow:${date}`, { score: latency, member: slowEntry }),
+      redis.zremrangebyrank(`slow:${date}`, 0, -51),
+    ] : []),
     // 配额（仅成功计入，避免测试误触消耗配额）
     ...(isSuccess ? [
       redis.incr(`quota:${date}:${finalModelId}`),
