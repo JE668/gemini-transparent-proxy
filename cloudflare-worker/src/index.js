@@ -40,11 +40,33 @@ const RESPONSE_BLOCKED = new Set([
   'keep-alive', 'strict-transport-security',
 ]);
 
+// 免费层可用模型目录（与 lib/models.js 的 HIGH_QUOTA_MODELS 保持一致）。
+// 数据来源：generativelanguage.googleapis.com 控制台配额导出。
+// 仅用于 /v1/models 对外展示，真实请求模型名来自客户端请求体。
 const MODELS = {
   object: 'list',
   data: [
+    // Gemma 4 (主力, 免费层 1,500 req/day)
     { id: 'gemma-4-31b-it', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemma-4-26b-a4b-it', object: 'model', created: 1743561600, owned_by: 'google' },
+    // Gemma 3 (RPM 30 | RPD 14,400 | TPM 15,000)
+    { id: 'gemma-3-1b', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemma-3-2b', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemma-3-4b', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemma-3-12b', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemma-3-27b', object: 'model', created: 1743561600, owned_by: 'google' },
+    // Gemini 2.5
+    { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-2.5-flash-tts', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-2.5-pro-1p-freebie', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-2.5-flash-exp', object: 'model', created: 1743561600, owned_by: 'google' },
+    // Gemini 3 / 3.5
+    { id: 'gemini-3-flash', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
+    // Gemini 3.1
+    { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3.1-flash-tts', object: 'model', created: 1743561600, owned_by: 'google' },
   ],
 };
 

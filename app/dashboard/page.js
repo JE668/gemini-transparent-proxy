@@ -32,9 +32,20 @@ const HTTP_STATUS_DESC = {
 };
 
 const MODEL_COLORS = {
+  // Gemma 4
   'gemma-4-31b-it': '#6366f1', 'gemma-4-26b-a4b-it': '#8b5cf6',
+  // Gemma 3
+  'gemma-3-27b': '#a78bfa', 'gemma-3-12b': '#c4b5fd', 'gemma-3-4b': '#ddd6fe',
+  'gemma-3-2b': '#e9d5ff', 'gemma-3-1b': '#f3e8ff',
   'gemma-3-27b-it': '#a78bfa', 'gemma-3-12b-it': '#c4b5fd',
-  'gemini-2.5-pro': '#ec4899', 'gemini-2.5-flash': '#10b981', 'default': '#6366f1'
+  // Gemini 2.5
+  'gemini-2.5-pro': '#ec4899', 'gemini-2.5-pro-1p-freebie': '#f472b6',
+  'gemini-2.5-flash': '#10b981', 'gemini-2.5-flash-lite': '#34d399',
+  'gemini-2.5-flash-exp': '#059669', 'gemini-2.5-flash-tts': '#6ee7b7',
+  // Gemini 3 / 3.1 / 3.5
+  'gemini-3-flash': '#0ea5e9', 'gemini-3.5-flash': '#38bdf8',
+  'gemini-3.1-flash-lite': '#7dd3fc', 'gemini-3.1-flash-tts': '#bae6fd',
+  'default': '#6366f1'
 };
 
 const getModelColor = (id) => MODEL_COLORS[id] || MODEL_COLORS.default;
