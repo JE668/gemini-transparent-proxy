@@ -1832,6 +1832,42 @@ function DashboardContent() {
           </>}
         </div>
 
+        {/* ====== 慢请求 TOP 10（全宽） ====== */}
+        <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
+          {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              🐢 慢请求 TOP 10
+            </h2>
+            {recent?.slowRequests?.length > 0 && (
+              <span style={{
+                fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                backgroundColor: '#f59e0b18', color: '#f59e0b',
+                border: '1px solid #f59e0b30', fontWeight: '600'
+              }}>
+                ≥ 10s · 共 {recent.slowRequests.length} 条
+              </span>
+            )}
+          </div>
+          <div style={{ maxHeight: '300px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
+            {recent?.slowRequests?.length > 0
+              ? recent.slowRequests.slice(0, 10).map((s, i) => {
+                  const uaInfo = s.ua ? parseUserAgent(s.ua) : null;
+                  const latColor = s.latency >= 20000 ? '#ef4444' : '#f59e0b';
+                  const latText = s.latency != null ? `${(s.latency / 1000).toFixed(1)}s` : '—';
+                  return (
+                    <LogRow key={i} time={formatTime(s.ts)} badge={latText}
+                      label={`${shortModel(s.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}`}
+                      badgeColor={latColor}
+                      sub={`${s.status != null ? s.status : ''}${s.ip ? ` · ${s.ip}` : ''}` || undefined}
+                      color={latColor} theme={theme} />
+                  );
+                })
+              : <EmptyCard emoji="⚡" text="暂无慢请求，响应都很快" sub="延迟 ≥ 10 秒的请求会记录在这里，最多保留最慢 50 条" tips="慢请求数据每 30 秒自动刷新" theme={theme} />}
+          </div>
+          </>}
+        </div>
+
         {/* ====== 双列：错误日志 + status 码 ====== */}
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
           {/* 错误日志 */}
