@@ -85,6 +85,7 @@ Gemma 4 模型在输出中通过 `<thought>...</thought>` 标签表达推理过�
 | `UPSTASH_REDIS_REST_TOKEN` | ✅ | Upstash Redis REST Token |
 | `DASHBOARD_PASSWORD` | ❌ | Dashboard 访问密码，不设置则无需认证 |
 | `CORS_ALLOWED_ORIGINS` | ❌ | CORS 允许的来源域名，逗号分隔 |
+| `RATE_LIMIT_RPM` | ❌ | 每个 API Key 指纹每分钟最大请求数，默认 `15`（对齐 Gemma 4 的 15 RPM），设为 `0` 关闭限流 |
 
 ---
 
@@ -204,7 +205,7 @@ curl https://your-domain/v1/responses \
 - **Upstash Redis** 实时请求计数、延迟追踪、错误率统计
 - **7 面板 Dashboard**：模型配额、请求时间线、来源分布、错误日志、最近请求、HTTP 状态码、重试统计
 - **移动端适配**：响应式布局，手机/平板/桌面均可使用
-- **安全防护**：Dashboard 密码认证、API 限流（10 RPM/fingerprint）、CORS 白名单、生产环境错误脱敏
+- **安全防护**：Dashboard 密码认证、API 限流（默认 15 RPM/fingerprint，可配置）、CORS 白名单、生产环境错误脱敏
 
 ---
 
@@ -371,8 +372,8 @@ CORS_ALLOWED_ORIGINS=https://your-frontend.com
 | 机制 | 说明 |
 |------|------|
 | **Dashboard 认证** | 密码 + Bearer Token，API 401 自动退回登录 |
-| **API 限流** | 基于 API Key SHA-1 指纹的 60s 滑动窗口，默认 10 RPM |
-| **CF Worker 限流** | 基于 IP 的内存滑动窗口，60 RPM |
+| **API 限流** | 基于 API Key SHA-1 指纹的每分钟固定窗口（Redis 计数），默认 15 RPM，可用 `RATE_LIMIT_RPM` 调整 / 设 `0` 关闭 |
+| **CF Worker 限流** | 基于 IP 的内存滑动窗口，60 RPM（与上面按 Key 的限流是独立的两层） |
 | **CORS 控制** | `CORS_ALLOWED_ORIGINS` 白名单，未配置时允许 `*` |
 | **错误脱敏** | 生产环境不暴露内部错误细节 |
 | **来源指纹** | 统计使用 SHA-1 前 8 位，不存储原始 API Key |

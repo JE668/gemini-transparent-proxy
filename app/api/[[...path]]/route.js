@@ -287,10 +287,11 @@ async function handleRequest(req) {
     const redis = getRedis();
 
     // ---- 限流：每指纹 60 秒窗口内最多 RATE_LIMIT_RPM 次请求 ----
-    const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '10', 10);
+    const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '15', 10);
     if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon' && redis) {
-    const now = Math.floor(Date.now() / 1000);
-    const windowKey = `ratelimit:${clientFingerprint}:${now}`;
+    // 按「分钟」分桶：Date.now()/60000 每 60 秒变化一次，实现真正的每分钟窗口
+    const minuteBucket = Math.floor(Date.now() / 60000);
+    const windowKey = `ratelimit:${clientFingerprint}:${minuteBucket}`;
     const count = await redis.incr(windowKey);
     if (count === 1) {
     await redis.expire(windowKey, 120); // 最多保留 2 分钟
