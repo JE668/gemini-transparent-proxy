@@ -40,33 +40,33 @@ const RESPONSE_BLOCKED = new Set([
   'keep-alive', 'strict-transport-security',
 ]);
 
-// 免费层可用模型目录（与 lib/models.js 的 HIGH_QUOTA_MODELS 保持一致）。
-// 数据来源：generativelanguage.googleapis.com 控制台配额导出。
+// 免费层可用模型目录（与 lib/models.js 的 HIGH_QUOTA_MODELS 保持 id 一致）。
+// 数据来源：控制台配额导出 + Google ListModels 实测（每个 id 均为该 key 下真实可调用名）。
 // 仅用于 /v1/models 对外展示，真实请求模型名来自客户端请求体。
 const MODELS = {
   object: 'list',
   data: [
-    // Gemma 4 (主力, 免费层 1,500 req/day)
+    // 文本对话 · 主力高配额
     { id: 'gemma-4-31b-it', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemma-4-26b-a4b-it', object: 'model', created: 1743561600, owned_by: 'google' },
-    // Gemma 3 (RPM 30 | RPD 14,400 | TPM 15,000)
-    { id: 'gemma-3-1b', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemma-3-2b', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemma-3-4b', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemma-3-12b', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemma-3-27b', object: 'model', created: 1743561600, owned_by: 'google' },
-    // Gemini 2.5
+    { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
+    // 嵌入 Embedding
+    { id: 'gemini-embedding-001', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-embedding-2', object: 'model', created: 1743561600, owned_by: 'google' },
+    // 图像 Imagen
+    { id: 'imagen-4.0-fast-generate-001', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'imagen-4.0-generate-001', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'imagen-4.0-ultra-generate-001', object: 'model', created: 1743561600, owned_by: 'google' },
+    // 文本对话 · 低配额 (RPD 20)
     { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-flash-tts', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-pro-1p-freebie', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-flash-exp', object: 'model', created: 1743561600, owned_by: 'google' },
-    // Gemini 3 / 3.5
-    { id: 'gemini-3-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
-    // Gemini 3.1
-    { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.1-flash-tts', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3-flash-preview', object: 'model', created: 1743561600, owned_by: 'google' },
+    // Pro (1p-freebie 特殊免费额度)
+    { id: 'gemini-2.5-pro', object: 'model', created: 1743561600, owned_by: 'google' },
+    // 语音合成 TTS (RPD 10)
+    { id: 'gemini-2.5-flash-preview-tts', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3.1-flash-tts-preview', object: 'model', created: 1743561600, owned_by: 'google' },
   ],
 };
 
