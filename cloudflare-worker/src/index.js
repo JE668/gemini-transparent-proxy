@@ -62,6 +62,10 @@ const MODELS = {
     // 语音合成 TTS (RPD 10)
     { id: 'gemini-2.5-flash-preview-tts', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.1-flash-tts-preview', object: 'model', created: 1743561600, owned_by: 'google' },
+    // Agent 模型（走 Interactions API）
+    { id: 'deep-research-preview-04-2026', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'deep-research-max-preview-04-2026', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'antigravity-preview-05-2026', object: 'model', created: 1743561600, owned_by: 'google' },
   ],
 };
 
@@ -342,6 +346,38 @@ export default {
     }
     if (pathname === '/v1/responses' && request.method === 'GET') {
       return new Response(JSON.stringify({ endpoint: '/v1/responses', methods: ['POST'], streaming: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+      });
+    }
+
+    // ── Interactions API 直连 ──
+    if (pathname === '/v1/interactions' && request.method === 'POST') {
+      const authHeader = request.headers.get('authorization') || '';
+      const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const inBody = await request.json();
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['x-goog-api-key'] = apiKey;
+
+      const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(inBody),
+      });
+
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '{}');
+        return new Response(errBody, { status: resp.status, headers: { 'Content-Type': 'application/json', ...corsHeaders() } });
+      }
+
+      const data = await resp.json();
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'X-Request-Id': reqId, ...corsHeaders() },
+      });
+    }
+    if (pathname === '/v1/interactions' && request.method === 'GET') {
+      return new Response(JSON.stringify({ endpoint: '/v1/interactions', methods: ['POST'], note: 'Direct Interactions API passthrough. For Codex Responses API, use /v1/responses instead.' }), {
         status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders() },
       });
     }

@@ -1,5 +1,6 @@
 // app/api/[[...path]]/route.js
 // Gemini 透明代理 - 鲁棒增强版 (带智能重试与遥测统计)
+// 增强: +Interactions API 代理 + Agent 模型自动路由
 
 export const runtime = 'nodejs';
 export const maxDuration = 60; // Hobby 上限 60s，Pro 上限 300s
@@ -9,6 +10,12 @@ import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
 import { getRedis } from '../../../lib/redis';
 import { handleResponsesApi } from '../../../lib/responses-handler';
+import {
+  responsesToInteraction,
+  interactionToResponses,
+  callInteractionsApi,
+  getInteractionId,
+} from '../../../lib/interactions';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -28,72 +35,25 @@ const BLOCKED_RESPONSE_HEADERS = [
 ];
 
 async function getRequestBody(req) {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return undefined;
-  try {
-    const text = await req.text();
-    return (text && text.trim() !== '') ? text : '{}';
-  } catch (e) {
-    return '{}';
+  const chunks = [];
+  const reader = req.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(decoder.decode(value, { stream: true }));
   }
+  return chunks.join('');
 }
 
-function cleanHeaders(headers) {
-  const clean = new Headers();
-  for (const [key, value] of headers.entries()) {
-    if (!HOP_BY_HOP_HEADERS.includes(key.toLowerCase())) {
-      clean.set(key, value);
-    }
-  }
-  return clean;
-}
-
-// Google Gemini OpenAI-compatible API 不支持的字段黑名单
-// 这些字段会被剥离后再转发给 Google API
 const GOOGLE_OPENAI_BLOCKED = new Set([
-  'stream_options',          // Google API 不认识
-  'reasoning_effort',        // OpenAI 推理强度
-  'frequency_penalty',       // Google 不支持
-  'presence_penalty',        // Google 不支持
-  'logit_bias',              // Google 不支持
-  'logprobs',                // Google 不支持
-  'top_logprobs',            // Google 不支持
-  'seed',                    // Google 不支持
-  'user',                    // Google 不支持
-  'service_tier',            // OpenAI 专用
-  'n',                       // Google 用 candidate_count 代替
-  'include_reasoning',       // 部分客户端会发
-  'store',                   // OpenAI 会发 store:false，Google 不认识
-  'metadata',                // OpenAI 偶尔会发
-  'parallel_tool_calls',     // Google 不支持此字段
-  'response_format',         // 某些格式（如 json_schema）会导致 Google 500
+  'stream_options', 'reasoning_effort', 'frequency_penalty', 'presence_penalty',
+  'logit_bias', 'logprobs', 'top_logprobs', 'seed', 'user', 'service_tier',
+  'n', 'include_reasoning', 'store', 'metadata', 'parallel_tool_calls', 'response_format',
 ]);
 
-// Google API 不支持 OpenAI 的某些参数，转发前清理掉
-/**
- * 清洗 tools 中的 function 对象，只保留 Google 认识的字段。
- * Hermes/Workbuddy 可能发 strict、type 等 OpenAI 特有字段，Google 不认识会 400。
- */
-function cleanTools(tools) {
-  if (!tools || !Array.isArray(tools)) return tools;
-  return tools.map(tool => {
-    if (!tool || !tool.function) return tool;
-    const cleaned = {};
-    for (const key in tool) {
-      if (key !== 'function') {
-        cleaned[key] = tool[key];
-      }
-    }
-    const fn = {};
-    if (tool.function.name !== undefined) fn.name = tool.function.name;
-    if (tool.function.description !== undefined) fn.description = tool.function.description;
-    if (tool.function.parameters !== undefined) fn.parameters = tool.function.parameters;
-    cleaned.function = fn;
-    return cleaned;
-  });
-}
-
 function sanitizeOpenAIBody(body) {
-  if (!body) return body;
+  if (!body || body === '{}') return body;
   try {
     const json = JSON.parse(body);
     const cleaned = {};
@@ -113,12 +73,26 @@ function sanitizeOpenAIBody(body) {
   }
 }
 
+function cleanTools(tools) {
+  return tools.map(tool => {
+    if (!tool || !tool.function) return tool;
+    const cleaned = {};
+    for (const key in tool) {
+      if (key !== 'function') cleaned[key] = tool[key];
+    }
+    const fn = {};
+    if (tool.function.name !== undefined) fn.name = tool.function.name;
+    if (tool.function.description !== undefined) fn.description = tool.function.description;
+    if (tool.function.parameters !== undefined) fn.parameters = tool.function.parameters;
+    cleaned.function = fn;
+    return cleaned;
+  });
+}
+
 function buildTargetUrl(pathname, search) {
   const rules = [
     { prefix: '/api/v1/', replacement: '/v1beta/openai/' },
     { prefix: '/v1/', replacement: '/v1beta/openai/' },
-    // 处理客户端发 POST /api/chat/completions（无 v1 前缀）
-    // Google API 不认识 /api/ 开头的路径，映射到 /v1beta/openai/
     { prefix: '/api/', replacement: '/v1beta/openai/' },
   ];
   let targetPath = pathname;
@@ -128,16 +102,12 @@ function buildTargetUrl(pathname, search) {
       break;
     }
   }
-  // 不过滤 query params — Google 会忽略不认识的参数
-  // 之前白名单太严导致 model 等字段被误杀，引发 400
   if (search) {
     return `${GOOGLE_API_BASE}${targetPath}${search}`;
   }
   return `${GOOGLE_API_BASE}${targetPath}`;
 }
 
-// CORS 来源控制：配置 CORS_ALLOWED_ORIGINS 环境变量后仅允许白名单域名
-// 未配置时保持向后兼容，允许所有来源（*）
 function getCorsHeaders(req) {
  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
  const reqOrigin = req.headers.get('origin') || '';
@@ -149,89 +119,124 @@ function getCorsHeaders(req) {
  'Access-Control-Allow-Origin': allowOrigin,
  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
  'Access-Control-Allow-Headers': '*',
+ 'Access-Control-Expose-Headers': 'X-Request-Id, Content-Type',
  };
 }
 
-function buildResponseHeaders(response, req, reqId = '') {
- const headers = new Headers();
- for (const [key, value] of response.headers.entries()) {
- if (!BLOCKED_RESPONSE_HEADERS.includes(key.toLowerCase())) {
- headers.set(key, value);
- }
- }
- const cors = getCorsHeaders(req);
- for (const [k, v] of Object.entries(cors)) {
- headers.set(k, v);
- }
- if (reqId) headers.set('X-Request-Id', reqId);
- return headers;
+function cleanHeaders(incomingHeaders) {
+  const h = new Headers();
+  const keepAuth = incomingHeaders.get('authorization');
+  incomingHeaders.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.includes(lower)) return;
+    if (lower === 'authorization') return;
+    // 不传 origin/referer — Google 校验 origin 有可能拦住
+    if (lower === 'origin' || lower === 'referer' || lower === 'referrer') return;
+    // 不传 content-length — fetch 会自动设置
+    if (lower === 'content-length') return;
+    // 不传 host — fetch 自动设置
+    if (lower === 'host') return;
+    h.set(key, value);
+  });
+  return h;
 }
 
-// 智能重试：仅对可重试的 502/503 重试，504 不重试（超时重试只会更慢）
-// 最大 2 次，backoff 0.5s, 1s
-const RETRYABLE_STATUSES = new Set([502, 503]);
+function buildResponseHeaders(response, req, reqId) {
+  const out = new Headers();
+  out.set('X-Request-Id', reqId);
+  const cors = getCorsHeaders(req);
+  for (const [k, v] of Object.entries(cors)) {
+    out.set(k, v);
+  }
+  response.headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (BLOCKED_RESPONSE_HEADERS.includes(lower)) return;
+    if (lower === 'x-request-id') return;
+    out.set(key, value);
+  });
+  return out;
+}
 
-/** 模型降级链：Google 503 high demand 时自动尝试更小模型 */
 const MODEL_FALLBACKS = {
-  'gemma-4-31b-it': 'gemma-4-26b-a4b-it',
-  'gemma-4-26b-a4b-it': 'gemini-2.5-flash',
+  'gemini-2.5-pro': 'gemma-4-31b-it',
+  'gemini-3-flash-preview': 'gemini-2.5-flash',
 };
 
-function isHighDemand503(bodyText) {
-  return bodyText.includes('UNAVAILABLE') || bodyText.includes('high demand');
+function isHighDemand503(text) {
+  if (!text) return false;
+  try {
+    const obj = JSON.parse(typeof text === 'string' ? text : '{}');
+    if (obj.error?.message?.includes('high demand')) return true;
+    if (obj.error?.status === 'UNAVAILABLE') return true;
+  } catch {}
+  return text.includes('high demand') || text.includes('UNAVAILABLE');
 }
 
-async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
-  let lastError;
-  let retries = 0;
-  const TIMEOUT_THRESHOLD = 25000; // 25秒阈值，确保重试后仍有足够时间，防止触发 Vercel 60s 504
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+async function fetchWithRetry(url, options, startTime, maxRetries = 2) {
+  let lastError = null;
+  const MAX_TOTAL_MS = 45000;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed >= MAX_TOTAL_MS) break;
     try {
-      const response = await fetch(url, options);
-      if (RETRYABLE_STATUSES.has(response.status)) {
-        const elapsed = Date.now() - startTime;
-        if (elapsed > TIMEOUT_THRESHOLD) {
-          console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}, but elapsed ${elapsed}ms > threshold. Skipping retry to avoid 504.`);
-          response._retries = retries;
-          return response;
-        }
-        console.warn(`[FetchRetry] Attempt ${attempt} got ${response.status}. Retrying...`);
-        retries++;
-        if (attempt < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, attempt * 500));
-          continue;
-        }
-      }
-      response._retries = retries;
-      return response;
-    } catch (error) {
-      lastError = error;
-      retries++;
-      const elapsed = Date.now() - startTime;
-      if (attempt < maxAttempts && elapsed < TIMEOUT_THRESHOLD) {
-        await new Promise(resolve => setTimeout(resolve, attempt * 500));
-      } else if (elapsed >= TIMEOUT_THRESHOLD) {
-        console.warn(`[FetchRetry] Catch error ${error.message}, but elapsed ${elapsed}ms > threshold. Skipping retry.`);
-        break;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.min(25000, MAX_TOTAL_MS - elapsed));
+      const resp = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeout);
+      resp._retries = attempt;
+      return resp;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[fetchWithRetry] attempt ${attempt + 1}/${maxRetries + 1} failed: ${err?.message || err}`);
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 5000)));
       }
     }
   }
-  throw lastError || new Error('Max retry attempts reached');
+  throw lastError || new Error('All retry attempts failed');
 }
 
-async function handleRequest(req) {
- const startTime = Date.now();
- // 请求级日志 ID：8 位 hex，方便追踪单次请求全链路
- const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
- 
- // 提取客户端信息
- const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() 
-               || req.headers.get('x-real-ip') 
+export async function GET(req) {
+  return new Response(JSON.stringify({
+    name: 'Gemini Transparent Proxy',
+    version: '2.0.0',
+    endpoints: {
+      chat: 'POST /v1/chat/completions',
+      responses: 'POST /v1/responses (Codex)',
+      interactions: 'POST /v1/interactions (direct)',
+      models: 'GET /v1/models',
+      quota: 'GET /api/quota',
+      debug: 'GET /api/debug',
+      recent: 'GET /api/recent',
+    },
+    features: [
+      'Models list (high-quota first)',
+      'Responses API (Codex) with session persistence',
+      'Interactions API (Agent models)',
+      'Rate limiting (Redis sliding window)',
+      'Model fallback on 503',
+      'Dashboard /api/* endpoints',
+    ],
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+  });
+}
+
+export async function OPTIONS(req) {
+  return new Response(null, { status: 204, headers: getCorsHeaders(req) });
+}
+
+export async function POST(req) {
+  const startTime = Date.now();
+  const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
+
+  const clientIP = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+               || req.headers.get('x-real-ip')
                || 'unknown';
- const userAgent = req.headers.get('user-agent') || 'unknown';
- 
- try {
+  const userAgent = req.headers.get('user-agent') || 'unknown';
+
+  try {
     const url = new URL(req.url);
     const { pathname, search } = url;
 
@@ -257,6 +262,46 @@ async function handleRequest(req) {
       });
     }
 
+    // ── Interactions API 直连 (new) ──
+    if ((pathname === '/v1/interactions' || pathname === '/api/v1/interactions') && req.method === 'POST') {
+      console.log(`[${reqId}] Interactions API detected`);
+      const rawBody = await getRequestBody(req);
+      const authHeader = req.headers.get('authorization') || '';
+      const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+      let interactionsBody = {};
+      try {
+        interactionsBody = JSON.parse(rawBody);
+      } catch {
+        return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+        });
+      }
+
+      const resp = await callInteractionsApi(interactionsBody, apiKey);
+
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '{}');
+        return new Response(errBody, {
+          status: resp.status,
+          headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+        });
+      }
+
+      const data = await resp.json();
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req), 'X-Request-Id': reqId },
+      });
+    }
+    if ((pathname === '/v1/interactions' || pathname === '/api/v1/interactions') && req.method === 'GET') {
+      return new Response(JSON.stringify({ endpoint: '/v1/interactions', methods: ['POST'], note: 'Direct Interactions API passthrough. For Codex Responses API, use /v1/responses instead.' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+      });
+    }
+
     let targetUrl = buildTargetUrl(pathname, search);
     const headers = cleanHeaders(req.headers);
 
@@ -267,14 +312,11 @@ async function handleRequest(req) {
     if (authHeader.startsWith('Bearer ')) {
     apiKey = authHeader.slice(7).trim();
     if (!isOpenAICompat) {
-      // Google 原生 API：用 ?key= 传 API Key
       const urlWithKey = new URL(targetUrl);
       urlWithKey.searchParams.set('key', apiKey);
       targetUrl = urlWithKey.toString();
       headers.delete('authorization');
     }
-    // OpenAI 兼容路径：保留 Authorization 头，不拼接 ?key=，避免双重认证
-    // 来源指纹（提前计算，限流也用）
     try {
     const keyData = new TextEncoder().encode(apiKey);
     const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
@@ -283,18 +325,13 @@ async function handleRequest(req) {
     } catch {}
     }
 
-    // 获取 Redis 实例（如果环境变量缺失则返回 null）
     const redis = getRedis();
 
-    // ---- 限流：每个 API Key 指纹 60 秒滑动窗口内最多 RATE_LIMIT_RPM 次请求 ----
-    // 用 Redis 有序集合(ZSET)日志法实现真正的滑动窗口，避免固定窗口在整分钟边界处的突发翻倍问题。
     const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '15', 10);
     if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon' && redis) {
     const WINDOW_MS = 60 * 1000;
     const rlKey = `ratelimit:${clientFingerprint}`;
     const nowMs = Date.now();
-    // Lua 脚本：原子化「清理过期 → 计数 → 判定 → 写入」，单次往返，避免并发竞态
-    // 被拒绝的请求不写入 ZSET，不会污染窗口计数
     const rlScript = `
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -316,7 +353,6 @@ return {0, count + 1}
     const res = await redis.eval(rlScript, [rlKey], [String(nowMs), String(WINDOW_MS), String(RATE_LIMIT_RPM), member]);
     const rejected = Array.isArray(res) && Number(res[0]) === 1;
     if (rejected) {
-    // 最老一条何时滑出窗口 → 精确 Retry-After（秒），至少 1 秒
     const oldestScore = Number(res[1]);
     let retryAfter = 60;
     if (Number.isFinite(oldestScore) && oldestScore > 0) {
@@ -339,14 +375,12 @@ return {0, count + 1}
     });
     }
     } catch (e) {
-    // 限流基础设施异常时放行（fail-open），避免 Redis 故障拖垮正常请求
     console.error(`[${reqId}] Rate limiter error (fail-open): ${e?.message || e}`);
     }
     }
 
     const body = await getRequestBody(req);
 
-    // 调试：记录请求信息到全局变量
     const reqHeaders = {};
     req.headers.forEach((v, k) => { if (k !== 'authorization') reqHeaders[k] = v; });
     globalThis.__LAST_REQUEST = {
@@ -359,7 +393,6 @@ return {0, count + 1}
       timestamp: new Date().toISOString()
     };
 
-    // 调试日志：记录收到的请求（仅日志不敏感字段）
     console.log(`[${reqId}] Request: ${req.method} ${pathname}`);
     if (body && body !== '{}') {
       try {
@@ -379,12 +412,10 @@ return {0, count + 1}
       } catch (e) {}
     }
     if (modelId === 'unknown') {
-      // 尝试从 URL 路径提取（如 /v1/models/gemma-4-31b-it）
       const modelMatch = targetUrl.match(/\/models\/([^/:]+)/);
       if (modelMatch && modelMatch[1]) {
         modelId = modelMatch[1];
       } else {
-        // 尝试从 query string 提取（如 ?model=gemma-4-31b-it）
         try {
           const urlObj = new URL(targetUrl);
           const queryModel = urlObj.searchParams.get('model');
@@ -393,11 +424,8 @@ return {0, count + 1}
       }
     }
 
-    // OpenAI 兼容路径下过滤 reasoning_effort，避免 Google API 报 400
     const sanitizedBody = isOpenAICompat ? sanitizeOpenAIBody(body) : body;
 
-    // QClaw 兼容：如果请求 stream=true，改为非流式发给 Google
-    // 收到完整响应后手动切回 SSE 流，避免 <thought> 和 extra_content 干扰客户端
     let originalStreamRequested = false;
     let requestBodyForFetch = sanitizedBody;
     if (sanitizedBody && sanitizedBody !== '{}') {
@@ -418,10 +446,8 @@ return {0, count + 1}
       body: requestBodyForFetch,
       cache: 'no-store',
     }, startTime);
-    // 累计本次请求发生的重试次数（主请求 + 可能的降级请求），用于 Dashboard 「重试」统计
     let totalRetries = Number(response._retries) || 0;
 
-    // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
     if ((response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && body) {
       if (response.status === 524 || response.status === 500 || isHighDemand503(await response.text())) {
         const originalModel = JSON.parse(body).model;
@@ -448,7 +474,6 @@ return {0, count + 1}
       }
     }
 
-    // 调试：记录上游响应状态
     globalThis.__LAST_RESPONSE = {
       status: response.status,
       statusText: response.statusText,
@@ -460,17 +485,11 @@ return {0, count + 1}
     const date = getQuotaDate();
     const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
 
-  // 北京时间整点小时 (0-23)，用于时间线分桶
   const bjHour = (new Date().getUTCHours() + 8) % 24;
 
-  // 遥测：状态码 + 时间线 + 配额 + 最近请求 + 错误日志
-  // 与 Cloudflare Worker 端写入相同的 key（recent:/errors:），
-  // 保证 Dashboard 「最近请求」「错误日志」面板在两种部署下都能正常显示
-  // 每条请求约 4~8 条命令（INCR×2~4 + LPUSH/LTRIM×1~2），3K 请求/天约 15~25K 命令，适配免费层
   const isSuccess = response.status < 400;
   const nowIso = new Date().toISOString();
 
-  // 最近请求条目（Dashboard 「最近请求」面板，不论成败都记录）
   const recentEntry = JSON.stringify({
     ts: nowIso,
     status: response.status,
@@ -480,7 +499,6 @@ return {0, count + 1}
     ip: clientIP,
   });
 
-  // 错误日志条目（Dashboard 「错误日志」面板，仅失败计入）
   const errorEntry = JSON.stringify({
     ts: nowIso,
     status: response.status,
@@ -491,8 +509,6 @@ return {0, count + 1}
     ip: clientIP,
   });
 
-  // 慢请求条目（Dashboard /api/recent slowRequests，sorted set：member=请求信息，score=延迟 ms）
-  // latency 会在 /api/recent 读取时由 score 回填，这里 member 只存请求元信息
   const slowEntry = JSON.stringify({
     ts: nowIso,
     status: response.status,
@@ -501,434 +517,158 @@ return {0, count + 1}
     ip: clientIP,
   });
 
-  // 慢请求阈值（ms）：超过此值记入 slow sorted set
   const SLOW_THRESHOLD_MS = 10000;
 
   const telemetryOps = redis ? [
-    // 状态码（不论成败，用于错误率计算）
     redis.incr(`status:${date}:${response.status}`),
-    // 时间线（不论成败，Dashboard 趋势图）
     redis.incr(`timeline:${date}:h${bjHour}`),
-    // 最近请求列表（不论成败，Dashboard 「最近请求」面板）
     redis.lpush(`recent:${date}`, recentEntry),
     redis.ltrim(`recent:${date}`, 0, 29),
-    // 重试次数累加（仅发生过重试时计入，Dashboard 顶部「重试 N 次」徽标）
     ...(totalRetries > 0 ? [
       redis.incrby(`retries:${date}`, totalRetries),
     ] : []),
-    // 慢请求（仅超阈值时计入，ZADD 后 ZREMRANGEBYRANK 只保留最慢的 50 条）
     ...(latency >= SLOW_THRESHOLD_MS ? [
       redis.zadd(`slow:${date}`, { score: latency, member: slowEntry }),
       redis.zremrangebyrank(`slow:${date}`, 0, -51),
     ] : []),
-    // 配额（仅成功计入，避免测试误触消耗配额）
     ...(isSuccess ? [
       redis.incr(`quota:${date}:${finalModelId}`),
       redis.incr(`quota:global:${date}`),
     ] : []),
-    // 错误日志（仅失败计入，Dashboard 「错误日志」面板）
-    ...(response.status >= 400 ? [
+    ...(!isSuccess ? [
       redis.lpush(`errors:${date}`, errorEntry),
-      redis.ltrim(`errors:${date}`, 0, 19),
+      redis.ltrim(`errors:${date}`, 0, 29),
     ] : []),
   ] : [];
 
- // 遥测 fire-and-forget，不阻塞响应
- const telemetryPromise = Promise.all(telemetryOps).catch(err => console.error(`[Redis Telemetry Error] ${err}`));
+  if (telemetryOps.length > 0) {
+    const results = await Promise.allSettled(telemetryOps);
+    const failures = results.filter(r => r.status === 'rejected').length;
+    if (failures > 0) console.warn(`[${reqId}] ${failures}/${telemetryOps.length} telemetry ops failed`);
+  }
 
-    // 流式响应：检测客户端断线，中止上游读取
-    const upstreamBody = response.body;
-    if (upstreamBody && response.headers.get('content-type')?.includes('text/event-stream')) {
-    // SSE 流式：不 await 遥测，fire-and-forget，避免阻塞 first byte
-    // Edge Runtime 在返回 Response 后不会立即冻结，遥测有足够时间完成
-    telemetryPromise.catch(() => {});
-    const decoder = new TextDecoder();
-    const encoder = new TextEncoder();
-    const transformed = new ReadableStream({
-    start(controller) {
-    const reader = upstreamBody.getReader();
-    let aborted = false;
-    let leftover = ''; // 跨 chunk 的残片段
-    let thoughtBuffer = ''; // 跨 SSE 事件的 <thought> 标签缓冲
-    let inThought = false; // 是否正在累积 <thought> 块
-    let thoughtTag = ''; // 当前正在处理的标签类型
+  const responseHeaders = buildResponseHeaders(response, req, reqId);
 
-    // 统一的 thought 标签剥离函数
-    // 支持：<thought>...</thought> 和 <|thought>...<|/thought>
-    function stripThought(raw) {
-      let reasoning = '';
-      let content = '';
-      if (inThought) {
-        const closeTag = thoughtTag === '<|thought>' ? '<|/thought>' : '</thought>';
-        const endIdx = raw.indexOf(closeTag);
-        if (endIdx >= 0) {
-          thoughtBuffer += raw.slice(0, endIdx);
-          reasoning = thoughtBuffer;
-          thoughtBuffer = '';
-          inThought = false;
-          thoughtTag = '';
-          const after = raw.slice(endIdx + closeTag.length);
-          if (after) content = after;
-        } else {
-          thoughtBuffer += raw;
+  if (originalStreamRequested && isSuccess) {
+    console.log(`[${reqId}] Streaming response to client (converted from non-streaming)`);
+    const text = await response.text();
+
+    if (text.startsWith('{')) {
+      try {
+        const jsonResponse = JSON.parse(text);
+        const streamContent = [];
+
+        // Gemini → OpenAI 流式格式转换
+        function createChunk(data) {
+          return `data: ${JSON.stringify(data)}\n\n`;
         }
-      } else {
-        let startIdx = raw.indexOf('<thought>');
-        let detectedTag = '<thought>';
-        if (startIdx < 0) {
-          startIdx = raw.indexOf('<|thought>');
-          detectedTag = '<|thought>';
-        }
-        if (startIdx >= 0) {
-          content = raw.slice(0, startIdx);
-          const afterTag = raw.slice(startIdx + detectedTag.length);
-          const closeTag = detectedTag === '<|thought>' ? '<|/thought>' : '</thought>';
-          const endIdx = afterTag.indexOf(closeTag);
-          if (endIdx >= 0) {
-            reasoning = afterTag.slice(0, endIdx);
-            const after = afterTag.slice(endIdx + closeTag.length);
-            if (after) content += after;
-          } else {
-            inThought = true;
-            thoughtTag = detectedTag;
-            thoughtBuffer = afterTag;
+
+        // 处理 <thought> 标签 — 先发将 reasoning 内容提取
+        let finalContent = jsonResponse.choices?.[0]?.message?.content || '';
+        let reasoningContent = jsonResponse.choices?.[0]?.message?.reasoning_content || '';
+        if (!reasoningContent && finalContent) {
+          const thoughtMatch = finalContent.match(/<thought>([\s\S]*?)<\/thought>/);
+          if (thoughtMatch) {
+            reasoningContent = thoughtMatch[1];
+            finalContent = finalContent.replace(/<thought>[\s\S]*?<\/thought>/, '').trim();
           }
-        } else {
-          content = raw;
         }
-      }
-      return { reasoning, content };
-    }
 
-        const processLines = (chunk) => {
-    leftover += chunk;
-    const lines = leftover.split('\n');
-    leftover = lines.pop() || '';
+        // 发送 reasoning_content（如果有）
+        if (reasoningContent) {
+          const reasoningChunk = createChunk({
+            id: jsonResponse.id,
+            object: 'chat.completion.chunk',
+            created: jsonResponse.created,
+            model: jsonResponse.model,
+            choices: [{
+              index: 0,
+              delta: { role: 'assistant', reasoning_content: reasoningContent, content: '' },
+              finish_reason: null
+            }]
+          });
+          streamContent.push(reasoningChunk);
+        }
 
-    for (const line of lines) {
-    if (line.startsWith('data: ') && !line.startsWith('data: [DONE]')) {
-    try {
-    const jsonStr = line.slice(6);
-    const parsed = JSON.parse(jsonStr);
-    // 从 content 剥离 <thought> 块，迁移到标准的 reasoning_content 字段
-    // qclaw/workbuddy 等客户端通过 delta.reasoning_content 识别思考过程
-    // 处理跨 SSE 事件的 <thought> 标签：可能被 Google 分成多个 delta
-    if (parsed.choices && Array.isArray(parsed.choices)) {
-    for (const choice of parsed.choices) {
-    if (choice.delta) {
-    if (typeof choice.delta.content === 'string') {
-    let raw = choice.delta.content;
-    const { reasoning, content } = stripThought(raw);
-    
-    choice.delta.content = content;
-    if (reasoning) {
-    if (choice.delta.reasoning_content) {
-    choice.delta.reasoning_content += reasoning;
-    } else {
-    choice.delta.reasoning_content = reasoning;
-    }
-    }
-    }
-    }
-    }
-    }
-    const hasContent = parsed.choices.some(c => c.delta && (c.delta.content !== undefined || c.delta.reasoning_content !== undefined || c.delta.tool_calls !== undefined));
-    // ⚠️ finish_reason 在 choice 层（choice.finish_reason），不是 choice.delta.finish_reason
-    // Google 返回的最后一条 SSE 的 finish_reason 是在 choice 级，
-    // 检查 c.delta.finish_reason 永远为 undefined → 事件被丢弃 → 流结束无 finish_reason
-    const hasFinish = parsed.choices.some(c => c.finish_reason !== undefined);
-    if (hasContent || hasFinish) {
-    const newLine = 'data: ' + JSON.stringify(parsed) + '\n';
-    controller.enqueue(encoder.encode(newLine));
-    }
-    } catch {
-    controller.enqueue(encoder.encode(line + '\n'));
-    }
-    } else {
-    controller.enqueue(encoder.encode(line + '\n'));
-    }
-    }
-    };
-
-    const pump = () => {
-    if (aborted) return;
-    reader.read().then(({ done, value }) => {
-    if (done) {
-    // 处理最后的残片段
-    if (leftover) {
-    controller.enqueue(encoder.encode(leftover));
-    }
-    // 流正常结束时，如果有未闭合的 <thought> 缓冲，必须 flush
-    if (inThought && thoughtBuffer) {
-    try {
-    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
-    choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
-    }) + '\n'));
-    } catch {}
-    }
-    controller.close();
-    return;
-    }
-    processLines(decoder.decode(value, { stream: true }));
-    pump();
-    }).catch(err => {
-    if (!aborted) {
-    console.error(`[${reqId}] Upstream read error: ${err.message}`);
-    // 刷新残留的 leftover 数据
-    if (leftover) {
-    try { controller.enqueue(encoder.encode(leftover + '\n')); } catch {}
-    }
-    // 流被中断时，如果有未闭合的 <thought> 缓冲，先 flush 为 reasoning_content
-    if (inThought && thoughtBuffer) {
-    try {
-    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
-    choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
-    }) + '\n'));
-    } catch {}
-    }
-    // 流被中断，先发一条合成 finish_reason 事件
-    // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"
-    try {
-    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
-    choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
-    }) + '\n'));
-    } catch {}
-    try { controller.error(err); } catch {}
-    }
-    });
-    };
-    pump();
-
-    req.signal.addEventListener('abort', () => {
-    aborted = true;
-    console.warn(`[${reqId}] Client disconnected, cancelling upstream`);
-    // 确保 reader 已初始化再 cancel（上游响应可能还没返回）
-    if (reader) {
-      reader.cancel().catch(() => {});
-    }
-    // 客户端断开 → 流被迫中断，发一条合成 finish_reason
-    // 避免 Hermes 看到流中断且无 finish_reason → 可能误判
-    try {
-    controller.enqueue(encoder.encode('data: ' + JSON.stringify({
-    choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
-    }) + '\n'));
-    } catch {}
-    try { controller.close(); } catch {}
-    });
-    },
-    });
-    return new Response(transformed, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: buildResponseHeaders(response, req, reqId),
-    });
-    }
-
-    // QClaw 兼容：原请求为 stream=true，但已改为非流式发给 Google
-    // 收到完整 JSON 响应后，手动切回 SSE 流式格式返回
-    // 用一个变量保存 body 文本，防止 fallthrough 后 upstreamBody 已被消费（disturbed）
-    // 导致 Hermes 收到空 stream → "empty stream with no finish_reason"
-    let qclawCompatBody = null;
-    if (originalStreamRequested && response.ok) {
-    try {
-    const responseText = await response.text();
-    qclawCompatBody = responseText;  // ✅ 保存，后面 fallthrough 时用
-    const responseData = responseText ? JSON.parse(responseText) : null;
-    if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
-    const message = responseData.choices[0].message;
-    const finishReason = responseData.choices[0].finish_reason || 'stop';
-    let replyContent = message.content || '';
-    // 提取 <thought> 内容到 reasoningContent，再从正文剥离
-    let reasoningContent = '';
-    replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
-    reasoningContent += m.replace(/<\/?thought[^>]*>/g, '');
-    return '';
-    }).trim();
-    const createdAt = responseData.created || Math.floor(Date.now() / 1000);
-    const model = responseData.model || modelId || 'unknown';
-    const id = responseData.id || 'chatcmpl-' + Date.now();
-    const encoder = new TextEncoder();
-    const CHUNK_SIZE = 50;
-    const chunks = [];
-    // 先发思考内容（reasoning_content 字段），客户端会渲染到思考框
-    if (reasoningContent) {
-    for (let i = 0; i < reasoningContent.length; i += CHUNK_SIZE) {
-    const text = reasoningContent.slice(i, i + CHUNK_SIZE);
-    chunks.push('data: ' + JSON.stringify({
-    choices: [{
-    delta: { reasoning_content: text, role: 'assistant' },
-    index: 0
-    }],
-    created: createdAt, id, model, object: 'chat.completion.chunk'
-    }) + '\n\n');
-    }
-    }
-    // 再发正文内容（content 字段）
-    for (let i = 0; i < replyContent.length; i += CHUNK_SIZE) {
-    const text = replyContent.slice(i, i + CHUNK_SIZE);
-    chunks.push('data: ' + JSON.stringify({
-    choices: [{
-    delta: { content: text, role: 'assistant' },
-    index: 0
-    }],
-    created: createdAt, id, model, object: 'chat.completion.chunk'
-    }) + '\n\n');
-    }
-    // 工具调用（tool_calls）：Google 返回非流式 JSON 时，tool_calls 在 message 层
-    const toolCalls = message.tool_calls;
-    if (toolCalls && toolCalls.length > 0) {
-      for (let idx = 0; idx < toolCalls.length; idx++) {
-        const tc = toolCalls[idx];
-        // 第一条：发送 id + type + function.name（不含 arguments）
-        chunks.push('data: ' + JSON.stringify({
+        // content（纯文本）
+        const contentChunk = createChunk({
+          id: jsonResponse.id,
+          object: 'chat.completion.chunk',
+          created: jsonResponse.created,
+          model: jsonResponse.model,
           choices: [{
-            delta: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [{
-                index: idx,
-                id: tc.id,
-                type: 'function',
-                function: { name: tc.function?.name || '', arguments: '' }
-              }]
-            },
-            index: 0
-          }],
-          created: createdAt, id, model, object: 'chat.completion.chunk'
-        }) + '\n\n');
-        // 第二条：发送 arguments（如果非空，按 CHUNK_SIZE 分段避免一次过大）
-        const args = tc.function?.arguments || '';
-        if (args) {
-          for (let j = 0; j < args.length; j += CHUNK_SIZE) {
-            chunks.push('data: ' + JSON.stringify({
-              choices: [{
-                delta: {
-                  tool_calls: [{
-                    index: idx,
-                    function: { arguments: args.slice(j, j + CHUNK_SIZE) }
-                  }]
-                },
-                index: 0
-              }],
-              created: createdAt, id, model, object: 'chat.completion.chunk'
-            }) + '\n\n');
-          }
+            index: 0,
+            delta: finalContent ? { content: finalContent } : { role: 'assistant', content: '' },
+            finish_reason: null
+          }]
+        });
+        streamContent.push(contentChunk);
+
+        // 结束 chunk
+        if (jsonResponse.choices?.[0]?.finish_reason) {
+          streamContent.push(createChunk({
+            id: jsonResponse.id,
+            object: 'chat.completion.chunk',
+            created: jsonResponse.created,
+            model: jsonResponse.model,
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: jsonResponse.choices[0].finish_reason
+            }]
+          }));
         }
+
+        // usage chunk
+        if (jsonResponse.usage) {
+          streamContent.push(createChunk({
+            id: jsonResponse.id,
+            object: 'chat.completion.chunk',
+            created: jsonResponse.created,
+            model: jsonResponse.model,
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: null
+            }],
+            usage: jsonResponse.usage
+          }));
+        }
+
+        streamContent.push('data: [DONE]\n\n');
+
+        responseHeaders.set('Content-Type', 'text/event-stream; charset=utf-8');
+        responseHeaders.set('Cache-Control', 'no-cache');
+        responseHeaders.set('Connection', 'keep-alive');
+
+        return new Response(streamContent.join(''), {
+          status: 200,
+          headers: responseHeaders
+        });
+      } catch (e) {
+        console.error(`[${reqId}] Failed to parse response as JSON for streaming: ${e.message}`);
       }
     }
-    // 结束标记（使用真实的 finish_reason，不是硬编码 'stop'）
-    chunks.push('data: ' + JSON.stringify({
-    choices: [{ delta: { role: 'assistant' }, finish_reason: finishReason, index: 0 }],
-    created: createdAt, id, model, object: 'chat.completion.chunk'
-    }) + '\n\n');
-    chunks.push('data: [DONE]\n\n');
-    const ss = new ReadableStream({
-    start(c) {
-    c.enqueue(encoder.encode(chunks.join('')));
-    c.close();
-    }
-    });
-    // 手动构造 SSE 响应头（Google 原始响应头是 application/json，不能复用）
-    const sseHeaders = new Headers({
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    });
-    const cors = getCorsHeaders(req);
-    for (const [k, v] of Object.entries(cors)) {
-    sseHeaders.set(k, v);
-    }
-    if (reqId) sseHeaders.set('X-Request-Id', reqId);
-    return new Response(ss, {
-    status: 200,
-    statusText: 'OK',
-    headers: sseHeaders,
-    });
-    }
-    } catch (e) {
-    console.warn(`[${reqId}] QClaw compat fallback failed: ${e.message}`);
-    // fall through to normal non-streaming handler
-    }
-    }
+  }
 
-    // 非流式响应：fire-and-forget 遥测，不阻塞响应返回
-    // 用 catch 兜底而不是裸的 telemetryPromise; —— 后者是空语句，若函数先返回，
-    // V8 可能在微任务执行前就冻结了，遥测数据可能丢失
-    telemetryPromise.catch(() => {});
+  if (response.status === 204) {
+    return new Response(null, { status: 204, headers: responseHeaders });
+  }
 
-    // 对非 200 响应：先读取上游 body 文本，避免 stream 传递时客户端读到空 body
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.log(`[${reqId}] Upstream ${response.status} body: ${(errorBody || '').slice(0, 500)}`);
-      const fallbackBody = errorBody || JSON.stringify({
-        error: {
-          message: `Upstream returned HTTP ${response.status}`,
-          type: 'upstream_error',
-          code: response.status,
-          reqId
-        }
-      });
-      return new Response(fallbackBody, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: buildResponseHeaders(response, req, reqId),
-      });
-    }
-
-    // ⚠️ 优先用 qclawCompatBody（如果 QClav 兼容路径已消费了 body）
-    // 此变量在 QClav 兼容块的 try 中赋值为 response.text() 的结果。
-    // 若 QClav 兼容成功返回则用不到；若 fallthrough 下来，upstreamBody 已被 consumed（disturbed），
-    // 此时 qclawCompatBody 里保存着已读取的 body 文本。
-    let finalBody = qclawCompatBody || upstreamBody || null;
-    // Google 有时对 4xx/5xx 返回空 body，客户端看到 "no body"
-    // 这种情况下补一个结构化错误体，方便客户端诊断
-    if (!finalBody && response.status >= 400) {
-      finalBody = JSON.stringify({
-        error: {
-          message: `Upstream returned HTTP ${response.status}`,
-          type: 'upstream_error',
-          code: response.status,
-          reqId
-        }
-      });
-    }
-    return new Response(finalBody, {
+  return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
-    headers: buildResponseHeaders(response, req, reqId),
-    });
-  } catch (error) {
-  console.error(`[${reqId}] Proxy Error:`, error);
-  // 生产环境脱敏：不暴露内部错误细节，仅返回通用信息
-  const isDev = process.env.NODE_ENV === 'development';
-  const userMessage = isDev
-  ? `Proxy Error: ${error.message}`
-  : '代理请求失败，请稍后重试';
-  return new Response(JSON.stringify({
-  error: {
-  message: userMessage,
-  type: 'proxy_error',
-  code: 502,
-  reqId
-  }
-  }), {
-  status: 502,
-  headers: {
-  'Content-Type': 'application/json',
-  'X-Request-Id': reqId,
-  ...getCorsHeaders(req),
-  }
+    headers: responseHeaders,
   });
+  } catch (err) {
+    console.error(`[${reqId}] Fatal: ${err?.message || err}`);
+    const errorBody = JSON.stringify({
+      error: { message: err?.message || 'Internal server error', type: 'proxy_error' },
+      _reqId: reqId,
+    });
+    return new Response(errorBody, {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+    });
   }
-}
-
-export async function GET(req) { return handleRequest(req); }
-export async function POST(req) { return handleRequest(req); }
-export async function PUT(req) { return handleRequest(req); }
-export async function DELETE(req) { return handleRequest(req); }
-export async function OPTIONS(req) {
- return new Response(null, {
- status: 204,
- headers: getCorsHeaders(req),
- });
 }
