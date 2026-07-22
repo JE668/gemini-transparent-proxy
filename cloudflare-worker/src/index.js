@@ -222,7 +222,6 @@ const TPM_LIMITS = {
   'gemini-3-flash-preview': 250000,
   'gemini-2.5-flash': 250000,
   'gemini-2.5-flash-lite': 250000,
-  'gemini-2.5-pro': 1000000,
   'gemini-2.5-flash-preview-tts': 10000,
   'gemini-3.1-flash-tts-preview': 10000,
   'antigravity-preview-05-2026': 100000,

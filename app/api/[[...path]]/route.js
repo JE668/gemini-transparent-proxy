@@ -159,7 +159,6 @@ function buildResponseHeaders(response, req, reqId) {
 }
 
 const MODEL_FALLBACKS = {
-  'gemini-2.5-pro': 'gemma-4-31b-it',
   'gemini-3-flash-preview': 'gemini-2.5-flash',
   'gemma-4-31b-it': 'gemini-3.5-flash-lite',       // 429/过载 → 250K TPM，真正缓解
   'gemma-4-26b-a4b-it': 'gemini-3.5-flash-lite',

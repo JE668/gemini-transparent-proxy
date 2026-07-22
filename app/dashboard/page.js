@@ -35,7 +35,6 @@ const MODEL_COLORS = {
   // Gemma 4 (主力)
   'gemma-4-31b-it': '#6366f1', 'gemma-4-26b-a4b-it': '#8b5cf6',
   // Gemini 2.5
-  'gemini-2.5-pro': '#ec4899',
   'gemini-2.5-flash': '#10b981', 'gemini-2.5-flash-lite': '#34d399',
   'gemini-2.5-flash-preview-tts': '#6ee7b7',
   // Gemini 3 / 3.1 / 3.5
