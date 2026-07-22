@@ -1,6 +1,7 @@
 // app/api/quota/route.js
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
+import { TPM_LIMITS } from '../../../lib/token-limit';
 import getRedis from '../../../lib/redis';
 
 export async function GET() {
@@ -42,10 +43,15 @@ export async function GET() {
 
     // Pipeline 批量获取所有模型的配额和平均延迟
     const pipeline = getRedis()?.pipeline();
+    const nowForTpm = Date.now();
     for (const modelId of allModelIds) {
       pipeline.get(`quota:${date}:${modelId}`);
       pipeline.get(`latencySum:${date}:${modelId}`);
       pipeline.get(`latencyCount:${date}:${modelId}`);
+      // TPM 滑动窗口（每分钟输入 token）：清 60s 前 + 求和（member 为 token 数）
+      const tpmKey = `tpm:${date}:${modelId}`;
+      pipeline.zremrangebyscore(tpmKey, 0, nowForTpm - 60000);
+      pipeline.zrangebyscore(tpmKey, nowForTpm - 60000, nowForTpm, { withScores: true });
     }
     // 批量获取状态码计数
     const statusCodes = [200, 400, 401, 403, 404, 429, 500, 502, 503];
@@ -58,10 +64,21 @@ export async function GET() {
     const quotaData = [];
     for (let i = 0; i < allModelIds.length; i++) {
       const modelId = allModelIds[i];
-      const base = i * 3;
+      const base = i * 5;
       const used = results[base] || 0;
       const latencySum = parseInt(results[base + 1]) || 0;
       const latencyCount = parseInt(results[base + 2]) || 0;
+      // TPM：滑动窗口内输入 token 总和（zrangebyscore withScores 返回 [member, score, ...]，member 为 token 数）
+      const tpmRaw = results[base + 4];
+      let tpmUsed = 0;
+      if (Array.isArray(tpmRaw)) {
+        for (let k = 0; k < tpmRaw.length; k += 2) {
+          tpmUsed += parseFloat(tpmRaw[k]) || 0;
+        }
+      }
+      const tpmLimit = TPM_LIMITS[modelId] || null;
+      const tpmPercent = (tpmLimit && tpmUsed > 0) ? parseFloat(((tpmUsed / tpmLimit) * 100).toFixed(2)) : 0;
+      const tpmWarning = tpmLimit ? tpmPercent > 80 : false;
       const limit = limitMap[modelId] || 1500;
       const percent = parseFloat(((used / limit) * 100).toFixed(2));
 
@@ -74,6 +91,10 @@ export async function GET() {
         used: parseInt(used),
         percent: percent,
         avgLatency: avgLatency,
+        tpmUsed: Math.round(tpmUsed),
+        tpmLimit,
+        tpmPercent,
+        tpmWarning,
       });
     }
 
@@ -81,7 +102,7 @@ export async function GET() {
     quotaData.sort((a, b) => b.used - a.used);
 
     // 计算全局错误率
-    const statusOffset = allModelIds.length * 3; // 3 pipeline cmds per model: quota + latencySum + latencyCount
+    const statusOffset = allModelIds.length * 5; // 5 pipeline cmds per model: quota + latencySum + latencyCount + tpmClear + tpmSum
     let totalRequests = 0;
     let totalErrors = 0;
     for (let i = 0; i < statusCodes.length; i++) {
@@ -194,6 +215,47 @@ export async function GET() {
         
         // 更新上次告警级别
         await redis.set(lastAlertKey, errorAlert.level, { ex: 86400 }); // 24 小时过期
+      }
+    }
+
+    // TPM 触顶预警（P3）：任一模型 tpmPercent > 80 时通知，比等 429 早一步
+    const tpmHot = quotaData.filter(d => d.tpmWarning);
+    if (tpmHot.length > 0 && webhookUrl) {
+      const redisT = getRedis();
+      const lastTpmKey = `alert:last_tpm_level:${new Date().toDateString()}`;
+      const lastTpm = await redisT?.get(lastTpmKey);
+      const beijingHourT = (new Date().getUTCHours() + 8) % 24;
+      const isQuietT = quietHours &&
+        ((quietStart >= quietEnd && (beijingHourT >= quietStart || beijingHourT < quietEnd)) ||
+         (quietStart < quietEnd && beijingHourT >= quietStart && beijingHourT < quietEnd));
+      const skipTpmQuiet = isQuietT; // TPM 预警按 warning 级处理，静默时段跳过
+      if (!lastTpm && !skipTpmQuiet && redisT) {
+        const tpmLines = tpmHot
+          .map(d => `- ${d.model.replace('models/', '')}：${(d.tpmUsed / 1000).toFixed(1)}K / ${(d.tpmLimit / 1000)}K (${d.tpmPercent}%)`)
+          .join('\n');
+        const tpmText = `**TPM 即将触顶预警**\n\n${tpmLines}\n\n时间：${new Date().toLocaleString('zh-CN')}\n[查看 Dashboard](https://api.170909.xyz/dashboard)`;
+        try {
+          if (webhookType === 'dingtalk') {
+            await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ msgtype: 'markdown', markdown: { title: '⚠️ TPM 触顶预警', text: tpmText }, at: { isAtAll: false } })
+            });
+          } else if (webhookType === 'telegram') {
+            await fetch(`${webhookUrl}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: webhookUrl.split('/bot')[1]?.split('/')[0],
+                text: tpmText.replace(/\*\*/g, ''),
+                parse_mode: 'Markdown'
+              })
+            });
+          }
+          await redisT.set(lastTpmKey, '1', { ex: 86400 }); // 每天仅通知一次
+        } catch (e) {
+          console.error('TPM Webhook 通知失败:', e);
+        }
       }
     }
 

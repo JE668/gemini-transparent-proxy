@@ -502,6 +502,7 @@ export default {
       let originalStreamRequested = false;
       let requestBodyText = null; // 保存原始请求体，供模型降级用
       let modelId = 'unknown'; // 用于遥测的模型 ID
+      let inputTokens = 0; // TPM 遥测用：本次请求估计输入 token 数（CF 主流量）
       let qclawCompatStreamBody = null; // QClaw 兼容模式下改写的请求体（stream=false）
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         try {
@@ -535,7 +536,7 @@ export default {
       if (isOpenAICompat && fetchBody && fetchBody !== '{}') {
         try {
           const parsedForTokens = JSON.parse(fetchBody);
-          const inputTokens = estimateInputTokens(parsedForTokens);
+          inputTokens = estimateInputTokens(parsedForTokens);
           const tpmRes = tokenRateLimiter.check(modelId, clientIP, inputTokens);
           if (!tpmRes.allowed) {
             logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `tpm-limited ${modelId} ~${inputTokens}tok`);
@@ -642,6 +643,14 @@ export default {
           ['INCR', `quota:${date}:${finalModelId}`],
           ['INCR', `quota:global:${date}`],
         );
+        // TPM 滑动窗口遥测（CF 主流量）：score=时间戳ms, member=输入token数
+        if (inputTokens > 0) {
+          const tpmKey = `tpm:${date}:${finalModelId}`;
+          telemetryCmds.push(
+            ['ZADD', tpmKey, nowMs, inputTokens],
+            ['PEXPIRE', tpmKey, 120000],
+          );
+        }
       }
       // 重试次数累加（仅发生过重试时计入，Dashboard 顶部「重试 N 次」徽标）
       if (totalRetries > 0) {

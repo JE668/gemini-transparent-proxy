@@ -457,11 +457,12 @@ return {0, count + 1}
     }
 
     // === TPM（每分钟输入 token）限流：根治 Google 免费层 16K 墙 ===
+    let inputTokens = 0; // TPM 遥测用：本次请求估计输入 token 数（Vercel 为备份流量）
     const tpmLimit = TPM_LIMITS[modelId];
     if (isOpenAICompat && tpmLimit && clientFingerprint !== 'anon' && redis) {
       try {
         const parsedForTokens = JSON.parse(requestBodyForFetch || '{}');
-        const inputTokens = estimateInputTokens(parsedForTokens);
+        inputTokens = estimateInputTokens(parsedForTokens);
         const tpmKey = `tpm:${modelId}:${clientFingerprint}`;
         const nowMs = Date.now();
         const WINDOW_MS = 60 * 1000;
@@ -624,6 +625,10 @@ return {1, sum + cost, 0}
     ...(isSuccess ? [
       redis.incr(`quota:${date}:${finalModelId}`),
       redis.incr(`quota:global:${date}`),
+      ...(inputTokens > 0 ? [
+        redis.zadd(`tpm:${date}:${finalModelId}`, { score: Date.now(), member: String(inputTokens) }),
+        redis.zremrangebyscore(`tpm:${date}:${finalModelId}`, 0, Date.now() - 60000),
+      ] : []),
     ] : []),
     ...(!isSuccess ? [
       redis.lpush(`errors:${date}`, errorEntry),

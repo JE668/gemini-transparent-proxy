@@ -933,6 +933,9 @@ function DashboardContent() {
           used: d.used,
           limit: d.limit,
           percent: d.percent.toFixed(2) + '%',
+          tpmUsed: d.tpmUsed != null ? d.tpmUsed : 0,
+          tpmLimit: d.tpmLimit != null ? d.tpmLimit : 'N/A',
+          tpmPercent: d.tpmPercent != null ? d.tpmPercent + '%' : 'N/A',
           avgLatency: d.avgLatency ? `${d.avgLatency}ms` : 'N/A',
         })) || [];
         exportToCSV(quotaExport, `配额数据_${timestamp}.csv`);
@@ -1750,6 +1753,24 @@ function DashboardContent() {
                       <span style={{ color: isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color, fontWeight: '600' }}>{(item.used || 0).toLocaleString()}</span>
                       {' / '}{(item.limit || '∞').toLocaleString()}
                     </div>
+                    {/* TPM 子进度条（每分钟输入 token），仅已知 TPM 限额的模型显示 */}
+                    {item.tpmLimit != null && (
+                      <div style={{ marginBottom: '6px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: theme.text.muted, fontFamily: 'monospace', marginBottom: '2px' }}>
+                          <span>TPM</span>
+                          <span style={{ color: item.tpmPercent > 80 ? '#ef4444' : item.tpmPercent > 60 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>
+                            {item.tpmUsed != null ? (item.tpmUsed / 1000).toFixed(1) : '0.0'}K / {(item.tpmLimit / 1000)}K ({item.tpmPercent}%)
+                          </span>
+                        </div>
+                        <div style={{ height: '4px', borderRadius: '2px', background: theme.bar?.bg || '#f1f5f9', overflow: 'hidden' }}>
+                          <div style={{
+                            width: `${Math.min(item.tpmPercent, 100)}%`, height: '100%', borderRadius: '2px',
+                            background: item.tpmPercent > 80 ? '#ef4444' : item.tpmPercent > 60 ? '#f59e0b' : '#22c55e',
+                            transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)'
+                          }} />
+                        </div>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                       {item.avgLatency != null && (
                         <span style={{
