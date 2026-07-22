@@ -227,6 +227,20 @@ export async function OPTIONS(req) {
   return new Response(null, { status: 204, headers: getCorsHeaders(req) });
 }
 
+export async function PUT(req) {
+  return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+    status: 405,
+    headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+  });
+}
+
+export async function DELETE(req) {
+  return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+    status: 405,
+    headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+  });
+}
+
 export async function POST(req) {
   const startTime = Date.now();
   const reqId = Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
