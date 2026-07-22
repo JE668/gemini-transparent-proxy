@@ -51,21 +51,21 @@ const MODELS = {
     // 文本对话 · 主力高配额
     { id: 'gemma-4-31b-it', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemma-4-26b-a4b-it', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
     // 文本对话 · 低配额 (RPD 20)
-    { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3.6-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3-flash-preview', object: 'model', created: 1743561600, owned_by: 'google' },
-    // Pro (1p-freebie 特殊免费额度)
-    { id: 'gemini-2.5-pro', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
     // 语音合成 TTS (RPD 10)
     { id: 'gemini-2.5-flash-preview-tts', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.1-flash-tts-preview', object: 'model', created: 1743561600, owned_by: 'google' },
     // Agent 模型（走 Interactions API）
+    { id: 'antigravity-preview-05-2026', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'deep-research-preview-04-2026', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'deep-research-max-preview-04-2026', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'antigravity-preview-05-2026', object: 'model', created: 1743561600, owned_by: 'google' },
   ],
 };
 

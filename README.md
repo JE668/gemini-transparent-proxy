@@ -236,14 +236,15 @@ curl https://your-domain/v1/responses \
 
 | 模型 | RPM | RPD | TPM(输入) | 说明 |
 |------|-----|-----|-----------|------|
-| `gemma-4-31b-it` | 15 | 1,500 | 无限 | ⭐ 主力（Dense），降级链首选 |
-| `gemma-4-26b-a4b-it` | 15 | 1,500 | 无限 | MoE 备选，降级链次选 |
+| `gemma-4-31b-it` | 30 | 14,400 | 16,000 | ⭐ 主力（Dense），降级链首选 |
+| `gemma-4-26b-a4b-it` | 30 | 14,400 | 16,000 | MoE 备选，降级链次选 |
+| `gemini-3.5-flash-lite` | 15 | 500 | 250,000 | ⭐ 推荐，最新 Lite 模型 |
 | `gemini-3.1-flash-lite` | 15 | 500 | 250,000 | 高频次备选 |
-| `gemini-2.5-pro` | 75 | 500 | 1,000,000 | 免费经 `1p-freebie` 特殊桶（基础额度为 0） |
-| `gemini-2.5-flash` | 5 | 20 | 250,000 | 降级链兜底 |
-| `gemini-2.5-flash-lite` | 10 | 20 | 250,000 | — |
+| `gemini-3.6-flash` | 5 | 20 | 250,000 | 最新 Flash 模型 |
 | `gemini-3.5-flash` | 5 | 20 | 250,000 | — |
 | `gemini-3-flash-preview` | 5 | 20 | 250,000 | Preview |
+| `gemini-2.5-flash` | 5 | 20 | 250,000 | 降级链兜底 |
+| `gemini-2.5-flash-lite` | 10 | 20 | 250,000 | — |
 | `gemini-2.5-flash-preview-tts` | 3 | 10 | 10,000 | 🔊 语音合成（TTS） |
 | `gemini-3.1-flash-tts-preview` | 3 | 10 | 10,000 | 🔊 语音合成（TTS） |
 
@@ -253,9 +254,9 @@ curl https://your-domain/v1/responses \
 
 | 模型 | 免费额度 | 说明 |
 |------|----------|------|
-| `imagen-4.0-fast-generate-001` | 70 张/天 | 文生图，快速版 |
-| `imagen-4.0-generate-001` | 70 张/天 | 文生图，标准版 |
-| `imagen-4.0-ultra-generate-001` | 30 张/天 | 文生图，Ultra 版 |
+| `imagen-4.0-fast-generate-001` | 25 张/天 | 文生图，快速版 |
+| `imagen-4.0-generate-001` | 25 张/天 | 文生图，标准版 |
+| `imagen-4.0-ultra-generate-001` | 25 张/天 | 文生图，Ultra 版 |
 
 ### 🧬 向量嵌入（Embedding · `embedContent` 端点）
 
