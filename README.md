@@ -85,7 +85,7 @@ Gemma 4 模型在输出中通过 `<thought>...</thought>` 标签表达推理过�
 | `UPSTASH_REDIS_REST_TOKEN` | ✅ | Upstash Redis REST Token |
 | `DASHBOARD_PASSWORD` | ❌ | Dashboard 访问密码，不设置则无需认证 |
 | `CORS_ALLOWED_ORIGINS` | ❌ | CORS 允许的来源域名，逗号分隔 |
-| `RATE_LIMIT_RPM` | ❌ | 每个 API Key 指纹每分钟最大请求数，默认 `15`（对齐 Gemma 4 的 15 RPM），设为 `0` 关闭限流 |
+| `RATE_LIMIT_RPM` | ❌ | 每个 API Key 指纹每分钟最大请求数，默认 `15`（注意：Gemma 4 免费层 RPM 现为 30，15 为保守默认），设为 `0` 关闭限流 |
 
 ---
 
@@ -373,8 +373,9 @@ CORS_ALLOWED_ORIGINS=https://your-frontend.com
 | 机制 | 说明 |
 |------|------|
 | **Dashboard 认证** | 密码 + Bearer Token，API 401 自动退回登录 |
-| **API 限流** | 基于 API Key SHA-1 指纹的 60 秒滑动窗口（Redis ZSET 日志法，无边界突发），默认 15 RPM，可用 `RATE_LIMIT_RPM` 调整 / 设 `0` 关闭；Redis 故障时自动放行（fail-open） |
-| **CF Worker 限流** | 基于 IP 的内存滑动窗口，60 RPM（与上面按 Key 的限流是独立的两层） |
+| **API 限流（请求数）** | 基于 API Key SHA-1 指纹的 60 秒滑动窗口（Redis ZSET 日志法），默认 15 RPM，可用 `RATE_LIMIT_RPM` 调整 / 设 `0` 关闭；Redis 故障时自动放行（fail-open） |
+| **API 限流（输入 token）** | 按模型 + Key 的 60 秒输入 token 滑动窗口（Redis ZSET），封顶取各模型免费层 TPM（Gemma 4 = 16K，Flash = 250K），超限即 429 + `Retry-After`；超限请求在代理侧被拦下，不再撞 Google 的 16K TPM 墙（详见 `lib/token-limit.js`） |
+| **CF Worker 限流** | 基于 IP 的内存滑动窗口：60 RPM + 按模型输入 token 滑动窗口（Gemma 4 限 16K/min）；两层均为单实例内存，多实例下由 429 重试/降级兜底 |
 | **CORS 控制** | `CORS_ALLOWED_ORIGINS` 白名单，未配置时允许 `*` |
 | **错误脱敏** | 生产环境不暴露内部错误细节 |
 | **来源指纹** | 统计使用 SHA-1 前 8 位，不存储原始 API Key |

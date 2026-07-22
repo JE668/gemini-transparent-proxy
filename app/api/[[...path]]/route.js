@@ -6,6 +6,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 60; // Hobby 上限 60s，Pro 上限 300s
 
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
+import { TPM_LIMITS, estimateInputTokens } from '../../../lib/token-limit';
 
 import { getQuotaDate } from '../../../lib/utils';
 import { getRedis } from '../../../lib/redis';
@@ -160,6 +161,8 @@ function buildResponseHeaders(response, req, reqId) {
 const MODEL_FALLBACKS = {
   'gemini-2.5-pro': 'gemma-4-31b-it',
   'gemini-3-flash-preview': 'gemini-2.5-flash',
+  'gemma-4-31b-it': 'gemini-3.5-flash-lite',       // 429/过载 → 250K TPM，真正缓解
+  'gemma-4-26b-a4b-it': 'gemini-3.5-flash-lite',
 };
 
 function isHighDemand503(text) {
@@ -454,6 +457,60 @@ return {0, count + 1}
     } catch {}
     }
 
+    // === TPM（每分钟输入 token）限流：根治 Google 免费层 16K 墙 ===
+    const tpmLimit = TPM_LIMITS[modelId];
+    if (isOpenAICompat && tpmLimit && clientFingerprint !== 'anon' && redis) {
+      try {
+        const parsedForTokens = JSON.parse(requestBodyForFetch || '{}');
+        const inputTokens = estimateInputTokens(parsedForTokens);
+        const tpmKey = `tpm:${modelId}:${clientFingerprint}`;
+        const nowMs = Date.now();
+        const WINDOW_MS = 60 * 1000;
+        // 滑动窗口：sum(窗口内 token) + 本次 cost > limit 则拒绝，返回 Retry-After
+        const tpmScript = `
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4])
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+local items = redis.call('ZRANGEBYSCORE', key, now - window, now)
+local sum = 0
+for i=1,#items do
+  local c = string.match(items[i], '^(%d+)')
+  if c then sum = sum + tonumber(c) end
+end
+if sum + cost > limit then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  local retryAfter = 60
+  if oldest[2] then retryAfter = math.ceil((tonumber(oldest[2]) + window - now) / 1000) end
+  return {0, sum, retryAfter}
+end
+redis.call('ZADD', key, now, cost .. ':' .. now .. ':' .. math.random())
+redis.call('PEXPIRE', key, window + 2000)
+return {1, sum + cost, 0}
+`;
+        const res = await redis.eval(tpmScript, [tpmKey], [String(nowMs), String(WINDOW_MS), String(tpmLimit), String(inputTokens)]);
+        const allowed = Array.isArray(res) && Number(res[0]) === 1;
+        if (!allowed) {
+          const retryAfter = Math.max(1, Number(res[2]) || 60);
+          console.warn(`[${reqId}] TPM Limit: ${modelId} ${clientFingerprint} would exceed ${tpmLimit}/min (need ${inputTokens}, retry after ${retryAfter}s)`);
+          return new Response(JSON.stringify({
+            error: {
+              message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmLimit}，本次请求约 ${inputTokens} token 会超出，请 ${retryAfter}s 后重试或改用更大额度的模型`,
+              type: 'token_rate_limit_exceeded',
+              code: 429
+            }
+          }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter), ...getCorsHeaders(req) }
+          });
+        }
+      } catch (e) {
+        console.error(`[${reqId}] TPM limiter error (fail-open): ${e?.message || e}`);
+      }
+    }
+
     let response = await fetchWithRetry(targetUrl, {
       method: req.method,
       headers: headers,
@@ -462,8 +519,28 @@ return {0, count + 1}
     }, startTime);
     let totalRetries = Number(response._retries) || 0;
 
-    if ((response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && body) {
-      if (response.status === 524 || response.status === 500 || isHighDemand503(await response.text())) {
+    if (isOpenAICompat && body && (response.status === 429 || response.status === 500 || response.status === 503 || response.status === 524)) {
+      const status = response.status;
+      let shouldFallback = false;
+      if (status === 429) {
+        // 同模型按 Google 返回的 Retry-After 退避重试一次（封顶 10s）
+        const retryAfter = Math.min(parseInt(response.headers.get('Retry-After') || '5', 10) || 5, 10);
+        await new Promise(r => setTimeout(r, retryAfter * 1000));
+        const retryResp = await fetchWithRetry(targetUrl, {
+          method: req.method, headers, body: requestBodyForFetch, cache: 'no-store',
+        }, startTime);
+        totalRetries += Number(retryResp._retries) || 0;
+        if (retryResp.status === 429 || retryResp.status === 500 || retryResp.status === 503 || retryResp.status === 524) {
+          response = retryResp; // 仍失败 → 走模型降级
+          shouldFallback = true;
+        } else {
+          response = retryResp; // 成功
+          modelId = JSON.parse(requestBodyForFetch).model;
+        }
+      } else if (status === 524 || status === 500 || isHighDemand503(await response.text())) {
+        shouldFallback = true;
+      }
+      if (shouldFallback) {
         const originalModel = JSON.parse(body).model;
         const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
         if (fallbackModel) {
@@ -477,7 +554,7 @@ return {0, count + 1}
           }, startTime);
           totalRetries += Number(fallbackResp._retries) || 0;
           console.log(`[${reqId}] Model fallback: ${originalModel} → ${fallbackModel} (${fallbackResp.status})`);
-          if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524) {
+          if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524 && fallbackResp.status !== 429) {
             response = fallbackResp;
             modelId = fallbackModel;
           } else {

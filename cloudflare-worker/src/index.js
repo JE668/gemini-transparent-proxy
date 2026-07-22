@@ -165,7 +165,7 @@ function buildResponseHeaders(response) {
   return headers;
 }
 
-const RETRYABLE = new Set([502, 503]);
+const RETRYABLE = new Set([502, 503, 429]);
 const RETRY_TIMEOUT = 25000;
 
 // 内存滑动窗口限流器（每个 Worker 实例独立计数，CF 的多实例间不共享）
@@ -209,6 +209,80 @@ class RateLimiter {
 }
 
 const rateLimiter = new RateLimiter(60 * 1000, 60);
+
+// ===== 输入 token（TPM）限流：根治 Google 免费层 16K 墙 =====
+// ⚠️ 必须与 lib/token-limit.js 保持一致（CF Worker 独立构建，无法 import lib）
+const TPM_LIMITS = {
+  'gemma-4-31b-it': 16000,
+  'gemma-4-26b-a4b-it': 16000,
+  'gemini-3.5-flash-lite': 250000,
+  'gemini-3.1-flash-lite': 250000,
+  'gemini-3.6-flash': 250000,
+  'gemini-3.5-flash': 250000,
+  'gemini-3-flash-preview': 250000,
+  'gemini-2.5-flash': 250000,
+  'gemini-2.5-flash-lite': 250000,
+  'gemini-2.5-pro': 1000000,
+  'gemini-2.5-flash-preview-tts': 10000,
+  'gemini-3.1-flash-tts-preview': 10000,
+  'antigravity-preview-05-2026': 100000,
+};
+
+function estimateInputTokens(body) {
+  if (!body || typeof body !== 'object') return 0;
+  const texts = [];
+  if (typeof body.system === 'string') texts.push(body.system);
+  if (Array.isArray(body.messages)) {
+    for (const m of body.messages) {
+      if (!m) continue;
+      if (typeof m.content === 'string') texts.push(m.content);
+      else if (Array.isArray(m.content)) {
+        for (const part of m.content) {
+          if (part && typeof part.text === 'string') texts.push(part.text);
+        }
+      }
+    }
+  }
+  let total = 0;
+  for (const t of texts) total += 4 + Math.ceil(t.length / 4);
+  return total;
+}
+
+// 按模型 + IP 的每分钟输入 token 滑动窗口（内存，单实例；多实例下与 RPM 限流同样存在轻微不一致，由下面的 429 重试/降级兜底）
+class TokenRateLimiter {
+  constructor(windowMs) {
+    this.windowMs = windowMs;
+    this.buckets = new Map(); // key `${modelId}:${ip}` -> [{ts, tokens}]
+  }
+  check(modelId, clientIP, tokens) {
+    const limit = TPM_LIMITS[modelId];
+    if (!limit) return { allowed: true };
+    const now = Date.now();
+    const windowStart = now - this.windowMs;
+    const key = `${modelId}:${clientIP}`;
+    let arr = this.buckets.get(key) || [];
+    arr = arr.filter(e => e.ts > windowStart);
+    const sum = arr.reduce((s, e) => s + e.tokens, 0);
+    if (sum + tokens > limit) {
+      const oldest = arr.length ? arr[0].ts : now;
+      const retryAfter = Math.max(1, Math.ceil((oldest + this.windowMs - now) / 1000));
+      this.buckets.set(key, arr);
+      return { allowed: false, retryAfter, sum, limit };
+    }
+    arr.push({ ts: now, tokens });
+    this.buckets.set(key, arr);
+    return { allowed: true };
+  }
+  cleanup() {
+    const windowStart = Date.now() - this.windowMs;
+    for (const [key, arr] of this.buckets) {
+      const filtered = arr.filter(e => e.ts > windowStart);
+      if (!filtered.length) this.buckets.delete(key);
+      else this.buckets.set(key, filtered);
+    }
+  }
+}
+const tokenRateLimiter = new TokenRateLimiter(60 * 1000);
 
 // 请求日志
 function logRequest(reqId, method, pathname, status, durationMs, extra = '') {
@@ -271,9 +345,9 @@ async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   throw lastError || new Error('Max retry attempts reached');
 }
 
-/** 模型降级链：Google 503 high demand 时自动尝试更小模型 */
+/** 模型降级链：Google 429 token 配额 / 503 high demand / 524 时自动切换模型（跳过同为 16K 的 26b，直奔 250K TPM 的 Flash） */
 const MODEL_FALLBACKS = {
-  'gemma-4-31b-it': 'gemma-4-26b-a4b-it',
+  'gemma-4-31b-it': 'gemini-2.5-flash',
   'gemma-4-26b-a4b-it': 'gemini-2.5-flash',
 };
 
@@ -313,6 +387,7 @@ export default {
     const startTime = Date.now();
     // 清理过期限流条目（轻量操作，每个请求执行一次）
     ctx.waitUntil(Promise.resolve(rateLimiter.cleanup()));
+    ctx.waitUntil(Promise.resolve(tokenRateLimiter.cleanup()));
     const reqId = generateReqId();
 
     if (request.method === 'OPTIONS') {
@@ -456,6 +531,30 @@ export default {
 
       // 如果启用了 QClaw 兼容模式（stream=true → 非流式），用改写后的 body
       const fetchBody = qclawCompatStreamBody || body;
+
+      // === TPM（每分钟输入 token）限流：根治 Google 免费层 16K 墙 ===
+      if (isOpenAICompat && fetchBody && fetchBody !== '{}') {
+        try {
+          const parsedForTokens = JSON.parse(fetchBody);
+          const inputTokens = estimateInputTokens(parsedForTokens);
+          const tpmRes = tokenRateLimiter.check(modelId, clientIP, inputTokens);
+          if (!tpmRes.allowed) {
+            logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `tpm-limited ${modelId} ~${inputTokens}tok`);
+            return new Response(JSON.stringify({
+              error: {
+                message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmRes.limit}，本次请求约 ${inputTokens} token 会超出，请 ${tpmRes.retryAfter}s 后重试或换更大额度模型`,
+                type: 'token_rate_limit_exceeded',
+                code: 429,
+                reqId
+              }
+            }), {
+              status: 429,
+              headers: { 'Content-Type': 'application/json', 'Retry-After': String(tpmRes.retryAfter), 'X-Request-Id': reqId, ...corsHeaders() }
+            });
+          }
+        } catch {}
+      }
+
       let response = await fetchWithRetry(targetUrl, {
         method: request.method,
         headers,
@@ -465,9 +564,15 @@ export default {
       // 累计本次请求发生的重试次数（主请求 + 可能的降级请求），用于 Dashboard 「重试」统计
       let totalRetries = Number(response.retries) || 0;
 
-      // === 模型降级：Google 503 high demand / 524 源站超时 → 自动切换更小模型 ===
-      if ((response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && requestBodyText) {
-        if (response.status === 524 || response.status === 500 || isHighDemand503(await response.text())) {
+      // === 模型降级：Google 429 token 配额 / 503 high demand / 524 源站超时 → 自动切换模型 ===
+      if ((response.status === 429 || response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && requestBodyText) {
+        let shouldFallback = false;
+        if (response.status === 429) {
+          shouldFallback = true; // token 配额 429 直接降级到更大额度模型（同模型重试已在 fetchWithRetry 完成）
+        } else if (response.status === 524 || response.status === 500 || isHighDemand503(await response.text())) {
+          shouldFallback = true;
+        }
+        if (shouldFallback) {
           const originalModel = JSON.parse(requestBodyText).model;
           const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
           if (fallbackModel) {
@@ -482,7 +587,7 @@ export default {
             totalRetries += Number(fallbackResp.retries) || 0;
             logRequest(reqId, request.method, pathname, fallbackResp.status, Date.now() - startTime,
               `fallback ${originalModel} → ${fallbackModel}`);
-            if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524) {
+            if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524 && fallbackResp.status !== 429) {
               response = fallbackResp;
               modelId = fallbackModel;
             } else {
