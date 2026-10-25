@@ -2,7 +2,7 @@
 
 > 将 Google Gemini / Gemma 模型包装为 OpenAI 兼容 API，支持 Chat Completions 和 Responses API 双协议，让 QClaw、Workbuddy、OpenClaw、Hermes Agent、Codex 等客户端无缝接入。
 
-基于 Next.js (App Router) + Cloudflare Workers 双平台部署，零运维。流式 SSE、智能重试、模型降级、`<thought>` 思考过程提取、实时遥测 Dashboard 一应俱全。
+基于 Cloudflare Workers（**主力平台**，无函数超时限制）+ Next.js/Vercel（备选，几乎不可用）双形态部署，零运维。流式 SSE、智能重试、模型降级、`<thought>` 思考过程提取、实时遥测 Dashboard 一应俱全。
 
 ---
 
@@ -53,16 +53,10 @@ Gemma 4 模型在输出中通过 `<thought>...</thought>` 标签表达推理过�
 
 ## 🚀 快速部署
 
-### 方式一：Vercel（推荐主力）
+### 方式一：Cloudflare Workers（推荐主力）
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/JE668/gemini-transparent-proxy)
-
-1. Fork 本仓库
-2. 在 Vercel 导入项目
-3. 配置环境变量（见下表）
-4. 自动部署完成
-
-### 方式二：Cloudflare Workers（容灾 / 备用）
+> 💡 **目前的主力部署平台**：无执行时间限制、流式稳定、免费额度充足，配合 Upstash Redis 遥测打通。
+> 生产环境建议优先使用本方式，Vercel（方式二）近年在该项目上几乎不可用，仅作备选。
 
 通过 GitHub Actions 自动部署：
 
@@ -75,6 +69,17 @@ Gemma 4 模型在输出中通过 `<thought>...</thought>` 标签表达推理过�
 5. 在 Worker Settings → Variables 配置环境变量
 
 > ⚠️ **不要使用 Cloudflare Workers Builds 的 Git 集成**。本项目使用 GitHub Actions 部署，Workers Builds 的 root directory 默认指向仓库根目录（找不到 `wrangler.toml`），需手动断开 GitHub 连接避免每次 push 报错。
+
+### 方式二：Vercel（备选，几乎不可用）
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/JE668/gemini-transparent-proxy)
+
+> ⚠️ Vercel Hobby 计划 60s 函数超时 + 限流严格，长上下文请求容易超时中断，**目前近乎不可用**，仅保留作容灾备选。主力请用上面的 Cloudflare Workers。
+
+1. Fork 本仓库
+2. 在 Vercel 导入项目
+3. 配置环境变量（见下表）
+4. 自动部署完成
 
 ### 环境变量
 
@@ -142,7 +147,7 @@ requires_openai_auth = true
 - ✅ 思考过程提取（`<thought>` → 独立 reasoning output item）
 - ✅ 会话重建（`previous_response_id`，基于 Redis 持久化）
 - ✅ Tool calling（自动清洗字段以兼容 Google API）
-- ✅ 模型降级（`gemma-4-31b-it` → `gemma-4-26b-a4b-it` → `gemini-2.5-flash`）
+- ✅ 模型降级（`gemma-4-31b-it` → `gemini-3.5-flash-lite`）
 
 ### OpenAI SDK (Python)
 
@@ -186,7 +191,7 @@ curl https://your-domain/v1/responses \
 | 机制 | 说明 |
 |------|------|
 | **指数退避重试** | 上游 5xx 错误自动重试（最多 3 次），4xx 直接透传 |
-| **模型降级链** | `gemma-4-31b-it` → `gemma-4-26b-a4b-it` → `gemini-2.5-flash` |
+| **模型降级链** | `gemma-4-31b-it` → `gemini-3.5-flash-lite`（RPD 500 兜底） |
 | **QClaw 兼容模式** | 非流式转发后手动拆分为 SSE，先发 reasoning 再发 content |
 | **`<thought>` 状态机** | 跨 SSE 事件缓冲，实时提取思考标签为 `reasoning_content` / `reasoning_summary_text` |
 | **Tools 字段清洗** | 自动剥离 Google API 不认的多余字段（如 `type`） |
@@ -227,7 +232,7 @@ curl https://your-domain/v1/responses \
 
 ## 📋 免费层额度速查表
 
-> 数据来源：`generativelanguage.googleapis.com` 控制台配额导出（2026-07-10 快照）+ Google ListModels（`GET /v1beta/models`）实测——每个模型名均为该 key 下**真实可调用**的 id（非配额统计维度名）。
+> 数据来源：`generativelanguage.googleapis.com` 控制台配额导出（**2026-10-25 快照**）+ Google ListModels（`GET /v1beta/models`）实测——每个模型名均为该 key 下**真实可调用**的 id（非配额统计维度名）。
 > RPM = 次/分钟，RPD = 次/天，TPM = 输入 token/分钟。数值为「该项目」快照，正式使用请以你控制台的实时配额为准。
 
 ### 💬 文本对话（Chat Completions · `generateContent`）
@@ -236,17 +241,22 @@ curl https://your-domain/v1/responses \
 
 | 模型 | RPM | RPD | TPM(输入) | 说明 |
 |------|-----|-----|-----------|------|
-| `gemma-4-31b-it` | 30 | 14,400 | 16,000 | ⭐ 主力（Dense），降级链首选 |
-| `gemma-4-26b-a4b-it` | 30 | 14,400 | 16,000 | MoE 备选，降级链次选 |
-| `gemini-3.5-flash-lite` | 15 | 500 | 250,000 | ⭐ 推荐，最新 Lite 模型 |
+| `gemma-4-31b-it` | 30 | 14,400 | 16,000 | ⭐ 主力（Dense），降级链起点 |
+| `gemma-4-26b-a4b-it` | 30 | 14,400 | 16,000 | MoE 备选 |
+| `gemini-3.5-flash-lite` | 15 | 500 | 250,000 | ⭐ 推荐，降级链兜底（RPD 500） |
 | `gemini-3.1-flash-lite` | 15 | 500 | 250,000 | 高频次备选 |
-| `gemini-3.6-flash` | 5 | 20 | 250,000 | 最新 Flash 模型 |
-| `gemini-3.5-flash` | 5 | 20 | 250,000 | — |
+| `gemini-3.8-flash` | 5 | 20 | 250,000 | 🆕 最智能的 Flash 模型 |
+| `gemini-3.6-flash` | 5 | 20 | 250,000 | Flash |
 | `gemini-3-flash-preview` | 5 | 20 | 250,000 | Preview |
-| `gemini-2.5-flash` | 5 | 20 | 250,000 | 降级链兜底 |
+| `gemini-2.5-flash` | 5 | 20 | 250,000 | — |
 | `gemini-2.5-flash-lite` | 10 | 20 | 250,000 | — |
+| `gemini-3.8-flash-tts` | 3 | 10 | 10,000 | 🔊 🆕 语音合成（TTS，录音室级） |
+| `gemini-3.8-flash-lite-tts` | 3 | 10 | 10,000 | 🔊 🆕 语音合成（TTS，低延迟） |
 | `gemini-2.5-flash-preview-tts` | 3 | 10 | 10,000 | 🔊 语音合成（TTS） |
 | `gemini-3.1-flash-tts-preview` | 3 | 10 | 10,000 | 🔊 语音合成（TTS） |
+
+> ❌ 已从速查表移除（2026-10-25 快照）：`gemini-3.5-flash`（速率限制表中已消失）、`deep-research-preview-04-2026` / `deep-research-max-preview-04-2026`（Deep Research Pro Preview 免费层配额归零，0 RPM / 0 TPM / 0 RPD）。
+> Agent 模型仅剩 `antigravity-preview-05-2026`（RPM 60 | TPM 100K | RPD 100，走 Interactions API）。
 
 ### 🎨 图像生成（Imagen · `predict` 端点）
 
@@ -275,7 +285,7 @@ curl https://your-domain/v1/responses \
 | 图像 Imagen | `:predict` | `/api/v1beta/models/{model}:predict`（原生透传） | ❌ |
 | 向量 Embedding | `:embedContent` | `/api/v1beta/models/{model}:embedContent`（原生透传） | ❌ |
 
-> 代理在主力模型（`gemma-4-31b-it`）配额耗尽或上游 5xx 时，按 `gemma-4-31b-it → gemma-4-26b-a4b-it → gemini-2.5-flash` 自动降级。
+> 代理在主力模型（`gemma-4-31b-it`）配额耗尽或上游 5xx 时，按 `gemma-4-31b-it → gemini-3.5-flash-lite` 自动降级（跳过同为 16K TPM 的 `gemma-4-26b-a4b-it`，直奔 250K TPM 且 RPD 500 的 Flash-Lite；CF Worker 与 Vercel 两端降级链一致）。
 
 ---
 

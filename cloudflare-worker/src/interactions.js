@@ -1,15 +1,14 @@
 // cloudflare-worker/src/interactions.js
 // Gemini Interactions API ↔ Responses API 转换层（CF Worker 版）
-// 让 Codex 客户端通过 /v1/responses 端点接入 Deep Research 等代理模型
+// 让 Codex 客户端通过 /v1/responses 端点接入 Antigravity 等代理模型
 //
 // REST: POST https://generativelanguage.googleapis.com/v1beta/interactions
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
 // ── Agent 模型白名单 ──
+// （deep-research 系列 2026-10-25 快照免费层配额归零 0/0/0，已移除；仅保留 Antigravity）
 export const AGENT_MODELS = new Set([
-  'deep-research-preview-04-2026',
-  'deep-research-max-preview-04-2026',
   'antigravity-preview-05-2026',
 ]);
 

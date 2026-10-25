@@ -37,9 +37,11 @@ const MODEL_COLORS = {
   // Gemini 2.5
   'gemini-2.5-flash': '#10b981', 'gemini-2.5-flash-lite': '#34d399',
   'gemini-2.5-flash-preview-tts': '#6ee7b7',
-  // Gemini 3 / 3.1 / 3.5
-  'gemini-3-flash-preview': '#0ea5e9', 'gemini-3.5-flash': '#38bdf8',
+  // Gemini 3 / 3.1 / 3.5 / 3.8
+  'gemini-3-flash-preview': '#0ea5e9', 'gemini-3.5-flash-lite': '#38bdf8',
   'gemini-3.1-flash-lite': '#7dd3fc', 'gemini-3.1-flash-tts-preview': '#bae6fd',
+  'gemini-3.6-flash': '#0284c7', 'gemini-3.8-flash': '#22d3ee',
+  'gemini-3.8-flash-tts': '#a5f3fc', 'gemini-3.8-flash-lite-tts': '#cffafe',
   'default': '#6366f1'
 };
 

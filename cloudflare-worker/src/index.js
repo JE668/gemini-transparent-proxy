@@ -54,18 +54,19 @@ const MODELS = {
     { id: 'gemini-3.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
     // 文本对话 · 低配额 (RPD 20)
+    { id: 'gemini-3.8-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.6-flash', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3-flash-preview', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
     // 语音合成 TTS (RPD 10)
+    { id: 'gemini-3.8-flash-tts', object: 'model', created: 1743561600, owned_by: 'google' },
+    { id: 'gemini-3.8-flash-lite-tts', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-2.5-flash-preview-tts', object: 'model', created: 1743561600, owned_by: 'google' },
     { id: 'gemini-3.1-flash-tts-preview', object: 'model', created: 1743561600, owned_by: 'google' },
     // Agent 模型（走 Interactions API）
+    // （deep-research 系列 2026-10-25 快照免费层配额归零，已移除）
     { id: 'antigravity-preview-05-2026', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'deep-research-preview-04-2026', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'deep-research-max-preview-04-2026', object: 'model', created: 1743561600, owned_by: 'google' },
   ],
 };
 
@@ -215,13 +216,15 @@ const rateLimiter = new RateLimiter(60 * 1000, 60);
 const TPM_LIMITS = {
   'gemma-4-31b-it': 16000,
   'gemma-4-26b-a4b-it': 16000,
+  'gemini-3.8-flash': 250000,
   'gemini-3.5-flash-lite': 250000,
   'gemini-3.1-flash-lite': 250000,
   'gemini-3.6-flash': 250000,
-  'gemini-3.5-flash': 250000,
   'gemini-3-flash-preview': 250000,
   'gemini-2.5-flash': 250000,
   'gemini-2.5-flash-lite': 250000,
+  'gemini-3.8-flash-tts': 10000,
+  'gemini-3.8-flash-lite-tts': 10000,
   'gemini-2.5-flash-preview-tts': 10000,
   'gemini-3.1-flash-tts-preview': 10000,
   'antigravity-preview-05-2026': 100000,
@@ -344,10 +347,13 @@ async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
   throw lastError || new Error('Max retry attempts reached');
 }
 
-/** 模型降级链：Google 429 token 配额 / 503 high demand / 524 时自动切换模型（跳过同为 16K 的 26b，直奔 250K TPM 的 Flash） */
+/** 模型降级链：Google 429 token 配额 / 503 high demand / 524 时自动切换模型
+ * （跳过同为 16K TPM 的 26b，直奔 250K TPM 的 Flash-Lite；
+ *   降级目标取 RPD 500 的 gemini-3.5-flash-lite 而非 RPD 仅 20 的 gemini-2.5-flash，
+ *   与 Vercel 端 app/api/[[...path]]/route.js 保持一致） */
 const MODEL_FALLBACKS = {
-  'gemma-4-31b-it': 'gemini-2.5-flash',
-  'gemma-4-26b-a4b-it': 'gemini-2.5-flash',
+  'gemma-4-31b-it': 'gemini-3.5-flash-lite',
+  'gemma-4-26b-a4b-it': 'gemini-3.5-flash-lite',
 };
 
 /** 检测 Google 503 UNAVAILABLE 错误体 */
