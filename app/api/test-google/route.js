@@ -1,5 +1,7 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // 调试端点：测试 Google API 连接
-export async function GET() {
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
   const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${GOOGLE_API_KEY}`;
   

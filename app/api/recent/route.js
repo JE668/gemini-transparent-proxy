@@ -1,8 +1,10 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // app/api/recent/route.js
 import { getQuotaDate } from '../../../lib/utils';
 import getRedis from '../../../lib/redis';
 
-export async function GET() {
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
     const redis = getRedis();
     const date = getQuotaDate();

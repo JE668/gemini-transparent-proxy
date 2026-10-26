@@ -201,7 +201,7 @@ CORS_ALLOWED_ORIGINS=https://your-frontend.com
 - **最新 Commit**: `61d3ca0`
 - **GitHub**: https://github.com/JE668/gemini-transparent-proxy
 - **Vercel**: 自动构建部署中
-- **生产环境**: https://api.170909.xyz/dashboard
+- **生产环境**: https://your-domain.com/dashboard
 
 ---
 
@@ -266,7 +266,7 @@ CORS_ALLOWED_ORIGINS=https://your-frontend.com
 ## 📞 支持与反馈
 
 - **GitHub Issues**: https://github.com/JE668/gemini-transparent-proxy/issues
-- **Dashboard**: https://api.170909.xyz/dashboard
+- **Dashboard**: https://your-domain.com/dashboard
 - **文档**: `/DASHBOARD_FEATURES.md`
 
 ---

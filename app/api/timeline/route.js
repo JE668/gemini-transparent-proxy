@@ -1,3 +1,4 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // app/api/timeline/route.js
 import { getQuotaDate } from '../../../lib/utils';
 import getRedis from '../../../lib/redis';
@@ -9,7 +10,8 @@ function getYesterdayDate() {
   return yesterday.toISOString().split('T')[0].replace(/-/g, '');
 }
 
-export async function GET() {
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
     const redis = getRedis();
     const date = getQuotaDate();

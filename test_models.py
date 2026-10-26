@@ -4,7 +4,7 @@ import os
 
 # ================= 配置区 =================
 # 你的代理端点
-API_BASE = "https://api.170909.xyz/api/v1" 
+API_BASE = "https://your-domain.com/api/v1" 
 # 请在此输入你的 Google API Key，或者在运行脚本前设置环境变量 export GOOGLE_API_KEY='your_key'
 API_KEY = os.getenv("GOOGLE_API_KEY", "YOUR_API_KEY_HERE")
 # =========================================

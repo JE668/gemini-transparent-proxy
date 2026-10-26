@@ -10,7 +10,7 @@ if (!GOOGLE_API_KEY) {
 async function test() {
   console.log('🔍 详细测试代理 API...\n');
   console.log(`API Key: ${GOOGLE_API_KEY.slice(0, 8)}...${GOOGLE_API_KEY.slice(-4)}`);
-  console.log(`代理地址：https://api.170909.xyz/v1/chat/completions\n`);
+  console.log(`代理地址：https://your-domain.com/v1/chat/completions\n`);
   
   // 测试 1: 直接调用 Google API（验证 Key 是否有效）
   console.log('📞 测试 1: 直接调用 Google API...');
@@ -39,7 +39,7 @@ async function test() {
   
   // 测试 2: 通过代理调用
   console.log('📞 测试 2: 通过代理调用...');
-  const proxyUrl = 'https://api.170909.xyz/v1/chat/completions';
+  const proxyUrl = 'https://your-domain.com/v1/chat/completions';
   const body = {
     model: 'gemma-4-31b-it',
     messages: [{ role: 'user', content: 'Hello' }]

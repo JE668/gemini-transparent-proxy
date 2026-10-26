@@ -337,6 +337,7 @@ curl https://your-domain/v1/responses \
 │       └── page.js                  # Dashboard 控制台（纯 CSS/SVG）
 ├── lib/
 │   ├── models.js                    # 模型列表 + 配额定义
+│   ├── auth.js                      # Dashboard API 运行时密码校验（Bearer）
 │   ├── redis.js                     # Redis 单例（Upstash）
 │   ├── utils.js                     # 配额日期计算
 │   ├── responses.js                 # Responses API ↔ Chat 转换层
@@ -350,7 +351,6 @@ curl https://your-domain/v1/responses \
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml               # CF Worker 自动部署
-├── middleware.js                    # Dashboard API Bearer Token 认证
 ├── next.config.js                   # Next.js 配置 + CORS
 └── package.json
 ```

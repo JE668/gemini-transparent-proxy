@@ -1,3 +1,4 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // app/api/clients/route.js
 import { getQuotaDate } from '../../../lib/utils';
 import getRedis from '../../../lib/redis';
@@ -30,7 +31,8 @@ function maskIP(ip) {
   return ip.slice(0, 8) + '***';
 }
 
-export async function GET() {
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
     const redis = getRedis();
     const date = getQuotaDate();

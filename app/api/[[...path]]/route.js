@@ -199,6 +199,14 @@ async function fetchWithRetry(url, options, startTime, maxRetries = 2) {
 }
 
 export async function GET(req) {
+  // /v1/models（含 /api/v1/models、/api/models）：返回真实模型目录，与 CF Worker 版行为一致
+  const pathname = req?.nextUrl?.pathname || new URL(req.url).pathname;
+  if (pathname.endsWith('/models')) {
+    return new Response(JSON.stringify({ object: 'list', data: HIGH_QUOTA_MODELS }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) },
+    });
+  }
   return new Response(JSON.stringify({
     name: 'Gemini Transparent Proxy',
     version: '2.0.0',
@@ -534,14 +542,22 @@ return {1, sum + cost, 0}
           response = retryResp; // 仍失败 → 走模型降级
           shouldFallback = true;
         } else {
-          response = retryResp; // 成功
-          modelId = JSON.parse(requestBodyForFetch).model;
+          response = retryResp; // 成功（同模型重试，modelId 保持不变，无需重解析）
         }
-      } else if (status === 524 || status === 500 || isHighDemand503(await response.text())) {
+      } else if (status === 524 || status === 500) {
         shouldFallback = true;
+      } else {
+        // 503：用 clone() 读取错误文本，避免消费原响应体导致后续无法转发
+        const errText = await response.clone().text().catch(() => '');
+        if (isHighDemand503(errText)) {
+          shouldFallback = true;
+        }
       }
       if (shouldFallback) {
-        const originalModel = JSON.parse(body).model;
+        let originalModel = modelId;
+        try {
+          originalModel = JSON.parse(body).model || modelId;
+        } catch {}
         const fallbackModel = originalModel ? MODEL_FALLBACKS[originalModel] : null;
         if (fallbackModel) {
           const newBody = JSON.parse(requestBodyForFetch);

@@ -1,3 +1,4 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // app/api/dashboard/route.js
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
@@ -6,7 +7,8 @@ import getRedis from '../../../lib/redis';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-export async function GET() {
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
     const redis = getRedis();
     if (!redis) {

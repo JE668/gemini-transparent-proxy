@@ -10,7 +10,7 @@ if (!GOOGLE_API_KEY) {
 async function test() {
   console.log('🔍 测试代理 API...\n');
   
-  const url = 'https://api.170909.xyz/v1/chat/completions';
+  const url = 'https://your-domain.com/v1/chat/completions';
   
   const body = {
     model: 'gemma-4-31b-it',

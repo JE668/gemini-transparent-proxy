@@ -101,7 +101,7 @@ https://vercel.com/JE668/gemini-transparent-proxy/functions
 
 ```bash
 # 测试 1: 验证路由修复
-curl -s -I "https://api.170909.xyz/v1/models" 
+curl -s -I "https://your-domain.com/v1/models" 
 
 # 测试 2: 完整 API 调用
 node test-detailed.js 你的-Google-API-Key

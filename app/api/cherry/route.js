@@ -1,9 +1,11 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 import { NextResponse } from 'next/server';
 
 // Cherry 集群状态监控
 // 返回各节点的健康状态、延迟、请求数
 
-export async function GET() {
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
     // 临时模拟数据（后续可接入真实的 Cherry 集群监控）
     const cluster = {

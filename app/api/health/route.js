@@ -1,4 +1,5 @@
-export const runtime = 'edge';
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
+export const runtime = 'nodejs';
 
 import getRedis from '../../../lib/redis';
 
@@ -33,6 +34,7 @@ async function checkRedis() {
 }
 
 export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   // Bearer Token 认证：复用 DASHBOARD_PASSWORD
   const dashboardPassword = process.env.DASHBOARD_PASSWORD;
   if (dashboardPassword) {

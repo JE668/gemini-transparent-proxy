@@ -1,5 +1,5 @@
 // 测试生产环境 Dashboard 数据
-const DASHBOARD_URL = 'https://api.170909.xyz';
+const DASHBOARD_URL = 'https://your-domain.com';
 
 // 用户，请先告诉我 Dashboard 密码，或者你在本地访问时看到的数据情况：
 console.log(`

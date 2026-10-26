@@ -1,10 +1,17 @@
+import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // app/api/quota/route.js
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
 import { getQuotaDate } from '../../../lib/utils';
 import { TPM_LIMITS } from '../../../lib/token-limit';
 import getRedis from '../../../lib/redis';
 
-export async function GET() {
+// 告警消息中的 Dashboard 链接（可选）：设置 DASHBOARD_URL 后告警附带链接，未设置则省略
+const DASHBOARD_LINK = process.env.DASHBOARD_URL
+  ? `\n[查看 Dashboard](${process.env.DASHBOARD_URL}/dashboard)`
+  : '';
+
+export async function GET(req) {
+  if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
     const date = getQuotaDate();
     const globalUsed = await getRedis()?.get(`quota:global:${date}`) || 0;
@@ -177,8 +184,8 @@ export async function GET() {
                     `总请求数：${totalRequests}\n` +
                     `失败次数：${totalErrors}\n` +
                     `告警级别：${errorAlert.message}\n\n` +
-                    `时间：${new Date().toLocaleString('zh-CN')}\n` +
-                    `[查看 Dashboard](https://api.170909.xyz/dashboard)`
+                    `时间：${new Date().toLocaleString('zh-CN')}` +
+                    DASHBOARD_LINK
             },
             at: { isAtAll: true }
           };
@@ -233,7 +240,7 @@ export async function GET() {
         const tpmLines = tpmHot
           .map(d => `- ${d.model.replace('models/', '')}：${(d.tpmUsed / 1000).toFixed(1)}K / ${(d.tpmLimit / 1000)}K (${d.tpmPercent}%)`)
           .join('\n');
-        const tpmText = `**TPM 即将触顶预警**\n\n${tpmLines}\n\n时间：${new Date().toLocaleString('zh-CN')}\n[查看 Dashboard](https://api.170909.xyz/dashboard)`;
+        const tpmText = `**TPM 即将触顶预警**\n\n${tpmLines}\n\n时间：${new Date().toLocaleString('zh-CN')}${DASHBOARD_LINK}`;
         try {
           if (webhookType === 'dingtalk') {
             await fetch(webhookUrl, {
