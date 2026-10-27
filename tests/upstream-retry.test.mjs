@@ -276,6 +276,25 @@ test('降级也失败时：返回原始那次失败的响应（保留原状态�
   assert.equal(await res.response.text(), '原始错误', '应保留原始错误体');
 });
 
+test('429 重试仍失败且降级也失败：返回「最初那次」429（而非重试后的 429）', async () => {
+  const fetchFn = makeFetch([
+    makeResponse(429, '{"error":"第一次429"}', { 'Retry-After': '2' }),
+    makeResponse(429, '{"error":"重试后的429"}', { 'Retry-After': '30' }),
+    makeResponse(429, '{"error":"降级后的429"}', { 'Retry-After': '60' }),
+  ]);
+  const res = await fetchWithModelFallback({
+    fetchFn, url: 'https://x', headers: {}, body: BASE_BODY,
+    modelId: BASE_BODY.model, fallbacks: FALLBACK, sleep: makeSleep(),
+  });
+  assert.equal(res.response.status, 429);
+  assert.equal(res.fellBack, false);
+  assert.equal(res.retries, 2, '应记录 1 次同模型重试 + 1 次降级尝试');
+  assert.equal(fetchFn.calls.length, 3);
+  const body = await res.response.text();
+  assert.equal(body, '{"error":"第一次429"}', '应返回最初那次 429 的错误体，而非重试后的');
+  assert.equal(res.response.headers.get('Retry-After'), '2', '应保留最初那次 429 的 Retry-After');
+});
+
 test('onFallback / onRetry 回调会被调用，便于服务端记录降级事实', async () => {
   const events = [];
   const fetchFn = makeFetch([

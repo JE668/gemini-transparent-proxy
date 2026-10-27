@@ -4,7 +4,7 @@ import { handleResponses } from './responses.js';
 //    从根上消除「Vercel 与 CF Worker 各维护一份、改一边忘另一边」的线上事故来源。
 import { HIGH_QUOTA_MODELS } from '../../lib/models.js';
 import { TPM_LIMITS, estimateInputTokens } from '../../lib/token-limit.js';
-import { GOOGLE_OPENAI_BLOCKED, cleanTools } from '../../lib/openai-compat.js';
+import { sanitizeOpenAIBody, buildTargetUrl } from '../../lib/openai-compat.js';
 import { MODEL_FALLBACKS } from '../../lib/model-fallbacks.js';
 
 /**
@@ -17,7 +17,7 @@ import { MODEL_FALLBACKS } from '../../lib/model-fallbacks.js';
  */
 
 // Google Gemini OpenAI-compatible API 不支持的字段黑名单（黑名单 vs 白名单：只删明确不支持的字段，其他全部透传）
-// → 已改为从 ../../lib/openai-compat.js 引入（与 Vercel 端共用同一份定义）
+// → 该清洗逻辑已收进 lib/openai-compat.js，CF 端统一经 sanitizeOpenAIBody 调用（与 Vercel 端共用同一份定义）
 
 const HOP_BY_HOP = new Set([
   'host', 'connection', 'keep-alive', 'proxy-authorization',
@@ -44,45 +44,9 @@ function generateReqId() {
   return Date.now().toString(16).slice(-6) + Math.random().toString(16).slice(2, 6);
 }
 
-/**
- * 清洗 tools 中的 function 对象，只保留 Google 认识的字段。
- * Hermes/Workbuddy 可能发 strict、type 等 OpenAI 特有字段，Google 不认识会 400。
- */
-
-/** 黑名单过滤：仅删除 Google 明确不支持的字段，其他全部透传 */
-function sanitizeOpenAIBodyStrict(body) {
-  if (!body) return body;
-  try {
-    const json = JSON.parse(body);
-    const cleaned = {};
-    for (const key in json) {
-      if (!GOOGLE_OPENAI_BLOCKED.has(key) && json[key] !== null) {
-        cleaned[key] = json[key];
-      }
-    }
-    // ⚠️ 递归清洗 tools[].function：只保留 name/description/parameters
-    if (cleaned.tools && Array.isArray(cleaned.tools)) {
-      cleaned.tools = cleanTools(cleaned.tools);
-    }
-    return JSON.stringify(cleaned);
-  } catch {
-    return body;
-  }
-}
-
-function buildTargetUrl(pathname, queryString) {
-  const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
-  let targetPath = pathname;
-  if (pathname.startsWith('/api/v1/')) {
-    targetPath = '/v1beta/openai/' + pathname.slice('/api/v1/'.length);
-  } else if (pathname.startsWith('/v1/')) {
-    targetPath = '/v1beta/openai/' + pathname.slice('/v1/'.length);
-  } else if (pathname.startsWith('/api/')) {
-    // Hermes/Workbuddy 有时发 /api/chat/completions（不带 v1 前缀）
-    targetPath = '/v1beta/openai/' + pathname.slice('/api/'.length);
-  }
-  return `${GOOGLE_API_BASE}${targetPath}${queryString || ''}`;
-}
+// ⚠️ 请求体清洗（sanitizeOpenAIBody）与上游 URL 映射（buildTargetUrl）
+//    统一从 ../../lib/openai-compat.js 引入，与 Vercel 端共用同一份实现，
+//    避免「两端各维护一份、改一边忘另一边」的行为分叉。
 
 function cleanHeaders(requestHeaders) {
   const headers = new Headers();
@@ -531,7 +495,7 @@ export default {
             const parsed = JSON.parse(body);
             if (parsed.stream === true) originalStreamRequested = true;
             if (parsed.model) modelId = parsed.model;
-            body = sanitizeOpenAIBodyStrict(body);
+            body = sanitizeOpenAIBody(body);
             // QClaw 兼容：把 stream=true 改为非流式发给 Google
             // 拿到完整 JSON 后再手动拆分为 SSE chunks（先 reasoning 后 content 后 tool_calls）
             // 这样可以正确处理工具调用块和推理内容

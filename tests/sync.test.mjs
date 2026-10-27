@@ -51,12 +51,13 @@ test('CF Worker 复用 lib/token-limit.js 的 TPM 额度与 token 估算', () =>
     'CF Worker 不得再内联 estimateInputTokens 副本');
 });
 
-test('CF Worker 复用 lib/openai-compat.js 的请求体清洗', () => {
-  assert.match(cfSource, /import\s*\{[^}]*GOOGLE_OPENAI_BLOCKED[^}]*cleanTools[^}]*\}\s*from\s*'\.\.\/\.\.\/lib\/openai-compat\.js'/,
-    'CF Worker 必须从 lib/openai-compat.js 引入黑名单与 cleanTools');
+test('CF Worker 复用 lib/openai-compat.js 的请求体清洗与 URL 映射', () => {
+  assert.match(cfSource, /import\s*\{[^}]*sanitizeOpenAIBody[^}]*buildTargetUrl[^}]*\}\s*from\s*'\.\.\/\.\.\/lib\/openai-compat\.js'/,
+    'CF Worker 必须从 lib/openai-compat.js 引入 sanitizeOpenAIBody 与 buildTargetUrl');
   assert.ok(!/function\s+cleanTools\s*\(/.test(cfSource), 'CF Worker 不得再内联 cleanTools 副本');
-  assert.ok(!/const\s+GOOGLE_OPENAI_BLOCKED\s*=\s*new\s+Set/.test(cfSource),
-    'CF Worker 不得再内联黑名单副本');
+  assert.ok(!/const\s+GOOGLE_OPENAI_BLOCKED\s*=\s*new\s+Set/.test(cfSource), 'CF Worker 不得再内联黑名单副本');
+  assert.ok(!/function\s+sanitizeOpenAIBodyStrict\s*\(/.test(cfSource), 'CF Worker 不得再内联 sanitizeOpenAIBodyStrict 副本');
+  assert.ok(!/function\s+buildTargetUrl\s*\(/.test(cfSource), 'CF Worker 不得再内联 buildTargetUrl 副本');
 });
 
 test('Vercel 端同样复用 lib/ 下的共享模块', () => {
