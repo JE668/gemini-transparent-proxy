@@ -28,6 +28,9 @@ const VERCEL_ROUTE = join(ROOT, 'app/api/[[...path]]/route.js');
 
 const cfSource = readFileSync(CF_INDEX, 'utf8');
 const routeSource = readFileSync(VERCEL_ROUTE, 'utf8');
+const responsesSource = readFileSync(join(ROOT, 'lib/responses.js'), 'utf8');
+const handlerSource = readFileSync(join(ROOT, 'lib/responses-handler.js'), 'utf8');
+const cfResponsesSource = readFileSync(join(ROOT, 'cloudflare-worker/src/responses.js'), 'utf8');
 
 // ── 1. 共享模块：CF Worker 必须 import，不得再内联一份副本 ──
 
@@ -110,6 +113,19 @@ test('MODEL_FALLBACKS：不存在自环（否则重试同一个模型毫无意�
     assert.notEqual(from, to, `${from} 的降级目标是它自己`);
   }
 });
+
+test('Responses 路径两端都接入了重试 / 降级', () => {
+  for (const [name, src, importRe] of [
+    ['lib/responses.js', responsesSource, /from\s*'\.\/upstream-retry\.js'/],
+    ['lib/responses-handler.js', handlerSource, /from\s*'\.\/upstream-retry\.js'/],
+    ['CF responses.js', cfResponsesSource, /from\s*'\.\.\/\.\.\/lib\/upstream-retry\.js'/],
+  ]) {
+    assert.match(src, importRe, `${name} 必须引入 upstream-retry`);
+    assert.ok(src.includes('fetchWithModelFallback({'),
+      `${name} 未接入 fetchWithModelFallback（Responses 路径仍会因上游限流直接失败）`);
+  }
+});
+
 // ── 4. 限流覆盖范围守卫：提前 return 的端点也必须限流 ──
 
 test('Vercel：/v1/responses 与 /v1/interactions 分支都调用了 enforceRateLimits', () => {

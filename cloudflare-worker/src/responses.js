@@ -10,6 +10,7 @@ import {
   getInteractionId,
   saveInteractionMapping,
 } from './interactions.js';
+import { fetchWithModelFallback } from '../../lib/upstream-retry.js';
 
 const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -364,10 +365,16 @@ async function* streamResponses(env, inBody, chatBody, fetchFn) {
 
   try {
     const upstreamUrl = `${GOOGLE_API_BASE}/v1beta/openai/chat/completions`;
-    const upstreamResp = await fetchFn(upstreamUrl, {
-      method: 'POST',
+    // ⚠️ 上游 429/5xx 时按「同模型退避重试 → 模型降级」兜底（与聊天路径同一套策略）
+    const { response: upstreamResp } = await fetchWithModelFallback({
+      fetchFn,
+      url: upstreamUrl,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(chatBody),
+      body: chatBody,
+      modelId: chatBody.model,
+      onFallback: (from, to, status) => {
+        console.log(`[Responses] Model fallback: ${from} → ${to} (${status})`);
+      },
     });
 
     if (!upstreamResp.ok) {
@@ -679,13 +686,21 @@ async function* streamResponses(env, inBody, chatBody, fetchFn) {
 
 async function handleResponsesNonStream(env, inBody, chatBody, apiKey) {
   const upstreamUrl = `${GOOGLE_API_BASE}/v1beta/openai/chat/completions`;
-  const upstreamResp = await fetch(upstreamUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
+  // ⚠️ 上游 429/5xx 时按「同模型退避重试 → 模型降级」兜底（与聊天路径同一套策略）
+  const upstreamFetch = async (url, opts) => {
+    const headers = { ...opts.headers };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    return fetch(url, { ...opts, headers });
+  };
+  const { response: upstreamResp } = await fetchWithModelFallback({
+    fetchFn: upstreamFetch,
+    url: upstreamUrl,
+    headers: { 'Content-Type': 'application/json' },
+    body: chatBody,
+    modelId: chatBody.model,
+    onFallback: (from, to, status) => {
+      console.log(`[Responses] Model fallback: ${from} → ${to} (${status})`);
     },
-    body: JSON.stringify(chatBody),
   });
 
   if (!upstreamResp.ok) {
