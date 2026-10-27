@@ -10,7 +10,7 @@ export async function GET(req) {
     version: '1.1.0-debug',
     deploy_timestamp: new Date().toISOString(),
     proxyBase: process.env.NEXT_PUBLIC_BASE_URL || 'https://your-domain.com',
-    defaultModel: process.env.DEFAULT_MODEL || 'gemma-4-31b-it',
+    defaultModel: process.env.DEFAULT_MODEL || 'gemini-3.5-flash-lite',
     modelsCount: HIGH_QUOTA_MODELS.length,
     features: {
       streaming: true,

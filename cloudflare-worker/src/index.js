@@ -1,4 +1,11 @@
 import { handleResponses } from './responses.js';
+// ⚠️ 单一数据源：模型目录 / TPM 额度 / token 估算 / 请求体清洗 统一从 lib/ 引入。
+//    CF Worker 虽然独立部署，但 wrangler（esbuild）会把这些纯模块一并打进产物，
+//    从根上消除「Vercel 与 CF Worker 各维护一份、改一边忘另一边」的线上事故来源。
+import { HIGH_QUOTA_MODELS } from '../../lib/models.js';
+import { TPM_LIMITS, estimateInputTokens } from '../../lib/token-limit.js';
+import { GOOGLE_OPENAI_BLOCKED, cleanTools } from '../../lib/openai-compat.js';
+import { MODEL_FALLBACKS } from '../../lib/model-fallbacks.js';
 
 /**
  * Gemini Transparent Proxy — Cloudflare Workers Edition (Ultra-Compatible Version)
@@ -10,24 +17,7 @@ import { handleResponses } from './responses.js';
  */
 
 // Google Gemini OpenAI-compatible API 不支持的字段黑名单（黑名单 vs 白名单：只删明确不支持的字段，其他全部透传）
-const GOOGLE_OPENAI_BLOCKED = new Set([
-  'stream_options',          // Google API 不认识
-  'reasoning_effort',        // OpenAI 推理强度
-  'frequency_penalty',       // Google 不支持
-  'presence_penalty',        // Google 不支持
-  'logit_bias',              // Google 不支持
-  'logprobs',                // Google 不支持
-  'top_logprobs',            // Google 不支持
-  'seed',                    // Google 不支持
-  'user',                    // Google 不支持
-  'service_tier',            // OpenAI 专用
-  'n',                       // Google 用 candidate_count 代替
-  'include_reasoning',       // 部分客户端会发
-  'store',                   // OpenAI 会发 store:false，Google 不认识
-  'metadata',                // OpenAI 偶尔会发
-  'parallel_tool_calls',     // Google 不支持此字段
-  'response_format',         // OpenAI 结构化输出（Google 可能不兼容）
-]);
+// → 已改为从 ../../lib/openai-compat.js 引入（与 Vercel 端共用同一份定义）
 
 const HOP_BY_HOP = new Set([
   'host', 'connection', 'keep-alive', 'proxy-authorization',
@@ -47,27 +37,7 @@ const RESPONSE_BLOCKED = new Set([
 //     Imagen（predict）/ Embedding（embedContent）端点不同，详见 README「免费层额度速查表」。
 const MODELS = {
   object: 'list',
-  data: [
-    // 文本对话 · 主力高配额
-    { id: 'gemma-4-31b-it', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemma-4-26b-a4b-it', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.1-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
-    // 文本对话 · 低配额 (RPD 20)
-    { id: 'gemini-3.8-flash', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.6-flash', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3-flash-preview', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-flash', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-flash-lite', object: 'model', created: 1743561600, owned_by: 'google' },
-    // 语音合成 TTS (RPD 10)
-    { id: 'gemini-3.8-flash-tts', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.8-flash-lite-tts', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-2.5-flash-preview-tts', object: 'model', created: 1743561600, owned_by: 'google' },
-    { id: 'gemini-3.1-flash-tts-preview', object: 'model', created: 1743561600, owned_by: 'google' },
-    // Agent 模型（走 Interactions API）
-    // （deep-research 系列 2026-10-25 快照免费层配额归零，已移除）
-    { id: 'antigravity-preview-05-2026', object: 'model', created: 1743561600, owned_by: 'google' },
-  ],
+  data: HIGH_QUOTA_MODELS,
 };
 
 function generateReqId() {
@@ -78,25 +48,6 @@ function generateReqId() {
  * 清洗 tools 中的 function 对象，只保留 Google 认识的字段。
  * Hermes/Workbuddy 可能发 strict、type 等 OpenAI 特有字段，Google 不认识会 400。
  */
-function cleanTools(tools) {
-  if (!tools || !Array.isArray(tools)) return tools;
-  return tools.map(tool => {
-    if (!tool || !tool.function) return tool;
-    const cleaned = {};
-    for (const key in tool) {
-      if (key !== 'function') {
-        cleaned[key] = tool[key];
-      }
-    }
-    // 只保留 name, description, parameters
-    const fn = {};
-    if (tool.function.name !== undefined) fn.name = tool.function.name;
-    if (tool.function.description !== undefined) fn.description = tool.function.description;
-    if (tool.function.parameters !== undefined) fn.parameters = tool.function.parameters;
-    cleaned.function = fn;
-    return cleaned;
-  });
-}
 
 /** 黑名单过滤：仅删除 Google 明确不支持的字段，其他全部透传 */
 function sanitizeOpenAIBodyStrict(body) {
@@ -212,43 +163,8 @@ class RateLimiter {
 const rateLimiter = new RateLimiter(60 * 1000, 60);
 
 // ===== 输入 token（TPM）限流：根治 Google 免费层 16K 墙 =====
-// ⚠️ 必须与 lib/token-limit.js 保持一致（CF Worker 独立构建，无法 import lib）
-const TPM_LIMITS = {
-  'gemma-4-31b-it': 16000,
-  'gemma-4-26b-a4b-it': 16000,
-  'gemini-3.8-flash': 250000,
-  'gemini-3.5-flash-lite': 250000,
-  'gemini-3.1-flash-lite': 250000,
-  'gemini-3.6-flash': 250000,
-  'gemini-3-flash-preview': 250000,
-  'gemini-2.5-flash': 250000,
-  'gemini-2.5-flash-lite': 250000,
-  'gemini-3.8-flash-tts': 10000,
-  'gemini-3.8-flash-lite-tts': 10000,
-  'gemini-2.5-flash-preview-tts': 10000,
-  'gemini-3.1-flash-tts-preview': 10000,
-  'antigravity-preview-05-2026': 100000,
-};
+// ⚠️ 已改为从 lib/token-limit.js 引入，与 Vercel 端天然保持一致
 
-function estimateInputTokens(body) {
-  if (!body || typeof body !== 'object') return 0;
-  const texts = [];
-  if (typeof body.system === 'string') texts.push(body.system);
-  if (Array.isArray(body.messages)) {
-    for (const m of body.messages) {
-      if (!m) continue;
-      if (typeof m.content === 'string') texts.push(m.content);
-      else if (Array.isArray(m.content)) {
-        for (const part of m.content) {
-          if (part && typeof part.text === 'string') texts.push(part.text);
-        }
-      }
-    }
-  }
-  let total = 0;
-  for (const t of texts) total += 4 + Math.ceil(t.length / 4);
-  return total;
-}
 
 // 按模型 + IP 的每分钟输入 token 滑动窗口（内存，单实例；多实例下与 RPM 限流同样存在轻微不一致，由下面的 429 重试/降级兜底）
 class TokenRateLimiter {
@@ -351,13 +267,9 @@ async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
  * （跳过同为 16K TPM 的 26b，直奔 250K TPM 的 Flash-Lite；
  *   降级目标取 RPD 500 的 gemini-3.5-flash-lite 而非 RPD 仅 20 的 gemini-2.5-flash，
  *   与 Vercel 端 app/api/[[...path]]/route.js 保持一致） */
-const MODEL_FALLBACKS = {
-  'gemma-4-31b-it': 'gemini-3.5-flash-lite',
-  'gemma-4-26b-a4b-it': 'gemini-3.5-flash-lite',
-};
-
 /** 检测 Google 503 UNAVAILABLE 错误体 */
 function isHighDemand503(bodyText) {
+  if (!bodyText || typeof bodyText !== 'string') return false;
   return bodyText.includes('UNAVAILABLE') || bodyText.includes('high demand');
 }
 
@@ -385,6 +297,67 @@ async function upstashPipe(env, commands) {
   }));
 }
 
+/** 从请求体中取出 model（解析失败时返回 'unknown'） */
+function extractModelId(body) {
+  if (!body || typeof body !== 'object') return 'unknown';
+  return body.model || 'unknown';
+}
+
+/**
+ * 对「提前 return 的独立端点」执行限流。
+ *
+ * ⚠️ 为什么需要它：/v1/responses 与 /v1/interactions 在主流程中会提前 return，
+ *    不会经过通用转发路径上的限流 —— 结果是 Codex（Responses API）流量
+ *    完全不受 RPM / TPM 保护，会直接撞穿 Google 免费层配额。
+ *
+ * 语义与 Vercel 端保持一致：RPM 按客户端 IP，TPM 按「模型 + IP」。
+ *
+ * @returns {Response|null} 需要拒绝时返回 429 Response；放行时返回 null
+ */
+function enforceRateLimits({ reqId, clientIP, body, modelId }) {
+  if (!rateLimiter.check(clientIP)) {
+    return new Response(JSON.stringify({
+      error: {
+        message: '请求过于频繁，请稍后重试',
+        type: 'rate_limit_error',
+        code: 429,
+        reqId,
+      }
+    }), {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': '60',
+        'X-Request-Id': reqId,
+        ...corsHeaders(),
+      },
+    });
+  }
+
+  const inputTokens = estimateInputTokens(body);
+  const tpmRes = tokenRateLimiter.check(modelId, clientIP, inputTokens);
+  if (!tpmRes.allowed) {
+    return new Response(JSON.stringify({
+      error: {
+        message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmRes.limit}，本次请求约 ${inputTokens} token 会超出，请 ${tpmRes.retryAfter}s 后重试或改用更大额度的模型`,
+        type: 'token_rate_limit_exceeded',
+        code: 429,
+        reqId,
+      }
+    }), {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': String(tpmRes.retryAfter),
+        'X-Request-Id': reqId,
+        ...corsHeaders(),
+      },
+    });
+  }
+
+  return null;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -394,6 +367,11 @@ export default {
     ctx.waitUntil(Promise.resolve(rateLimiter.cleanup()));
     ctx.waitUntil(Promise.resolve(tokenRateLimiter.cleanup()));
     const reqId = generateReqId();
+
+    // 客户端 IP：RPM 限流与 TPM 限流的键都基于它。
+    // ⚠️ 必须在这里就算好 —— /v1/responses 与 /v1/interactions 会在下面提前 return。
+    const rawIP = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
+    const clientIP = normalizeIP(rawIP);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders() });
@@ -421,6 +399,24 @@ export default {
 
     // ── Responses API (Codex 客户端) ──
     if (pathname === '/v1/responses' && request.method === 'POST') {
+      // ⚠️ 本分支会提前 return，不经过下面的通用限流 → 必须在这里单独限流。
+      // 用 clone() 读取 body，避免消费掉 handleResponses 需要的原始请求体。
+      let limitBody = null;
+      try {
+        limitBody = await request.clone().json();
+      } catch {
+        limitBody = {};
+      }
+      const limited = enforceRateLimits({
+        reqId,
+        clientIP,
+        body: limitBody,
+        modelId: extractModelId(limitBody),
+      });
+      if (limited) {
+        logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, 'rate-limited');
+        return limited;
+      }
       logRequest(reqId, request.method, pathname, 200, 0, 'responses-api');
       return handleResponses(request, env);
     }
@@ -432,6 +428,23 @@ export default {
 
     // ── Interactions API 直连 ──
     if (pathname === '/v1/interactions' && request.method === 'POST') {
+      // ⚠️ 同 /v1/responses：本分支提前 return，需单独限流
+      let limitBody = null;
+      try {
+        limitBody = await request.clone().json();
+      } catch {
+        limitBody = {};
+      }
+      const limited = enforceRateLimits({
+        reqId,
+        clientIP,
+        body: limitBody,
+        modelId: extractModelId(limitBody),
+      });
+      if (limited) {
+        logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, 'rate-limited');
+        return limited;
+      }
       const authHeader = request.headers.get('authorization') || '';
       const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
       const inBody = await request.json();
@@ -463,8 +476,6 @@ export default {
     }
 
     // 限流检查（基于客户端 IP）
-    const rawIP = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
-    const clientIP = normalizeIP(rawIP);
     if (!rateLimiter.check(clientIP)) {
       logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `rate-limited ${clientIP}`);
       return new Response(JSON.stringify({
@@ -575,7 +586,7 @@ export default {
         let shouldFallback = false;
         if (response.status === 429) {
           shouldFallback = true; // token 配额 429 直接降级到更大额度模型（同模型重试已在 fetchWithRetry 完成）
-        } else if (response.status === 524 || response.status === 500 || isHighDemand503(await response.text())) {
+        } else if (response.status === 524 || response.status === 500 || isHighDemand503(await response.clone().text())) {
           shouldFallback = true;
         }
         if (shouldFallback) {

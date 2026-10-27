@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 60; // Hobby 上限 60s，Pro 上限 300s
 
 import { HIGH_QUOTA_MODELS } from '../../../lib/models';
-import { TPM_LIMITS, estimateInputTokens } from '../../../lib/token-limit';
+import { MODEL_FALLBACKS } from '../../../lib/model-fallbacks';
 
 import { getQuotaDate } from '../../../lib/utils';
 import { getRedis } from '../../../lib/redis';
@@ -17,8 +17,19 @@ import {
   callInteractionsApi,
   getInteractionId,
 } from '../../../lib/interactions';
-
-const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com';
+// 请求体清洗 / URL 映射 / 限流 —— 均为零依赖纯模块，便于单元测试直接引入
+import {
+  GOOGLE_API_BASE,
+  sanitizeOpenAIBody,
+  cleanTools,
+  buildTargetUrl,
+} from '../../../lib/openai-compat';
+import {
+  computeClientFingerprint,
+  checkRpmLimit,
+  checkTpmLimit,
+  parseRpmLimit,
+} from '../../../lib/rate-limit';
 
 // 调试：记录最近的请求信息（全局变量，Vercel serverless 实例内有效）
 globalThis.__LAST_REQUEST = null;
@@ -44,69 +55,10 @@ async function getRequestBody(req) {
     if (done) break;
     chunks.push(decoder.decode(value, { stream: true }));
   }
+  // ⚠️ 必须做收尾 flush：否则末尾若残留不完整的多字节 UTF-8 序列会被静默丢弃，
+  //    导致 JSON.parse 失败 → 500。decode() 不带 { stream: true } 即为 flush。
+  chunks.push(decoder.decode());
   return chunks.join('');
-}
-
-const GOOGLE_OPENAI_BLOCKED = new Set([
-  'stream_options', 'reasoning_effort', 'frequency_penalty', 'presence_penalty',
-  'logit_bias', 'logprobs', 'top_logprobs', 'seed', 'user', 'service_tier',
-  'n', 'include_reasoning', 'store', 'metadata', 'parallel_tool_calls', 'response_format',
-]);
-
-function sanitizeOpenAIBody(body) {
-  if (!body || body === '{}') return body;
-  try {
-    const json = JSON.parse(body);
-    const cleaned = {};
-    for (const key in json) {
-      if (!GOOGLE_OPENAI_BLOCKED.has(key) && json[key] !== null) {
-        cleaned[key] = json[key];
-      }
-    }
-    // ⚠️ 递归清洗 tools[].function：只保留 name/description/parameters
-    if (cleaned.tools && Array.isArray(cleaned.tools)) {
-      cleaned.tools = cleanTools(cleaned.tools);
-    }
-    return JSON.stringify(cleaned);
-  } catch (e) {
-    // 非 JSON body 直接透传
-    return body;
-  }
-}
-
-function cleanTools(tools) {
-  return tools.map(tool => {
-    if (!tool || !tool.function) return tool;
-    const cleaned = {};
-    for (const key in tool) {
-      if (key !== 'function') cleaned[key] = tool[key];
-    }
-    const fn = {};
-    if (tool.function.name !== undefined) fn.name = tool.function.name;
-    if (tool.function.description !== undefined) fn.description = tool.function.description;
-    if (tool.function.parameters !== undefined) fn.parameters = tool.function.parameters;
-    cleaned.function = fn;
-    return cleaned;
-  });
-}
-
-function buildTargetUrl(pathname, search) {
-  const rules = [
-    { prefix: '/api/v1/', replacement: '/v1beta/openai/' },
-    { prefix: '/v1/', replacement: '/v1beta/openai/' },
-    { prefix: '/api/', replacement: '/v1beta/openai/' },
-  ];
-  let targetPath = pathname;
-  for (const { prefix, replacement } of rules) {
-    if (targetPath.startsWith(prefix)) {
-      targetPath = replacement + targetPath.slice(prefix.length);
-      break;
-    }
-  }
-  if (search) {
-    return `${GOOGLE_API_BASE}${targetPath}${search}`;
-  }
-  return `${GOOGLE_API_BASE}${targetPath}`;
 }
 
 function getCorsHeaders(req) {
@@ -122,6 +74,76 @@ function getCorsHeaders(req) {
  'Access-Control-Allow-Headers': '*',
  'Access-Control-Expose-Headers': 'X-Request-Id, Content-Type',
  };
+}
+
+// 从请求体中取出 model（解析失败时返回 'unknown'）
+function extractModelId(body) {
+  try {
+    const json = JSON.parse(body || '{}');
+    return json.model || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * 对「提前 return 的独立端点」执行限流。
+ *
+ * ⚠️ 为什么需要它：/v1/responses 与 /v1/interactions 在主流程中会提前 return，
+ *    不会走到下面通用转发路径上的限流逻辑 —— 结果是 Codex（Responses API）
+ *    流量完全不受 RPM / TPM 保护，会直接撞穿 Google 免费层配额。
+ *    本函数把同样的限流规则补齐到这两条路径上。
+ *
+ * @returns {Promise<Response|null>} 需要拒绝时返回 429 Response；放行时返回 null
+ */
+async function enforceRateLimits({ req, reqId, body, modelId }) {
+  const authHeader = req.headers.get('authorization') || '';
+  if (!authHeader.startsWith('Bearer ')) return null; // anon → 无可归属配额主体，不限流
+  const apiKey = authHeader.slice(7).trim();
+  const fingerprint = await computeClientFingerprint(apiKey);
+  const redis = getRedis();
+  if (!redis) return null;
+
+  const rpmLimit = parseRpmLimit(process.env.RATE_LIMIT_RPM);
+  const rpmResult = await checkRpmLimit({ redis, fingerprint, rpmLimit });
+  if (rpmResult.rejected) {
+    const retryAfter = rpmResult.retryAfter;
+    console.warn(`[${reqId}] Rate Limit: ${fingerprint} exceeded ${rpmLimit} RPM (retry after ${retryAfter}s)`);
+    return new Response(JSON.stringify({
+    error: {
+    message: `请求过于频繁，每分钟最多 ${rpmLimit} 次，请 ${retryAfter} 秒后重试`,
+    type: 'rate_limit_exceeded',
+    code: 429
+    }
+    }), {
+    status: 429,
+    headers: {
+    'Content-Type': 'application/json',
+    'Retry-After': String(retryAfter),
+    ...getCorsHeaders(req),
+    }
+    });
+  }
+
+  const tpmResult = await checkTpmLimit({ redis, fingerprint, modelId, body, openAICompat: true });
+  if (tpmResult.rejected) {
+    const tpmLimit = tpmResult.limit;
+    const inputTokens = tpmResult.inputTokens;
+    const retryAfter = tpmResult.retryAfter;
+    console.warn(`[${reqId}] TPM Limit: ${modelId} ${fingerprint} would exceed ${tpmLimit}/min (need ${inputTokens}, retry after ${retryAfter}s)`);
+    return new Response(JSON.stringify({
+    error: {
+    message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmLimit}，本次请求约 ${inputTokens} token 会超出，请 ${retryAfter}s 后重试或改用更大额度的模型`,
+    type: 'token_rate_limit_exceeded',
+    code: 429
+    }
+    }), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter), ...getCorsHeaders(req) }
+    });
+  }
+
+  return null;
 }
 
 function cleanHeaders(incomingHeaders) {
@@ -157,12 +179,6 @@ function buildResponseHeaders(response, req, reqId) {
   });
   return out;
 }
-
-const MODEL_FALLBACKS = {
-  'gemini-3-flash-preview': 'gemini-2.5-flash',
-  'gemma-4-31b-it': 'gemini-3.5-flash-lite',       // 429/过载 → 250K TPM，真正缓解
-  'gemma-4-26b-a4b-it': 'gemini-3.5-flash-lite',
-};
 
 function isHighDemand503(text) {
   if (!text) return false;
@@ -277,7 +293,12 @@ export async function POST(req) {
     // ── Responses API (Codex 客户端) ──
     if ((pathname === '/v1/responses' || pathname === '/api/v1/responses') && req.method === 'POST') {
       console.log(`[${reqId}] Responses API detected, delegating`);
-      return handleResponsesApi(req, reqId);
+      // ⚠️ 本分支会提前 return，不会经过通用转发路径上的限流逻辑 —— 必须在这里单独限流，
+      //    否则 Codex 流量可以无限打 Google 免费层（这是之前真实存在的漏洞）。
+      const rawBody = await getRequestBody(req);
+      const limited = await enforceRateLimits({ req, reqId, body: rawBody, modelId: extractModelId(rawBody) });
+      if (limited) return limited;
+      return handleResponsesApi(req, reqId, rawBody);
     }
     if ((pathname === '/v1/responses' || pathname === '/api/v1/responses') && req.method === 'GET') {
       return new Response(JSON.stringify({ endpoint: '/v1/responses', methods: ['POST'], streaming: true }), {
@@ -290,6 +311,9 @@ export async function POST(req) {
     if ((pathname === '/v1/interactions' || pathname === '/api/v1/interactions') && req.method === 'POST') {
       console.log(`[${reqId}] Interactions API detected`);
       const rawBody = await getRequestBody(req);
+      // ⚠️ 同 /v1/responses：本分支提前 return，需单独限流
+      const limited = await enforceRateLimits({ req, reqId, body: rawBody, modelId: extractModelId(rawBody) });
+      if (limited) return limited;
       const authHeader = req.headers.get('authorization') || '';
       const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
 
@@ -341,47 +365,15 @@ export async function POST(req) {
       targetUrl = urlWithKey.toString();
       headers.delete('authorization');
     }
-    try {
-    const keyData = new TextEncoder().encode(apiKey);
-    const hashBuf = await crypto.subtle.digest('SHA-1', keyData);
-    const hashArr = Array.from(new Uint8Array(hashBuf));
-    clientFingerprint = hashArr.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch {}
+    clientFingerprint = await computeClientFingerprint(apiKey);
     }
 
     const redis = getRedis();
 
-    const RATE_LIMIT_RPM = parseInt(process.env.RATE_LIMIT_RPM || '15', 10);
-    if (RATE_LIMIT_RPM > 0 && clientFingerprint !== 'anon' && redis) {
-    const WINDOW_MS = 60 * 1000;
-    const rlKey = `ratelimit:${clientFingerprint}`;
-    const nowMs = Date.now();
-    const rlScript = `
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local member = ARGV[4]
-redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
-local count = redis.call('ZCARD', key)
-if count >= limit then
-  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-  return {1, oldest[2]}
-end
-redis.call('ZADD', key, now, member)
-redis.call('EXPIRE', key, math.ceil(window / 1000) + 60)
-return {0, count + 1}
-`;
-    try {
-    const member = `${nowMs}-${Math.random().toString(36).slice(2, 8)}`;
-    const res = await redis.eval(rlScript, [rlKey], [String(nowMs), String(WINDOW_MS), String(RATE_LIMIT_RPM), member]);
-    const rejected = Array.isArray(res) && Number(res[0]) === 1;
-    if (rejected) {
-    const oldestScore = Number(res[1]);
-    let retryAfter = 60;
-    if (Number.isFinite(oldestScore) && oldestScore > 0) {
-    retryAfter = Math.max(1, Math.ceil((oldestScore + WINDOW_MS - nowMs) / 1000));
-    }
+    const RATE_LIMIT_RPM = parseRpmLimit(process.env.RATE_LIMIT_RPM);
+    const rpmResult = await checkRpmLimit({ redis, fingerprint: clientFingerprint, rpmLimit: RATE_LIMIT_RPM });
+    if (rpmResult.rejected) {
+    const retryAfter = rpmResult.retryAfter;
     console.warn(`[${reqId}] Rate Limit: ${clientFingerprint} exceeded ${RATE_LIMIT_RPM} RPM (retry after ${retryAfter}s)`);
     return new Response(JSON.stringify({
     error: {
@@ -397,10 +389,6 @@ return {0, count + 1}
     ...getCorsHeaders(req),
     }
     });
-    }
-    } catch (e) {
-    console.error(`[${reqId}] Rate limiter error (fail-open): ${e?.message || e}`);
-    }
     }
 
     const body = await getRequestBody(req);
@@ -466,57 +454,28 @@ return {0, count + 1}
 
     // === TPM（每分钟输入 token）限流：根治 Google 免费层 16K 墙 ===
     let inputTokens = 0; // TPM 遥测用：本次请求估计输入 token 数（Vercel 为备份流量）
-    const tpmLimit = TPM_LIMITS[modelId];
-    if (isOpenAICompat && tpmLimit && clientFingerprint !== 'anon' && redis) {
-      try {
-        const parsedForTokens = JSON.parse(requestBodyForFetch || '{}');
-        inputTokens = estimateInputTokens(parsedForTokens);
-        const tpmKey = `tpm:${modelId}:${clientFingerprint}`;
-        const nowMs = Date.now();
-        const WINDOW_MS = 60 * 1000;
-        // 滑动窗口：sum(窗口内 token) + 本次 cost > limit 则拒绝，返回 Retry-After
-        const tpmScript = `
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local cost = tonumber(ARGV[4])
-redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
-local items = redis.call('ZRANGEBYSCORE', key, now - window, now)
-local sum = 0
-for i=1,#items do
-  local c = string.match(items[i], '^(%d+)')
-  if c then sum = sum + tonumber(c) end
-end
-if sum + cost > limit then
-  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-  local retryAfter = 60
-  if oldest[2] then retryAfter = math.ceil((tonumber(oldest[2]) + window - now) / 1000) end
-  return {0, sum, retryAfter}
-end
-redis.call('ZADD', key, now, cost .. ':' .. now .. ':' .. math.random())
-redis.call('PEXPIRE', key, window + 2000)
-return {1, sum + cost, 0}
-`;
-        const res = await redis.eval(tpmScript, [tpmKey], [String(nowMs), String(WINDOW_MS), String(tpmLimit), String(inputTokens)]);
-        const allowed = Array.isArray(res) && Number(res[0]) === 1;
-        if (!allowed) {
-          const retryAfter = Math.max(1, Number(res[2]) || 60);
-          console.warn(`[${reqId}] TPM Limit: ${modelId} ${clientFingerprint} would exceed ${tpmLimit}/min (need ${inputTokens}, retry after ${retryAfter}s)`);
-          return new Response(JSON.stringify({
-            error: {
-              message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmLimit}，本次请求约 ${inputTokens} token 会超出，请 ${retryAfter}s 后重试或改用更大额度的模型`,
-              type: 'token_rate_limit_exceeded',
-              code: 429
-            }
-          }), {
-            status: 429,
-            headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter), ...getCorsHeaders(req) }
-          });
+    const tpmResult = await checkTpmLimit({
+      redis,
+      fingerprint: clientFingerprint,
+      modelId,
+      body: requestBodyForFetch,
+      openAICompat: isOpenAICompat,
+    });
+    inputTokens = tpmResult.inputTokens;
+    if (tpmResult.rejected) {
+      const tpmLimit = tpmResult.limit;
+      const retryAfter = tpmResult.retryAfter;
+      console.warn(`[${reqId}] TPM Limit: ${modelId} ${clientFingerprint} would exceed ${tpmLimit}/min (need ${inputTokens}, retry after ${retryAfter}s)`);
+      return new Response(JSON.stringify({
+        error: {
+          message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmLimit}，本次请求约 ${inputTokens} token 会超出，请 ${retryAfter}s 后重试或改用更大额度的模型`,
+          type: 'token_rate_limit_exceeded',
+          code: 429
         }
-      } catch (e) {
-        console.error(`[${reqId}] TPM limiter error (fail-open): ${e?.message || e}`);
-      }
+      }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter), ...getCorsHeaders(req) }
+      });
     }
 
     let response = await fetchWithRetry(targetUrl, {
