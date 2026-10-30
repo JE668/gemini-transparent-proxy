@@ -4,8 +4,32 @@ import { handleResponses } from './responses.js';
 //    从根上消除「Vercel 与 CF Worker 各维护一份、改一边忘另一边」的线上事故来源。
 import { HIGH_QUOTA_MODELS } from '../../lib/models.js';
 import { TPM_LIMITS, estimateInputTokens } from '../../lib/token-limit.js';
-import { sanitizeOpenAIBody, buildTargetUrl } from '../../lib/openai-compat.js';
+import { sanitizeOpenAIBody, buildTargetUrl, redactUrl } from '../../lib/openai-compat.js';
+import { extractBearerToken } from '../../lib/client-auth.js';
+// 流式转换（thought 状态机 / tool_calls SSE 拆分 / 真流式直通）—— 与 Vercel 端共用同一份实现
+import {
+  isQclawCompatClient,
+  buildChatCompletionChunks,
+  buildSseError,
+  transformUpstreamSSE,
+  SSE_DONE,
+} from '../../lib/chat-stream.js';
+// 上游重试策略 —— 与 Vercel 端共用同一份实现
+import { fetchWithRetry as sharedFetchWithRetry } from '../../lib/fetch-retry.js';
 import { MODEL_FALLBACKS } from '../../lib/model-fallbacks.js';
+import { getQuotaDate, getBeijingHour } from '../../lib/utils.js';
+// 遥测事件生成 —— 与 Vercel 端共用同一份实现（补齐 Dashboard 空面板 + 429 计入）
+import {
+  buildTelemetryEvents,
+  buildRateLimitTelemetryEvents,
+  telemetryEventsToUpstashCommands,
+} from '../../lib/telemetry.js';
+// 客户端指纹（API Key → 稳定短哈希）—— 与 Vercel 端共用同一份实现
+import {
+  computeClientFingerprint,
+  parseRpmLimit,
+  resolveRateLimitSubject,
+} from '../../lib/rate-limit.js';
 
 /**
  * Gemini Transparent Proxy — Cloudflare Workers Edition (Ultra-Compatible Version)
@@ -81,11 +105,11 @@ function buildResponseHeaders(response) {
   return headers;
 }
 
-const RETRYABLE = new Set([502, 503, 429]);
-const RETRY_TIMEOUT = 25000;
+// ⚠️ 可重试状态码与退避策略已收敛到 lib/fetch-retry.js（Vercel 与 CF Worker 共用）
 
 // 内存滑动窗口限流器（每个 Worker 实例独立计数，CF 的多实例间不共享）
-// 限制：每分钟每 IP 最多 60 次请求，覆盖常见用量但防止刷爆
+// ⚠️ 归属维度：按 API Key 指纹（与 Vercel 端 lib/rate-limit.js 一致），
+//    不再按客户端 IP —— 否则同一批用户切到 CF 就拿到了另一份额度。
 class RateLimiter {
   constructor(windowMs, maxRequests) {
     this.windowMs = windowMs;
@@ -93,7 +117,9 @@ class RateLimiter {
     this.requests = new Map();
   }
 
-  check(key) {
+  check(key, limit = this.maxRequests) {
+    // limit <= 0 → 不限流（与 Vercel 端 RATE_LIMIT_RPM=0 的语义一致）
+    if (!limit || limit <= 0) return true;
     const now = Date.now();
     const windowStart = now - this.windowMs;
 
@@ -101,7 +127,7 @@ class RateLimiter {
     // 清除窗口外的旧记录
     timestamps = timestamps.filter(t => t > windowStart);
 
-    if (timestamps.length >= this.maxRequests) {
+    if (timestamps.length >= limit) {
       return false;
     }
 
@@ -195,36 +221,18 @@ function normalizeIP(ip) {
   return ip; // IPv4 保持原样
 }
 
+/**
+ * 上游 fetch + 重试。
+ * ⚠️ 实现已收敛到 lib/fetch-retry.js（Vercel 与 CF Worker 共用）。
+ *    旧 CF 版会重试 502/503/429 但忽略 Retry-After；旧 Vercel 版完全不重试 5xx。
+ */
 async function fetchWithRetry(url, options, startTime, maxAttempts = 2) {
-  let lastError;
-  let retries = 0;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const response = await fetch(url, options);
-      if (RETRYABLE.has(response.status) && attempt < maxAttempts) {
-        const elapsed = Date.now() - startTime;
-        if (elapsed > RETRY_TIMEOUT) {
-          response.retries = retries;
-          return response;
-        }
-        retries++;
-        await new Promise((r) => setTimeout(r, attempt * 500));
-        continue;
-      }
-      response.retries = retries;
-      return response;
-    } catch (error) {
-      lastError = error;
-      retries++;
-      const elapsed = Date.now() - startTime;
-      if (attempt < maxAttempts && elapsed < RETRY_TIMEOUT) {
-        await new Promise((r) => setTimeout(r, attempt * 500));
-      } else {
-        break;
-      }
-    }
-  }
-  throw lastError || new Error('Max retry attempts reached');
+  return sharedFetchWithRetry(url, options, startTime, {
+    maxAttempts,
+    onRetry: ({ attempt, status }) => {
+      console.warn(`[fetchWithRetry] retry #${attempt} after ${status || 'network error'}`);
+    },
+  });
 }
 
 /** 模型降级链：Google 429 token 配额 / 503 high demand / 524 时自动切换模型
@@ -237,12 +245,9 @@ function isHighDemand503(bodyText) {
   return bodyText.includes('UNAVAILABLE') || bodyText.includes('high demand');
 }
 
-// 获取配额日期（YYYYMMDD，15 小时偏移与 Vercel 端对齐）
-function getQuotaDate() {
-  const now = new Date();
-  const offsetDate = new Date(now.getTime() - 15 * 60 * 60 * 1000);
-  return offsetDate.toISOString().split('T')[0];
-}
+// ⚠️ 配额日界（quota date）实现已收敛到 lib/utils.js（Vercel 与 CF Worker 共用同一份）。
+//    旧实现在这里内联一份副本，减 15 小时 → 实际翻转点是北京时间 23:00，
+//    与注释声明的 15:00、README 的说明三者互相矛盾。
 
 // Upstash Redis REST：逐条发送，不报错
 // 注意：Upstash REST API 不识别 pipeline 格式 [['INCR','k1'],['INCR','k2']]，
@@ -278,48 +283,93 @@ function extractModelId(body) {
  *
  * @returns {Response|null} 需要拒绝时返回 429 Response；放行时返回 null
  */
-function enforceRateLimits({ reqId, clientIP, body, modelId }) {
-  if (!rateLimiter.check(clientIP)) {
-    return new Response(JSON.stringify({
-      error: {
-        message: '请求过于频繁，请稍后重试',
-        type: 'rate_limit_error',
-        code: 429,
-        reqId,
-      }
-    }), {
-      status: 429,
-      headers: {
-        'Content-Type': 'application/json',
-        'Retry-After': '60',
-        'X-Request-Id': reqId,
-        ...corsHeaders(),
-      },
-    });
+function enforceRateLimits({ reqId, clientIP, subject, body, modelId, env, ctx, userAgent, startTime, rpmLimit }) {
+  // ⚠️ 限流归属主体：按 API Key 指纹（与 Vercel 端一致）。
+  //    subject 为 null（无 API Key / anon）→ 无可归属配额主体 → 不限流，
+  //    与 Vercel 端 fingerprint === 'anon' 不限流的约定保持一致。
+  if (subject) {
+    if (!rateLimiter.check(subject, rpmLimit)) {
+      // ⚠️ 限流拒绝也要计入遥测，否则 Dashboard 看不到被代理拦掉的请求
+      recordRateLimitTelemetry({ env, ctx, reqId, modelId, clientIP, userAgent, startTime, reason: 'rpm_limit_exceeded' });
+      return new Response(JSON.stringify({
+        error: {
+          message: '请求过于频繁，请稍后重试',
+          type: 'rate_limit_error',
+          code: 429,
+          reqId,
+        }
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+          'X-Request-Id': reqId,
+          ...corsHeaders(),
+        },
+      });
+    }
   }
 
-  const inputTokens = estimateInputTokens(body);
-  const tpmRes = tokenRateLimiter.check(modelId, clientIP, inputTokens);
-  if (!tpmRes.allowed) {
-    return new Response(JSON.stringify({
-      error: {
-        message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmRes.limit}，本次请求约 ${inputTokens} token 会超出，请 ${tpmRes.retryAfter}s 后重试或改用更大额度的模型`,
-        type: 'token_rate_limit_exceeded',
-        code: 429,
-        reqId,
-      }
-    }), {
-      status: 429,
-      headers: {
-        'Content-Type': 'application/json',
-        'Retry-After': String(tpmRes.retryAfter),
-        'X-Request-Id': reqId,
-        ...corsHeaders(),
-      },
-    });
+  // TPM 限流同样按归属主体（API Key 指纹）计量，
+  // 否则同一用户换 IP 就能绕过每分钟 token 墙。
+  if (subject) {
+    const inputTokens = estimateInputTokens(body);
+    const tpmRes = tokenRateLimiter.check(modelId, subject, inputTokens);
+    if (!tpmRes.allowed) {
+      // ⚠️ 限流拒绝也要计入遥测，否则 Dashboard 看不到被代理拦掉的请求
+      recordRateLimitTelemetry({
+        env, ctx, reqId, modelId, clientIP, userAgent, startTime,
+        reason: `tpm_limit_exceeded (${tpmRes.limit}/min, need ${inputTokens})`,
+      });
+      return new Response(JSON.stringify({
+        error: {
+          message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmRes.limit}，本次请求约 ${inputTokens} token 会超出，请 ${tpmRes.retryAfter}s 后重试或改用更大额度的模型`,
+          type: 'token_rate_limit_exceeded',
+          code: 429,
+          reqId,
+        }
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': String(tpmRes.retryAfter),
+          'X-Request-Id': reqId,
+          ...corsHeaders(),
+        },
+      });
+    }
   }
 
   return null;
+}
+
+/**
+ * 把代理侧限流拒绝（429）写入遥测（fire-and-forget）。
+ *
+ * ⚠️ 此前限流直接 return 429，不写任何遥测 ——
+ *    Dashboard 的「请求总量 / 错误率 / 错误日志」都看不到这些请求。
+ *
+ * @param {object} opts
+ */
+function recordRateLimitTelemetry({ env, ctx, reqId, modelId, clientIP, userAgent, startTime, reason }) {
+  if (!env || !ctx) return;
+  try {
+    const events = buildRateLimitTelemetryEvents({
+      date: getQuotaDate(),
+      hour: getBeijingHour(),
+      status: 429,
+      model: modelId || 'unknown-model',
+      latency: startTime ? Date.now() - startTime : 0,
+      ua: userAgent || 'unknown',
+      ip: clientIP || 'unknown',
+      fingerprint: '',
+      reason,
+    });
+    const cmds = telemetryEventsToUpstashCommands(events);
+    ctx.waitUntil(upstashPipe(env, cmds));
+  } catch (err) {
+    console.warn(`[${reqId}] rate-limit telemetry failed: ${err?.message || err}`);
+  }
 }
 
 export default {
@@ -332,17 +382,45 @@ export default {
     ctx.waitUntil(Promise.resolve(tokenRateLimiter.cleanup()));
     const reqId = generateReqId();
 
-    // 客户端 IP：RPM 限流与 TPM 限流的键都基于它。
+    // 客户端 IP：用于遥测归因（限流归属主体改为 API Key 指纹，见下方）。
     // ⚠️ 必须在这里就算好 —— /v1/responses 与 /v1/interactions 会在下面提前 return。
     const rawIP = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
     const clientIP = normalizeIP(rawIP);
+
+    // ⚠️ 限流归属主体：按 API Key 指纹（与 Vercel 端 lib/rate-limit.js 一致）。
+    //    旧实现按客户端 IP 计量 → 同一批用户切到 CF 就拿到了另一份额度；
+    //    换 IP 也能绕过每分钟 token 墙。
+    //    无 API Key（anon）→ 无可归属配额主体 → 不限流（与 Vercel 端一致）。
+    let rateLimitSubject = null;
+    try {
+      const bearer = extractBearerToken(request);
+      if (bearer) {
+        rateLimitSubject = resolveRateLimitSubject(await computeClientFingerprint(bearer));
+      }
+    } catch {
+      rateLimitSubject = null;
+    }
+
+    // RPM 上限：与 Vercel 端共用同一套解析规则（默认 15，可用 RATE_LIMIT_RPM 覆盖，0 = 关闭）
+    const rpmLimit = parseRpmLimit(env.RATE_LIMIT_RPM);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
     // 调试端点：返回环境变量状态（不暴露值）
+    // ⚠️ 安全：旧实现完全公开，任何人都能探测部署配置是否存在。
+    //    现在要求 Bearer 密码匹配 env.DASHBOARD_PASSWORD；
+    //    未配置密码时直接关闭该端点（404），不再泄露部署信息。
     if (pathname.endsWith('/v1/env') || pathname.endsWith('/env')) {
+      const dashPassword = env.DASHBOARD_PASSWORD || '';
+      const provided = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+      if (!dashPassword || provided !== dashPassword) {
+        return new Response(JSON.stringify({ error: 'Not Found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+        });
+      }
       return new Response(JSON.stringify({
         UPSTASH_REDIS_REST_URL: !!env.UPSTASH_REDIS_REST_URL,
         UPSTASH_REDIS_REST_TOKEN: !!env.UPSTASH_REDIS_REST_TOKEN,
@@ -355,6 +433,19 @@ export default {
 
 
     if (pathname.endsWith('/models') || pathname.includes('/v1/models') || pathname.includes('/v1beta/openai/models')) {
+      // ⚠️ 端点会暴露完整模型清单与配额信息，必须携带 API Key（与 Vercel 端一致）。
+      if (!extractBearerToken(request)) {
+        return new Response(JSON.stringify({
+          error: {
+            message: '缺少 API Key，请在请求头中提供 Authorization: Bearer <your-google-api-key>',
+            type: 'invalid_request_error',
+            code: 'missing_api_key',
+          },
+        }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+        });
+      }
       return new Response(JSON.stringify(MODELS), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...corsHeaders() },
@@ -374,8 +465,14 @@ export default {
       const limited = enforceRateLimits({
         reqId,
         clientIP,
+        subject: rateLimitSubject,
         body: limitBody,
         modelId: extractModelId(limitBody),
+        env,
+        ctx,
+        userAgent: request.headers.get('user-agent') || 'unknown',
+        startTime,
+        rpmLimit,
       });
       if (limited) {
         logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, 'rate-limited');
@@ -402,8 +499,14 @@ export default {
       const limited = enforceRateLimits({
         reqId,
         clientIP,
+        subject: rateLimitSubject,
         body: limitBody,
         modelId: extractModelId(limitBody),
+        env,
+        ctx,
+        userAgent: request.headers.get('user-agent') || 'unknown',
+        startTime,
+        rpmLimit,
       });
       if (limited) {
         logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, 'rate-limited');
@@ -439,9 +542,18 @@ export default {
       });
     }
 
-    // 限流检查（基于客户端 IP）
-    if (!rateLimiter.check(clientIP)) {
-      logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `rate-limited ${clientIP}`);
+    // 限流检查（按 API Key 指纹归因，与 Vercel 端一致；无 Key → 不限流）
+    if (rateLimitSubject && !rateLimiter.check(rateLimitSubject, rpmLimit)) {
+      logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `rate-limited ${rateLimitSubject}`);
+      // ⚠️ 限流拒绝也要计入遥测，否则 Dashboard 看不到被代理拦掉的请求
+      recordRateLimitTelemetry({
+        env, ctx, reqId,
+        modelId: 'unknown-model',
+        clientIP,
+        userAgent: request.headers.get('user-agent') || 'unknown',
+        startTime,
+        reason: 'rpm_limit_exceeded',
+      });
       return new Response(JSON.stringify({
         error: {
           message: '请求过于频繁，请稍后重试',
@@ -471,38 +583,46 @@ export default {
 
       const headers = cleanHeaders(request.headers);
       if (apiKey) {
-        if (!isOpenAICompat) {
-          const urlWithKey = new URL(targetUrl);
-          urlWithKey.searchParams.set('key', apiKey);
-          targetUrl = urlWithKey.toString();
-          headers.delete('authorization');
-        }
+        // ⚠️ 鉴权统一走 header，绝不再把 Key 拼进 URL query。
+        //    旧实现用 `?key=xxx`，会把完整 Key 带进日志/遥测/错误回显。
+        //    Google 端点同时支持 `Authorization: Bearer` 与 `x-goog-api-key`。
+        headers.set('authorization', `Bearer ${apiKey}`);
+        headers.set('x-goog-api-key', apiKey);
       }
+      // 脱敏后的 URL 仅用于日志输出，避免任何凭据进入日志系统
+      const safeTargetUrl = redactUrl(targetUrl);
+      logRequest(reqId, request.method, pathname, 0, 0, `→ ${safeTargetUrl}`);
 
       let body = null;
       let originalStreamRequested = false;
+      let qclawCompatMode = false;
       let requestBodyText = null; // 保存原始请求体，供模型降级用
       let modelId = 'unknown'; // 用于遥测的模型 ID
       let inputTokens = 0; // TPM 遥测用：本次请求估计输入 token 数（CF 主流量）
       let qclawCompatStreamBody = null; // QClaw 兼容模式下改写的请求体（stream=false）
+      const userAgent = request.headers.get('user-agent') || 'unknown';
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         try {
           const text = await request.text();
           requestBodyText = text;
           body = text && text.trim() !== '' ? text : '{}';
-          
+
           if (isOpenAICompat) {
             const parsed = JSON.parse(body);
             if (parsed.stream === true) originalStreamRequested = true;
             if (parsed.model) modelId = parsed.model;
             body = sanitizeOpenAIBody(body);
-            // QClaw 兼容：把 stream=true 改为非流式发给 Google
-            // 拿到完整 JSON 后再手动拆分为 SSE chunks（先 reasoning 后 content 后 tool_calls）
-            // 这样可以正确处理工具调用块和推理内容
+            // ⚠️ 流式策略（与 Vercel 端完全一致）：
+            //    · QClaw / WorkBuddy 客户端 → 改非流式发给 Google，取回完整 JSON 后手工拆成 SSE
+            //    · 其它客户端 → 保留 stream=true，走真流式直通
+            //    旧实现对所有客户端一律 stream=false，牺牲了普通客户端的实时性。
             if (originalStreamRequested) {
-              const qclawParsed = JSON.parse(body);
-              qclawParsed.stream = false;
-              qclawCompatStreamBody = JSON.stringify(qclawParsed);
+              qclawCompatMode = isQclawCompatClient(userAgent);
+              if (qclawCompatMode) {
+                const qclawParsed = JSON.parse(body);
+                qclawParsed.stream = false;
+                qclawCompatStreamBody = JSON.stringify(qclawParsed);
+              }
             }
           }
         } catch {
@@ -514,13 +634,24 @@ export default {
       const fetchBody = qclawCompatStreamBody || body;
 
       // === TPM（每分钟输入 token）限流：根治 Google 免费层 16K 墙 ===
-      if (isOpenAICompat && fetchBody && fetchBody !== '{}') {
+      // ⚠️ 归属主体用 API Key 指纹（与 Vercel 端一致），不再用客户端 IP ——
+      //    否则同一用户换个出口 IP 就能绕过每分钟 token 墙。
+      if (rateLimitSubject && isOpenAICompat && fetchBody && fetchBody !== '{}') {
         try {
           const parsedForTokens = JSON.parse(fetchBody);
           inputTokens = estimateInputTokens(parsedForTokens);
-          const tpmRes = tokenRateLimiter.check(modelId, clientIP, inputTokens);
+          const tpmRes = tokenRateLimiter.check(modelId, rateLimitSubject, inputTokens);
           if (!tpmRes.allowed) {
             logRequest(reqId, request.method, pathname, 429, Date.now() - startTime, `tpm-limited ${modelId} ~${inputTokens}tok`);
+            // ⚠️ 限流拒绝也要计入遥测，否则 Dashboard 看不到被代理拦掉的请求
+            recordRateLimitTelemetry({
+              env, ctx, reqId,
+              modelId,
+              clientIP,
+              userAgent,
+              startTime,
+              reason: `tpm_limit_exceeded (${tpmRes.limit}/min, need ${inputTokens})`,
+            });
             return new Response(JSON.stringify({
               error: {
                 message: `模型 ${modelId} 每分钟输入 token 上限为 ${tpmRes.limit}，本次请求约 ${inputTokens} token 会超出，请 ${tpmRes.retryAfter}s 后重试或换更大额度模型`,
@@ -581,76 +712,41 @@ export default {
       }
 
       // Upstash 遥测（fire-and-forget）：写同样的 key，数据与 Vercel 端打通
-      // 写入：status + timeline（always）+ quota（仅成功，含 global + per-model）
-      //       + recent + errors（仅 status >= 400）
+      // ⚠️ 遥测事件统一收敛到 lib/telemetry.js（与 Vercel 端共用同一份实现）：
+      //    · 补齐此前「只有读取方、没有写入方」的 latencySum / latencyCount /
+      //      clients:{date}:* / client:info:* → Dashboard 的平均延迟与客户端面板不再恒空
+      //    · status / timeline / recent / errors / quota / tpm / retries / slow 的 key 与口径两端一致
       const date = getQuotaDate();
-      const bjHour = (new Date().getUTCHours() + 8) % 24;
-      const isSuccess = response.status < 400;
+      const bjHour = getBeijingHour();
       const finalModelId = modelId === 'unknown' ? 'unknown-model' : modelId;
       const nowMs = Date.now();
       const latency = nowMs - startTime;
-      const ua = request.headers.get('user-agent') || 'unknown';
-      const telemetryCmds = [
-        ['INCR', `status:${date}:${response.status}`],
-        ['INCR', `timeline:${date}:h${bjHour}`],
-        // 最近请求列表（LPUSH + LTRIM 保留最新 30 条）
-        ['LPUSH', `recent:${date}`, JSON.stringify({
-          ts: new Date().toISOString(),
-          status: response.status,
-          model: finalModelId,
-          latency,
-          ua,
-          ip: clientIP,
-        })],
-        ['LTRIM', `recent:${date}`, 0, 29],
-      ];
-      // 错误日志（仅 status >= 400，保留最新 20 条）
-      if (response.status >= 400) {
-        telemetryCmds.push(
-          ['LPUSH', `errors:${date}`, JSON.stringify({
-            ts: new Date().toISOString(),
-            status: response.status,
-            model: finalModelId,
-            latency,
-            message: `${response.status} ${response.statusText}`,
-            ua,
-            ip: clientIP,
-          })],
-          ['LTRIM', `errors:${date}`, 0, 19],
-        );
-      }
-      if (isSuccess) {
-        telemetryCmds.push(
-          ['INCR', `quota:${date}:${finalModelId}`],
-          ['INCR', `quota:global:${date}`],
-        );
-        // TPM 滑动窗口遥测（CF 主流量）：score=时间戳ms, member=输入token数
-        if (inputTokens > 0) {
-          const tpmKey = `tpm:${date}:${finalModelId}`;
-          telemetryCmds.push(
-            ['ZADD', tpmKey, nowMs, inputTokens],
-            ['PEXPIRE', tpmKey, 120000],
-          );
+      const ua = userAgent;
+
+      // 客户端指纹：API Key → 稳定短哈希（与 Vercel 端共用 lib/rate-limit.js 的实现）
+      let clientFingerprint = '';
+      try {
+        const authForFp = request.headers.get('authorization') || '';
+        if (authForFp.startsWith('Bearer ')) {
+          clientFingerprint = await computeClientFingerprint(authForFp.slice(7).trim());
         }
+      } catch {
+        clientFingerprint = '';
       }
-      // 重试次数累加（仅发生过重试时计入，Dashboard 顶部「重试 N 次」徽标）
-      if (totalRetries > 0) {
-        telemetryCmds.push(['INCRBY', `retries:${date}`, totalRetries]);
-      }
-      // 慢请求（仅超阈值时计入，sorted set：score=延迟 ms，member=请求信息；只保留最慢的 50 条）
-      const SLOW_THRESHOLD_MS = 10000;
-      if (latency >= SLOW_THRESHOLD_MS) {
-        telemetryCmds.push(
-          ['ZADD', `slow:${date}`, latency, JSON.stringify({
-            ts: new Date().toISOString(),
-            status: response.status,
-            model: finalModelId,
-            ua,
-            ip: clientIP,
-          })],
-          ['ZREMRANGEBYRANK', `slow:${date}`, 0, -51],
-        );
-      }
+
+      const telemetryEvents = buildTelemetryEvents({
+        date,
+        hour: bjHour,
+        status: response.status,
+        model: finalModelId,
+        latency,
+        ua,
+        ip: clientIP,
+        fingerprint: clientFingerprint,
+        inputTokens,
+        totalRetries,
+      });
+      const telemetryCmds = telemetryEventsToUpstashCommands(telemetryEvents);
       ctx.waitUntil(upstashPipe(env, telemetryCmds));
 
       const respHeaders = buildResponseHeaders(response);
@@ -660,101 +756,26 @@ export default {
       // ═══════════════════════════════════════════════════════
       // QClaw 兼容模式：客户端请求 stream=true，但已改为非流式发给 Google
       // 收到完整 JSON 后，手动拆分为 SSE chunks
-      // 顺序：reasoning_content → content → tool_calls → finish_reason
+      // ⚠️ 拆分实现已收敛到 lib/chat-stream.js（与 Vercel 端共用同一份）
       // ═══════════════════════════════════════════════════════
-      if (originalStreamRequested && response.ok) {
+      if (originalStreamRequested && qclawCompatMode && response.ok) {
         try {
           const responseText = await response.text();
           const responseData = responseText ? JSON.parse(responseText) : null;
           if (responseData && responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
-            const message = responseData.choices[0].message;
-            const finishReason = responseData.choices[0].finish_reason || 'stop';
-            let replyContent = message.content || '';
-            let reasoningContent = '';
-            replyContent = replyContent.replace(/<thought>[\s\S]*?<\/thought>/g, (m) => {
-              reasoningContent += m.replace(/<\/?thought[^>]*>/g, '');
-              return '';
-            }).trim();
-            const createdAt = responseData.created || Math.floor(Date.now() / 1000);
-            const model = responseData.model || modelId || 'unknown';
-            const id = responseData.id || 'chatcmpl-' + Date.now();
-            const encoder = new TextEncoder();
-            const CHUNK_SIZE = 50;
-            const chunks = [];
-            // 1️⃣ 先发 reasoning_content chunks
-            if (reasoningContent) {
-              for (let i = 0; i < reasoningContent.length; i += CHUNK_SIZE) {
-                const text = reasoningContent.slice(i, i + CHUNK_SIZE);
-                chunks.push('data: ' + JSON.stringify({
-                  choices: [{ delta: { reasoning_content: text, role: 'assistant' }, index: 0 }],
-                  created: createdAt, id, model, object: 'chat.completion.chunk'
-                }) + '\n\n');
-              }
-            }
-            // 2️⃣ 再发 content chunks
-            for (let i = 0; i < replyContent.length; i += CHUNK_SIZE) {
-              const text = replyContent.slice(i, i + CHUNK_SIZE);
-              chunks.push('data: ' + JSON.stringify({
-                choices: [{ delta: { content: text, role: 'assistant' }, index: 0 }],
-                created: createdAt, id, model, object: 'chat.completion.chunk'
-              }) + '\n\n');
-            }
-            // 3️⃣ 工具调用（tool_calls）
-            const toolCalls = message.tool_calls;
-            if (toolCalls && toolCalls.length > 0) {
-              for (let idx = 0; idx < toolCalls.length; idx++) {
-                const tc = toolCalls[idx];
-                chunks.push('data: ' + JSON.stringify({
-                  choices: [{
-                    delta: {
-                      role: 'assistant',
-                      content: null,
-                      tool_calls: [{
-                        index: idx,
-                        id: tc.id,
-                        type: 'function',
-                        function: { name: tc.function?.name || '', arguments: '' }
-                      }]
-                    },
-                    index: 0
-                  }],
-                  created: createdAt, id, model, object: 'chat.completion.chunk'
-                }) + '\n\n');
-                const args = tc.function?.arguments || '';
-                if (args) {
-                  for (let j = 0; j < args.length; j += CHUNK_SIZE) {
-                    chunks.push('data: ' + JSON.stringify({
-                      choices: [{
-                        delta: {
-                          tool_calls: [{
-                            index: idx,
-                            function: { arguments: args.slice(j, j + CHUNK_SIZE) }
-                          }]
-                        },
-                        index: 0
-                      }],
-                      created: createdAt, id, model, object: 'chat.completion.chunk'
-                    }) + '\n\n');
-                  }
-                }
-              }
-            }
-            // 4️⃣ finish_reason
-            chunks.push('data: ' + JSON.stringify({
-              choices: [{ delta: { role: 'assistant' }, finish_reason: finishReason, index: 0 }],
-              created: createdAt, id, model, object: 'chat.completion.chunk'
-            }) + '\n\n');
-            chunks.push('data: [DONE]\n\n');
+            const chunks = buildChatCompletionChunks(responseData);
+            chunks.push(SSE_DONE);
             const qclawHeaders = new Headers({
               'Content-Type': 'text/event-stream; charset=utf-8',
               'Cache-Control': 'no-cache',
               'Connection': 'keep-alive',
+              'X-Accel-Buffering': 'no',
               'X-Request-Id': reqId,
               'X-Proxy': 'cloudflare-workers',
               ...corsHeaders(),
             });
             logRequest(reqId, request.method, pathname, 200, Date.now() - startTime, 'qclaw-compat');
-            return new Response(encoder.encode(chunks.join('')), {
+            return new Response(chunks.join(''), {
               status: 200,
               headers: qclawHeaders,
             });
@@ -769,6 +790,7 @@ export default {
       const contentType = response.headers.get('content-type') || '';
 
       // --- 情况 1: 正常流式响应 ---
+      // ⚠️ 直通 + <thought> 剥离的实现已收敛到 lib/chat-stream.js（与 Vercel 端共用同一份）
       if (upstreamBody && (contentType.includes('text/event-stream') || contentType.includes('application/x-ndjson'))) {
         // 确保 SSE 响应头完整
         if (!respHeaders.has('Cache-Control') || respHeaders.get('Cache-Control') === 'no-store') {
@@ -777,158 +799,22 @@ export default {
         respHeaders.set('X-Accel-Buffering', 'no');
         const { readable, writable } = new TransformStream();
         const writer = writable.getWriter();
-        const reader = upstreamBody.getReader();
         let aborted = false;
-        let thoughtBuffer = '';
-        let inThought = false;
-        let thoughtTag = ''; // 当前正在处理的标签类型：'<thought>' 或 '<|thought>'
-
-        // 统一的 thought 标签剥离函数
-        // 支持两种格式：<thought>...</thought> 和 <|thought>...<|/thought>
-        // 返回 { reasoning, content }
-        function stripThought(raw) {
-          let reasoning = '';
-          let content = '';
-
-          if (inThought) {
-            // 寻找闭合标签：</thought> 或 <|/thought>
-            const closeTag = thoughtTag === '<|thought>' ? '<|/thought>' : '</thought>';
-            const endIdx = raw.indexOf(closeTag);
-            if (endIdx >= 0) {
-              thoughtBuffer += raw.slice(0, endIdx);
-              reasoning = thoughtBuffer;
-              thoughtBuffer = '';
-              inThought = false;
-              thoughtTag = '';
-              const after = raw.slice(endIdx + closeTag.length);
-              if (after) content = after;
-            } else {
-              thoughtBuffer += raw;
-            }
-          } else {
-            // 检测开始标签
-            let startIdx = raw.indexOf('<thought>');
-            let detectedTag = '<thought>';
-            if (startIdx < 0) {
-              startIdx = raw.indexOf('<|thought>');
-              detectedTag = '<|thought>';
-            }
-            if (startIdx >= 0) {
-              content = raw.slice(0, startIdx);
-              const afterTag = raw.slice(startIdx + detectedTag.length);
-              const closeTag = detectedTag === '<|thought>' ? '<|/thought>' : '</thought>';
-              const endIdx = afterTag.indexOf(closeTag);
-              if (endIdx >= 0) {
-                // 同一 delta 内闭合
-                reasoning = afterTag.slice(0, endIdx);
-                const after = afterTag.slice(endIdx + closeTag.length);
-                if (after) content += after;
-              } else {
-                // 跨 delta，进入缓冲模式
-                inThought = true;
-                thoughtTag = detectedTag;
-                thoughtBuffer = afterTag;
-              }
-            } else {
-              content = raw;
-            }
-          }
-
-          return { reasoning, content };
-        }
 
         const streamPromise = (async () => {
-          const decoder = new TextDecoder();
           const encoder = new TextEncoder();
-          let leftover = '';
           try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done || aborted) break;
-
-              let chunk = decoder.decode(value, { stream: true });
-              leftover += chunk;
-              const lines = leftover.split('\n');
-              leftover = lines.pop() || '';
-
-              for (const line of lines) {
-                if (line.startsWith('data: ') && !line.startsWith('data: [DONE]')) {
-                  try {
-                    const jsonStr = line.slice(6);
-                    const parsed = JSON.parse(jsonStr);
-                    // 从 content 剥离 <thought> 标签，迁移到标准的 reasoning_content 字段
-                    // qclaw/workbuddy 等客户端通过 delta.reasoning_content 识别思考过程
-                    // 处理跨 SSE 事件的 <thought> 标签：可能被 Google 分成多个 delta
-                    if (parsed.choices && Array.isArray(parsed.choices)) {
-                      for (const choice of parsed.choices) {
-                        if (choice.delta) {
-                          if (typeof choice.delta.content === 'string') {
-                            let raw = choice.delta.content;
-                            const { reasoning, content } = stripThought(raw);
-
-                            choice.delta.content = content;
-                            if (reasoning) {
-                              if (choice.delta.reasoning_content) {
-                                choice.delta.reasoning_content += reasoning;
-                              } else {
-                                choice.delta.reasoning_content = reasoning;
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                    const hasContent = parsed.choices?.some(c => c.delta?.content !== undefined || c.delta?.reasoning_content !== undefined || c.delta?.tool_calls !== undefined);
-                    // ⚠️ finish_reason 在 choice 层，不在 choice.delta 里！
-                    // 如果检查 c.delta?.finish_reason 会永远返回 undefined，
-                    // 导致最后一条 SSE 事件被静默丢弃→流结束无 finish_reason→Hermes 报"empty stream"
-                    const hasFinish = parsed.choices?.some(c => c.finish_reason !== undefined);
-                    if (hasContent || hasFinish) {
-                      await writer.write(encoder.encode('data: ' + JSON.stringify(parsed) + '\n'));
-                    }
-                  } catch {
-                    await writer.write(encoder.encode(line + '\n'));
-                  }
-                } else {
-                  await writer.write(encoder.encode(line + '\n'));
-                }
-              }
+            // ⚠️ 共享实现：跨 SSE 事件的 <thought> / <|thought> 状态机 +
+            //    结束时补齐 finish_reason（避免客户端 "empty stream"）
+            for await (const piece of transformUpstreamSSE(upstreamBody, { reqId })) {
+              if (aborted) break;
+              await writer.write(encoder.encode(piece));
             }
+            await writer.write(encoder.encode(SSE_DONE));
           } catch (err) {
             console.error(`[${reqId}] Stream error: ${err.message}`);
-            // 刷新残留的 leftover 数据，避免半截线丢失
-            if (leftover) {
-              try { await writer.write(encoder.encode(leftover + '\n')); } catch {}
-            }
-            // 流被中断时，如果有未闭合的 <thought> 缓冲，先 flush 为 reasoning_content
-            if (inThought && thoughtBuffer) {
-              try {
-                await writer.write(encoder.encode('data: ' + JSON.stringify({
-                  choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
-                }) + '\n'));
-              } catch {}
-              thoughtBuffer = '';
-              inThought = false;
-            }
-            // 流被中断，发一条合成 finish_reason 事件
-            // 避免 Hermes 看到流结束但没有 finish_reason → "empty stream"
-            try {
-              await writer.write(encoder.encode('data: ' + JSON.stringify({
-                choices: [{ delta: {}, finish_reason: 'stop', index: 0 }]
-              }) + '\n'));
-            } catch {}
           } finally {
-            // 流正常结束时，如果有未闭合的 <thought> 缓冲，也必须 flush
-            // 否则思考内容会丢失，或更糟——作为裸文本泄漏到下一个请求
-            if (inThought && thoughtBuffer) {
-              try {
-                await writer.write(encoder.encode('data: ' + JSON.stringify({
-                  choices: [{ delta: { reasoning_content: thoughtBuffer }, index: 0 }]
-                }) + '\n'));
-              } catch {}
-            }
-            await writer.close();
-            reader.cancel().catch(() => {});
+            await writer.close().catch(() => {});
           }
         })();
         // ⚠️ ctx.waitUntil 返回 void！不能链式 .catch()，必须先保存 promise 变量
@@ -937,7 +823,6 @@ export default {
 
         request.signal.addEventListener('abort', () => {
           aborted = true;
-          reader.cancel().catch(() => {});
           writer.close().catch(() => {});
         }, { once: true });
 
@@ -954,17 +839,14 @@ export default {
       // 我们必须将错误包装在 'data: ' 中返回，否则客户端解析器会因为看到 JSON 而报错 "no body"
       if (response.status >= 400 && originalStreamRequested) {
         const errorMsg = await response.text().catch(() => 'No error body');
-        const sseError = `data: ${JSON.stringify({
-          error: { message: `Upstream Error ${response.status}: ${errorMsg}`, type: 'upstream_error', code: response.status, reqId }
-        })}\n\n`;
-        
+
         const sseHeaders = new Headers(respHeaders);
         sseHeaders.set('Content-Type', 'text/event-stream; charset=utf-8');
         sseHeaders.set('Cache-Control', 'no-cache');
         sseHeaders.set('Connection', 'keep-alive');
 
         logRequest(reqId, request.method, pathname, response.status, Date.now() - startTime, 'error-sse');
-        return new Response(sseError, {
+        return new Response(buildSseError(response.status, errorMsg, reqId), {
           status: response.status,
           statusText: response.statusText,
           headers: sseHeaders,

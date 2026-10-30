@@ -6,8 +6,14 @@ import getRedis from '../../../lib/redis';
 export async function GET(req) {
   if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
+    // ⚠️ Redis 未配置时提前返回，避免下游解构 undefined。
+    const redis = getRedis();
+    if (!redis) {
+      return Response.json({ date: getQuotaDate(), redisEnabled: false, count: 0, errors: [] });
+    }
+
     const date = getQuotaDate();
-    const rawEntries = (await getRedis()?.lrange(`errors:${date}`, 0, 19)) || [];
+    const rawEntries = (await redis.lrange(`errors:${date}`, 0, 19)) || [];
 
     const errors = rawEntries.map(entry => {
       try {

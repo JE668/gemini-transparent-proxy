@@ -1,6 +1,8 @@
 'use client';
 import React, { useEffect, useState, useCallback, useMemo, Suspense, useRef } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+// 配额重置倒计时 —— 与后端配额日界共用同一份实现
+import { getSecondsUntilQuotaReset } from '../../lib/utils';
 
 // =============================================================================
 // CSS 动画与全局样式
@@ -81,12 +83,11 @@ function useResponsive() {
   return isMobile;
 }
 
+// ⚠️ 配额重置倒计时统一走 lib/utils.js 的共享实现（与后端 getQuotaDate 同源）。
+//    旧实现内联了一份 `reset.setUTCHours(7, 0, 0, 0)`，与后端的配额日界各写各的，
+//    任何一方改动都会让「倒计时」和「实际重置」对不上。
 const getTimeUntilReset = () => {
-  const now = new Date();
-  const reset = new Date(now); reset.setUTCHours(7, 0, 0, 0);
-  if (now >= reset) reset.setUTCDate(reset.getUTCDate() + 1);
-  const diffMs = reset - now;
-  const totalSeconds = Math.floor(diffMs / 1000);
+  const totalSeconds = getSecondsUntilQuotaReset();
   return {
     hours: Math.floor(totalSeconds / 3600),
     minutes: Math.floor((totalSeconds % 3600) / 60),

@@ -32,9 +32,13 @@ export async function GET(req) {
     pipeline.get(`retries:${date}`);
 
     // 2. Per-Model Quota & Latency
+    // ⚠️ 延迟读取口径必须与写入方（lib/telemetry.js）一致：
+    //    写入的是 latencySum:{date}:{model} + latencyCount:{date}:{model} 两个计数器，
+    //    旧实现读的是 `latency:{model}` 这个列表 —— 没有任何写入方 → avgLatency 恒为 null。
     for (const model of HIGH_QUOTA_MODELS) {
       pipeline.get(`quota:${date}:${model.id}`);
-      pipeline.lrange(`latency:${model.id}`, 0, -1);
+      pipeline.get(`latencySum:${date}:${model.id}`);
+      pipeline.get(`latencyCount:${date}:${model.id}`);
     }
 
     // 3. Timeline (24h)
@@ -65,11 +69,10 @@ export async function GET(req) {
     const quotaData = [];
         for (const model of HIGH_QUOTA_MODELS) {
           const used = results[idx++] || 0;
-          const latencies = results[idx++] || [];
+          const latencySum = parseInt(results[idx++]) || 0;
+          const latencyCount = parseInt(results[idx++]) || 0;
           const limit = model.limit || 1000;
-          const avgLatency = latencies.length > 0
-            ? Math.round(latencies.reduce((a, b) => a + parseInt(b), 0) / latencies.length)
-            : null;
+          const avgLatency = latencyCount > 0 ? Math.round(latencySum / latencyCount) : null;
       
           // 单个模型的配额预测
           const modelHourlyRate = parseInt(used) / hoursElapsed;

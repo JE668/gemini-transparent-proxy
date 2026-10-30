@@ -108,8 +108,25 @@ test('buildTargetUrl: OpenAI 兼容路径映射', () => {
     `${GOOGLE_API_BASE}/v1beta/openai/chat/completions`,
   );
   assert.equal(
+    buildTargetUrl('/api/v1/responses', ''),
+    `${GOOGLE_API_BASE}/v1beta/openai/responses`,
+  );
+});
+
+test('buildTargetUrl: /api/ 前缀走原生 Gemini 端点（不再误加 openai 前缀）', () => {
+  // ⚠️ 回归：旧规则把 `/api/` 一律改写成 `/v1beta/openai/`，
+  //    导致原生端点变成 `/v1beta/openai/v1beta/models/...` 必然 404。
+  assert.equal(
     buildTargetUrl('/api/models/gemma-4-31b-it:generateContent', ''),
-    `${GOOGLE_API_BASE}/v1beta/openai/models/gemma-4-31b-it:generateContent`,
+    `${GOOGLE_API_BASE}/v1beta/models/gemma-4-31b-it:generateContent`,
+  );
+  assert.equal(
+    buildTargetUrl('/api/v1beta/models/imagen-4.0-fast-generate-001:predict', ''),
+    `${GOOGLE_API_BASE}/v1beta/models/imagen-4.0-fast-generate-001:predict`,
+  );
+  assert.equal(
+    buildTargetUrl('/api/v1beta/models/text-embedding-004:embedContent', ''),
+    `${GOOGLE_API_BASE}/v1beta/models/text-embedding-004:embedContent`,
   );
 });
 

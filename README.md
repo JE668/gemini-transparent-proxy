@@ -88,7 +88,7 @@ Gemma 4 模型在输出中通过 `<thought>...</thought>` 标签表达推理过�
 | `GOOGLE_API_KEY` | ✅ | Google AI Studio 的 API Key |
 | `UPSTASH_REDIS_REST_URL` | ✅ | Upstash Redis REST URL（免费额度足够） |
 | `UPSTASH_REDIS_REST_TOKEN` | ✅ | Upstash Redis REST Token |
-| `DASHBOARD_PASSWORD` | ❌ | Dashboard 访问密码，不设置则无需认证 |
+| `DASHBOARD_PASSWORD` | ⚠️ 生产必填 | Dashboard 访问密码（`Authorization: Bearer <password>`）。**生产环境未配置时 `/api/*` 端点一律返回 503**（不再默认放行）；仅本地开发未配置时才放行 |
 | `CORS_ALLOWED_ORIGINS` | ❌ | CORS 允许的来源域名，逗号分隔 |
 | `RATE_LIMIT_RPM` | ❌ | 每个 API Key 指纹每分钟最大请求数，默认 `15`（注意：Gemma 4 免费层 RPM 现为 30，15 为保守默认），设为 `0` 关闭限流 |
 
@@ -315,7 +315,8 @@ curl https://your-domain/v1/responses \
 | `/v1/responses` | 转换后请求 `/v1beta/openai/chat/completions` |
 | `/v1/models` | `/v1beta/openai/models` |
 | `/api/v1/*` | `/v1beta/openai/*` |
-| `/api/*` | `/*`（原生 Gemini API） |
+| `/api/v1beta/*` | `/v1beta/*`（原生 Gemini API） |
+| `/api/*` | `/v1beta/*`（原生 Gemini API） |
 
 ---
 
@@ -325,7 +326,7 @@ curl https://your-domain/v1/responses \
 ├── app/
 │   ├── api/
 │   │   ├── [[...path]]/route.js     # 代理核心：路由映射、智能重试、遥测、QClaw 兼容
-│   │   ├── responses/route.js       # Responses API 入口（Vercel）
+│   │   ├── dashboard/route.js       # Dashboard 聚合数据
 │   │   ├── quota/route.js           # 配额统计
 │   │   ├── health/route.js          # 健康检查
 │   │   ├── errors/route.js          # 错误日志
@@ -338,16 +339,25 @@ curl https://your-domain/v1/responses \
 ├── lib/
 │   ├── models.js                    # 模型列表 + 配额定义
 │   ├── auth.js                      # Dashboard API 运行时密码校验（Bearer）
+│   ├── client-auth.js               # 代理 API Key 校验（头部）
 │   ├── redis.js                     # Redis 单例（Upstash）
 │   ├── utils.js                     # 配额日期计算
-│   ├── responses.js                 # Responses API ↔ Chat 转换层
+│   ├── version.js                   # 应用版本号（唯一来源）
+│   ├── rate-limit.js                # RPM / TPM 限流（Redis 滑动窗口）
+│   ├── token-limit.js               # TPM 额度 + CJK 感知的 token 估算
+│   ├── telemetry.js                 # 遥测事件构造（两端共用）
+│   ├── chat-stream.js               # Chat Completions SSE 拆分（thought / tool_calls）
+│   ├── responses-core.js            # Responses API ↔ Chat 转换（两端共用）
+│   ├── interactions-core.js         # Interactions API 转换（两端共用）
+│   ├── responses.js                 # Responses 会话存储适配（Vercel）
+│   ├── interactions.js              # Interactions 会话存储适配（Vercel）
 │   └── responses-handler.js         # Responses API Vercel 入口
 ├── cloudflare-worker/
 │   ├── src/
 │   │   ├── index.js                 # CF Worker 代理核心
-│   │   └── responses.js             # CF Worker Responses API
-│   ├── wrangler.toml                # CF Worker 配置
-│   └── package.json
+│   │   ├── responses.js             # CF Worker Responses API（适配层）
+│   │   └── interactions.js          # CF Worker Interactions API（适配层）
+│   └── wrangler.toml                # CF Worker 配置（无需独立 package.json）
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml               # CF Worker 自动部署
@@ -385,7 +395,7 @@ CORS_ALLOWED_ORIGINS=https://your-frontend.com
 | **Dashboard 认证** | 密码 + Bearer Token，API 401 自动退回登录 |
 | **API 限流（请求数）** | 基于 API Key SHA-1 指纹的 60 秒滑动窗口（Redis ZSET 日志法），默认 15 RPM，可用 `RATE_LIMIT_RPM` 调整 / 设 `0` 关闭；Redis 故障时自动放行（fail-open） |
 | **API 限流（输入 token）** | 按模型 + Key 的 60 秒输入 token 滑动窗口（Redis ZSET），封顶取各模型免费层 TPM（Gemma 4 = 16K，Flash = 250K），超限即 429 + `Retry-After`；超限请求在代理侧被拦下，不再撞 Google 的 16K TPM 墙（详见 `lib/token-limit.js`） |
-| **CF Worker 限流** | 基于 IP 的内存滑动窗口：60 RPM + 按模型输入 token 滑动窗口（Gemma 4 限 16K/min）；两层均为单实例内存，多实例下由 429 重试/降级兜底 |
+| **CF Worker 限流** | 与 Vercel 端同口径：按 **API Key SHA-1 指纹**（非 IP）计量，RPM 默认 15（`RATE_LIMIT_RPM` 可覆盖，0 = 关闭）+ 按模型输入 token 滑动窗口（Gemma 4 限 16K/min）；两层均为单实例内存，多实例下由 429 重试/降级兜底 |
 | **CORS 控制** | `CORS_ALLOWED_ORIGINS` 白名单，未配置时允许 `*` |
 | **错误脱敏** | 生产环境不暴露内部错误细节 |
 | **来源指纹** | 统计使用 SHA-1 前 8 位，不存储原始 API Key |

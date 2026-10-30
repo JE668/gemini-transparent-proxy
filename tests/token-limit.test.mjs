@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TPM_LIMITS, estimateInputTokens } from '../lib/token-limit.js';
+import { TPM_LIMITS, estimateInputTokens, estimateTextTokens } from '../lib/token-limit.js';
 
 test('TPM_LIMITS: 关键模型的额度与配额快照一致', () => {
   assert.equal(TPM_LIMITS['gemma-4-31b-it'], 16000);
@@ -108,4 +108,66 @@ test('estimateInputTokens: 结果随文本长度单调递增', () => {
   const a = estimateInputTokens({ messages: [{ role: 'user', content: 'a'.repeat(100) }] });
   const b = estimateInputTokens({ messages: [{ role: 'user', content: 'a'.repeat(200) }] });
   assert.ok(b > a, '估算必须随输入增长');
+});
+
+// ── CJK（中英混合）token 估算 ──
+// ⚠️ 旧实现对所有文本一律 ceil(len/4)，中文会被低估 3~4 倍：
+//    代理以为没超 TPM 墙 → 上游直接 429 → 用户看到不可重试的失败。
+
+test('estimateTextTokens: 纯 ASCII 仍按 ~4 字符/token', () => {
+  assert.equal(estimateTextTokens('abcdefgh'), 2);
+  assert.equal(estimateTextTokens('a'), 1);
+  assert.equal(estimateTextTokens(''), 0);
+});
+
+test('estimateTextTokens: 纯中文按 1 字/token（不再被低估 4 倍）', () => {
+  const chinese = '你好世界你好世界'; // 8 个汉字
+  assert.equal(estimateTextTokens(chinese), 8);
+  // 旧实现会得到 ceil(8/4) = 2 —— 明显低估
+  assert.ok(estimateTextTokens(chinese) > 8 / 4);
+});
+
+test('estimateTextTokens: 中英混合按类别分别估算', () => {
+  // 4 个汉字 + 8 个 ASCII 字符 → 4 + ceil(8/4) = 6
+  assert.equal(estimateTextTokens('你好世界abcdefgh'), 4 + 2);
+});
+
+test('estimateTextTokens: 全角标点按 1 token 计', () => {
+  assert.equal(estimateTextTokens('，。！？'), 4);
+});
+
+test('estimateTextTokens: 日文假名 / 韩文音节按 1 token 计', () => {
+  assert.equal(estimateTextTokens('ひらがな'), 4);
+  assert.equal(estimateTextTokens('カタカナ'), 4);
+  assert.equal(estimateTextTokens('한국어'), 3);
+});
+
+test('estimateTextTokens: Emoji 按 2 token 保守计', () => {
+  assert.equal(estimateTextTokens('😀'), 2);
+});
+
+test('estimateInputTokens: 中文请求不再被低估（关键回归）', () => {
+  const text = '请帮我分析这段代码的潜在性能问题，并给出优化建议。';
+  const n = estimateInputTokens({ messages: [{ role: 'user', content: text }] });
+  const cjkCount = [...text].filter(ch => /[一-鿿]/.test(ch)).length;
+  // 估算值至少要覆盖中文字数（不能低于中文字符数）
+  assert.ok(n >= cjkCount, `中文估算 ${n} 不应低于中文字数 ${cjkCount}`);
+  // 旧实现：4 + ceil(len/4)，这里 len = ${text.length}
+  const legacy = 4 + Math.ceil(text.length / 4);
+  assert.ok(n > legacy, `中文估算 ${n} 必须高于旧实现 ${legacy}`);
+});
+
+test('estimateInputTokens: 中英混合结果高于等长纯英文（保守方向）', () => {
+  const len = 40;
+  const zh = '字'.repeat(len);
+  const en = 'a'.repeat(len);
+  const zhN = estimateInputTokens({ messages: [{ role: 'user', content: zh }] });
+  const enN = estimateInputTokens({ messages: [{ role: 'user', content: en }] });
+  assert.ok(zhN > enN, '同样长度下中文估算必须更保守');
+});
+
+test('estimateTextTokens: 非字符串输入返回 0', () => {
+  assert.equal(estimateTextTokens(null), 0);
+  assert.equal(estimateTextTokens(undefined), 0);
+  assert.equal(estimateTextTokens(123), 0);
 });

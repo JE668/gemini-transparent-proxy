@@ -13,8 +13,26 @@ const DASHBOARD_LINK = process.env.DASHBOARD_URL
 export async function GET(req) {
   if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
+    // ⚠️ Redis 未配置时必须提前返回：旧实现直接 `getRedis()?.scan(...)` 解构，
+    //    getRedis() 返回 null → `await null` → undefined，再解构 `[nextCursor, keys]`
+    //    抛 TypeError → 整个端点 500；后面的 `pipeline.get()` 也会因 pipeline 为 undefined 抛错。
+    //    现在统一降级为「空数据 + redisEnabled:false」，前端不会崩。
+    const redis = getRedis();
+    if (!redis) {
+      return Response.json({
+        date: getQuotaDate(),
+        redisEnabled: false,
+        globalRequests: 0,
+        globalErrorRate: 0,
+        errorAlert: { level: 'normal', rate: 0, totalRequests: 0, totalErrors: 0, message: '正常（Redis 未配置，无遥测数据）' },
+        unknownModelAlert: null,
+        data: [],
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     const date = getQuotaDate();
-    const globalUsed = await getRedis()?.get(`quota:global:${date}`) || 0;
+    const globalUsed = await redis.get(`quota:global:${date}`) || 0;
 
     // 动态扫描 Redis 中所有 quota:{date}:* 的 key，发现实际使用的所有模型
     // Upstash Redis 不支持 keys()，必须用 scan()
@@ -29,7 +47,7 @@ export async function GET(req) {
     // Upstash scan 返回 [cursor: string, keys: string[]]，cursor 为 "0" 时扫描完成
     let cursor = "0";
     do {
-    const [nextCursor, keys] = await getRedis()?.scan(cursor, { match: `quota:${date}:*`, count: 100 });
+    const [nextCursor, keys] = await redis.scan(cursor, { match: `quota:${date}:*`, count: 100 });
     cursor = nextCursor;
     for (const key of keys) {
     // key 格式: quota:{date}:{modelId}
@@ -49,7 +67,7 @@ export async function GET(req) {
     }
 
     // Pipeline 批量获取所有模型的配额和平均延迟
-    const pipeline = getRedis()?.pipeline();
+    const pipeline = redis.pipeline();
     const nowForTpm = Date.now();
     for (const modelId of allModelIds) {
       pipeline.get(`quota:${date}:${modelId}`);

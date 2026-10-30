@@ -34,9 +34,15 @@ function maskIP(ip) {
 export async function GET(req) {
   if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
+    // ⚠️ Redis 未配置时提前返回：旧实现 `redis?.smembers(...)` 得到 undefined，
+    //    后面的 `redis.pipeline()` 会抛 TypeError → 端点 500。
     const redis = getRedis();
+    if (!redis) {
+      return Response.json({ date: getQuotaDate(), redisEnabled: false, totalClients: 0, totalRequests: 0, clients: [] });
+    }
+
     const date = getQuotaDate();
-    const keys = await redis?.smembers(`clients:${date}:keys`);
+    const keys = await redis.smembers(`clients:${date}:keys`);
 
     if (!keys || keys.length === 0) {
       return Response.json({ date, clients: [] });

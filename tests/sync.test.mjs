@@ -29,8 +29,11 @@ const VERCEL_ROUTE = join(ROOT, 'app/api/[[...path]]/route.js');
 const cfSource = readFileSync(CF_INDEX, 'utf8');
 const routeSource = readFileSync(VERCEL_ROUTE, 'utf8');
 const responsesSource = readFileSync(join(ROOT, 'lib/responses.js'), 'utf8');
+const responsesCoreSource = readFileSync(join(ROOT, 'lib/responses-core.js'), 'utf8');
+const libInteractionsSource = readFileSync(join(ROOT, 'lib/interactions.js'), 'utf8');
 const handlerSource = readFileSync(join(ROOT, 'lib/responses-handler.js'), 'utf8');
 const cfResponsesSource = readFileSync(join(ROOT, 'cloudflare-worker/src/responses.js'), 'utf8');
+const cfInteractionsSource = readFileSync(join(ROOT, 'cloudflare-worker/src/interactions.js'), 'utf8');
 
 // ── 1. 共享模块：CF Worker 必须 import，不得再内联一份副本 ──
 
@@ -115,15 +118,90 @@ test('MODEL_FALLBACKS：不存在自环（否则重试同一个模型毫无意�
   }
 });
 
+// ── 4. 限流归属维度：两端必须一致（按 API Key 指纹，不能按客户端 IP）──
+//
+// ⚠️ 历史上 CF 端按 IP 计量、Vercel 端按 Key 指纹计量：
+//    同一批用户切到 CF 就拿到了另一份额度，换 IP 也能绕过 TPM 墙。
+
+test('两端限流归属维度一致：都按 API Key 指纹，不按客户端 IP', () => {
+  assert.match(cfSource, /resolveRateLimitSubject/,
+    'CF Worker 必须使用共享的 resolveRateLimitSubject 解析限流归属主体');
+  assert.match(cfSource, /computeClientFingerprint/,
+    'CF Worker 必须使用共享的 computeClientFingerprint 计算 Key 指纹');
+
+  // 限流检查点必须以归属主体为键，而不是 clientIP
+  assert.ok(!/rateLimiter\.check\(clientIP\)/.test(cfSource),
+    'CF Worker 不得再按 clientIP 做 RPM 限流');
+  assert.ok(!/tokenRateLimiter\.check\(modelId,\s*clientIP/.test(cfSource),
+    'CF Worker 不得再按 clientIP 做 TPM 限流');
+});
+
+test('两端 RPM 上限一致：共用 parseRpmLimit，默认 15', async () => {
+  const { parseRpmLimit, DEFAULT_RPM_LIMIT } = await import('../lib/rate-limit.js');
+  assert.equal(DEFAULT_RPM_LIMIT, 15);
+  assert.equal(parseRpmLimit(undefined), 15);
+  assert.equal(parseRpmLimit('30'), 30);
+  assert.equal(parseRpmLimit('0'), 0, '0 必须表示关闭限流');
+  assert.match(cfSource, /parseRpmLimit\(env\.RATE_LIMIT_RPM\)/,
+    'CF Worker 必须用共享的 parseRpmLimit 解析 RATE_LIMIT_RPM');
+});
+
+test('resolveRateLimitSubject: anon / 空值 → null（不限流）', async () => {
+  const { resolveRateLimitSubject } = await import('../lib/rate-limit.js');
+  assert.equal(resolveRateLimitSubject('anon'), null);
+  assert.equal(resolveRateLimitSubject(''), null);
+  assert.equal(resolveRateLimitSubject(null), null);
+  assert.equal(resolveRateLimitSubject('abcdef12'), 'fp:abcdef12');
+});
+
 test('Responses 路径两端都接入了重试 / 降级', () => {
+  // ⚠️ 转换逻辑已收敛到 lib/responses-core.js（两端共用同一份）。
+  //    两端适配层只需 import 该模块即可继承重试/降级能力。
   for (const [name, src, importRe] of [
-    ['lib/responses.js', responsesSource, /from\s*'\.\/upstream-retry\.js'/],
+    ['lib/responses-core.js', responsesCoreSource, /from\s*'\.\/upstream-retry\.js'/],
+    ['lib/responses.js', responsesSource, /from\s*'\.\/responses-core\.js'/],
     ['lib/responses-handler.js', handlerSource, /from\s*'\.\/upstream-retry\.js'/],
-    ['CF responses.js', cfResponsesSource, /from\s*'\.\.\/\.\.\/lib\/upstream-retry\.js'/],
+    ['CF responses.js', cfResponsesSource, /from\s*'\.\.\/\.\.\/lib\/responses-core\.js'/],
   ]) {
-    assert.match(src, importRe, `${name} 必须引入 upstream-retry`);
-    assert.ok(src.includes('fetchWithModelFallback({'),
-      `${name} 未接入 fetchWithModelFallback（Responses 路径仍会因上游限流直接失败）`);
+    assert.match(src, importRe, `${name} 必须引入 upstream-retry / responses-core`);
+  }
+
+  // 核心实现里必须真正调用了 fetchWithModelFallback
+  assert.ok(responsesCoreSource.includes('fetchWithModelFallback({'),
+    'lib/responses-core.js 未接入 fetchWithModelFallback（Responses 路径仍会因上游限流直接失败）');
+  assert.ok(cfResponsesSource.includes('fetchWithModelFallback({'),
+    'CF responses.js 未接入 fetchWithModelFallback');
+});
+
+test('Responses / Interactions 转换逻辑不得再出现双份实现', () => {
+  // 旧的 800+ 行副本已被 lib/responses-core.js 取代，
+  // 两端只保留「Redis 会话存储适配」，不再各写一份转换逻辑。
+  for (const [name, src] of [
+    ['lib/responses.js', responsesSource],
+    ['CF responses.js', cfResponsesSource],
+  ]) {
+    assert.ok(!/function\s+responsesToChat\s*\(/.test(src),
+      `${name} 不得再内联 responsesToChat 副本（应复用 lib/responses-core.js）`);
+    assert.ok(!/function\s+convertUsage\s*\(/.test(src),
+      `${name} 不得再内联 convertUsage 副本`);
+    assert.ok(!/function\s+valueToChatContent\s*\(/.test(src),
+      `${name} 不得再内联 valueToChatContent 副本`);
+    assert.ok(src.length < 20000,
+      `${name} 仍过大，转换逻辑可能没有完全收敛到 lib/responses-core.js`);
+  }
+
+  for (const [name, src] of [
+    ['lib/interactions.js', libInteractionsSource],
+    ['CF interactions.js', cfInteractionsSource],
+  ]) {
+    // ⚠️ 适配层允许有一个薄包装（负责建立 Redis 映射），
+    //    但不得再内联 core 的转换主体（step 解析 / generation_config 组装等）。
+    assert.ok(!/system_instruction/.test(src),
+      `${name} 不得再内联 responsesToInteraction 副本（应复用 lib/interactions-core.js）`);
+    assert.ok(!/thinking_level/.test(src),
+      `${name} 不得再内联 responsesToInteraction 副本（应复用 lib/interactions-core.js）`);
+    assert.ok(!/model_thought_and_output/.test(src),
+      `${name} 不得再内联 interactionToResponses 副本（应复用 lib/interactions-core.js）`);
   }
 });
 

@@ -6,13 +6,20 @@ import getRedis from '../../../lib/redis';
 export async function GET(req) {
   if (!isDashboardAuthed(req)) return unauthorizedResponse();
   try {
+    // ⚠️ Redis 未配置时提前返回：旧实现 `redis?.lrange(...)` 得到 undefined，
+    //    后续 `redis?.zrange(..., { withScores: true })` 同样为空 → 尚可，
+    //    但 `redis` 为 null 时下游任何直接调用都会抛错，统一降级更安全。
     const redis = getRedis();
+    if (!redis) {
+      return Response.json({ date: getQuotaDate(), redisEnabled: false, retries: 0, recent: [], slowRequests: [] });
+    }
+
     const date = getQuotaDate();
-    
+
     const [recentRaw, retryCount, slowRequestsRaw] = await Promise.all([
-      redis?.lrange(`recent:${date}`, 0, 29),
-      redis?.get(`retries:${date}`),
-      redis?.zrange(`slow:${date}`, 0, 9, { rev: true, withScores: true }),
+      redis.lrange(`recent:${date}`, 0, 29),
+      redis.get(`retries:${date}`),
+      redis.zrange(`slow:${date}`, 0, 9, { rev: true, withScores: true }),
     ]);
 
     const recent = (recentRaw || [])

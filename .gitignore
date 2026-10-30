@@ -4,3 +4,6 @@ node_modules
 .env
 .env.local
 **/.wrangler.DS_Store
+# macOS Finder 元数据（曾被误提交进仓库）
+.DS_Store
+**/.DS_Store

@@ -17,6 +17,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Deploy to Cloudflare Workers
-        run: npx wrangler deploy
+        # ⚠️ 固定 wrangler 版本：npx wrangler 默认拉 latest，
+        #    工具链随时间漂移会让同一份源码在不同时间部署出不同结果，
+        #    也可能在某次 latest 发布后直接部署失败。
+        run: npx --yes wrangler@4.156.0 deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # ⚠️ 必须提供 ACCOUNT_ID：只用 API Token 时 wrangler 无法确定部署到哪个账号，
+          #    会报 "Missing a valid account ID" 而部署失败。
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
