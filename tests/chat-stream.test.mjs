@@ -148,6 +148,37 @@ test('buildChatCompletionChunks: 无内容时也发 finish_reason（避免 empty
   assert.equal(parsed[parsed.length - 1].finish_reason, 'stop');
 });
 
+test('buildChatCompletionChunks: 透传 tool_calls 的 thought_signature（Google thinking 模型）', () => {
+  const chunks = buildChatCompletionChunks({
+    id: 'chatcmpl-1',
+    created: 100,
+    model: 'gemini-4-thinking',
+    choices: [{
+      index: 0,
+      finish_reason: 'tool_calls',
+      message: {
+        content: '',
+        reasoning_content: '思考中...',
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'bash', arguments: '{"cmd":"ls"}' },
+          thought_signature: 'abc123signature'
+        }],
+      },
+    }],
+  });
+  const parsed = parseChunks(chunks);
+  const deltas = parsed.map(c => c.delta);
+
+  // 验证第一个 tool_calls chunk 包含 thought_signature
+  const tcDelta = deltas.find(d => d.tool_calls);
+  assert.ok(tcDelta, 'tool_calls 必须出现在 SSE 中');
+  assert.equal(tcDelta.tool_calls[0].thought_signature, 'abc123signature', 'thought_signature 必须透传');
+  assert.equal(tcDelta.tool_calls[0].id, 'call_1');
+  assert.equal(tcDelta.tool_calls[0].function.name, 'bash');
+});
+
 test('buildSseError: 错误被包装成 SSE data 帧', () => {
   const sse = buildSseError(503, 'upstream down', 'req-1');
   assert.ok(sse.startsWith('data: '));
