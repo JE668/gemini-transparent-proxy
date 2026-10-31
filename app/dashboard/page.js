@@ -160,7 +160,7 @@ const exportToCSV = (rows, filename) => {
 };
 
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString() : String(n ?? '—'));
-const fmtCompact = (n) => {
+const fmtK = (n) => {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (Math.abs(n) >= 1e4) return (n / 1e3).toFixed(1) + 'K';
