@@ -1,80 +1,231 @@
 'use client';
-import React, { useEffect, useState, useCallback, useMemo, Suspense, useRef } from 'react';
+// =============================================================================
+// Gemini Transparent Proxy — 专业监控控制台（方案 C）
+// 视觉语言参考 Grafana / Datadog：固定顶栏 + 左侧导航 + 分区主内容
+// 暗色为默认主题（深蓝紫渐变 + 霓虹线条），亮色为清爽专业风
+// 图表全部自绘 SVG，无第三方图表依赖（保持项目零 UI 依赖）
+// =============================================================================
+import React, { useEffect, useState, useCallback, useMemo, Suspense, useRef, useId } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 // 配额重置倒计时 —— 与后端配额日界共用同一份实现
 import { getSecondsUntilQuotaReset } from '../../lib/utils';
 
+const REFRESH_INTERVAL = 30000;
+
 // =============================================================================
-// CSS 动画与全局样式
+// 全局样式与动画
 // =============================================================================
-const styles = `
-@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
-@keyframes slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
-@keyframes pulse-glow { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-@keyframes ring-fill { from { stroke-dashoffset: var(--circ); } to { stroke-dashoffset: var(--off); } }
-@keyframes grid-drift { from { background-position: 0 0; } to { background-position: 48px 48px; } }
-@keyframes aurora-shift { 0%,100% { transform: translate(0,0) scale(1); opacity: 0.55; } 33% { transform: translate(30px,-20px) scale(1.12); opacity: 0.7; } 66% { transform: translate(-20px,25px) scale(0.95); opacity: 0.5; } }
-@keyframes scanline { 0% { transform: translateY(-100%); } 100% { transform: translateY(100vh); } }
-@keyframes corner-pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
-@keyframes num-tick { 0%,100% { opacity: 1; } 50% { opacity: 0.85; } }
-.dashboard-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
-.dashboard-scroll::-webkit-scrollbar-track { background: transparent; }
-.dashboard-scroll::-webkit-scrollbar-thumb { background: rgba(34,211,238,0.3); border-radius: 2px; }
-.dashboard-scroll::-webkit-scrollbar-thumb:hover { background: rgba(34,211,238,0.5); }
+const ANIM_CSS = `
+@keyframes db-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes db-slide-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes db-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes db-spin { to { transform: rotate(360deg); } }
+@keyframes db-pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+@keyframes db-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes db-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-7px); } 75% { transform: translateX(7px); } }
+@keyframes db-sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(420%); } }
+.db-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.db-scroll::-webkit-scrollbar-track { background: transparent; }
+.db-scroll::-webkit-scrollbar-thumb { background: rgba(148,163,184,.28); border-radius: 3px; }
+.db-scroll::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.5); }
+.db-scroll { scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.28) transparent; }
+.db-nav { transition: background .16s ease, color .16s ease; }
+.db-nav:hover { background: var(--db-hover) !important; }
+.db-btn { transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.db-btn:hover { transform: translateY(-1px); }
+.db-btn:active { transform: translateY(0); }
+.db-row { transition: background .14s ease, border-color .14s ease; }
+.db-row:hover { background: var(--db-hover) !important; }
+.db-card { animation: db-slide-up .45s cubic-bezier(.4,0,.2,1) both; }
+.db-qcard { transition: transform .2s cubic-bezier(.4,0,.2,1), border-color .2s ease, box-shadow .2s ease; }
+.db-qcard:hover { transform: translateY(-3px); }
+@media (max-width: 1080px) {
+  .db-sidebar { display: none !important; }
+  .db-main { margin-left: 0 !important; }
+}
+@media (max-width: 768px) {
+  .db-metrics { grid-template-columns: 1fr 1fr !important; }
+  .db-split { grid-template-columns: 1fr !important; }
+  .db-topbar { padding: 10px 14px !important; }
+  .db-main { padding: 14px 12px 40px !important; }
+}
+@media (max-width: 480px) {
+  .db-quota-grid { grid-template-columns: 1fr !important; }
+  .db-hide-xs { display: none !important; }
+}
 `;
 
 // =============================================================================
-// 工具函数
+// 常量
 // =============================================================================
-const REFRESH_INTERVAL = 30000;
-
 const HTTP_STATUS_DESC = {
-  400: '请求格式错误', 401: '认证失败/密钥无效', 403: '权限不足',
+  400: '请求格式错误', 401: '认证失败 / 密钥无效', 403: '权限不足',
   404: '资源不存在', 408: '请求超时', 429: '请求过于频繁（限流）',
   500: '服务器内部错误', 502: '网关错误（上游异常）', 503: '服务暂不可用', 504: '网关超时（上游无响应）',
 };
 
 const MODEL_COLORS = {
-  // Gemma 4 (主力)
-  'gemma-4-31b-it': '#6366f1', 'gemma-4-26b-a4b-it': '#8b5cf6',
-  // Gemini 2.5
-  'gemini-2.5-flash': '#10b981', 'gemini-2.5-flash-lite': '#34d399',
-  'gemini-2.5-flash-preview-tts': '#6ee7b7',
-  // Gemini 3 / 3.1 / 3.5 / 3.8
-  'gemini-3-flash-preview': '#0ea5e9', 'gemini-3.5-flash-lite': '#38bdf8',
-  'gemini-3.1-flash-lite': '#7dd3fc', 'gemini-3.1-flash-tts-preview': '#bae6fd',
-  'gemini-3.6-flash': '#0284c7', 'gemini-3.8-flash': '#22d3ee',
-  'gemini-3.8-flash-tts': '#a5f3fc', 'gemini-3.8-flash-lite-tts': '#cffafe',
-  'default': '#6366f1'
+  'gemma-4-31b-it': '#818cf8', 'gemma-4-26b-a4b-it': '#a78bfa',
+  'gemini-2.5-flash': '#34d399', 'gemini-2.5-flash-lite': '#6ee7b7',
+  'gemini-2.5-flash-preview-tts': '#a7f3d0',
+  'gemini-3-flash-preview': '#38bdf8', 'gemini-3.5-flash-lite': '#7dd3fc',
+  'gemini-3.1-flash-lite': '#0ea5e9', 'gemini-3.1-flash-tts-preview': '#bae6fd',
+  'gemini-3.6-flash': '#22d3ee', 'gemini-3.8-flash': '#2dd4bf',
+  'gemini-3.8-flash-tts': '#5eead4', 'gemini-3.8-flash-lite-tts': '#99f6e4',
+  'default': '#818cf8',
 };
-
 const getModelColor = (id) => MODEL_COLORS[id] || MODEL_COLORS.default;
 
-const formatTime = (iso) => {
-  try { return new Date(iso).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
-  catch { return iso; }
-};
-
-const formatDate = (iso) => {
-  try { return new Date(iso).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }); }
-  catch { return iso; }
-};
-
-const shortModel = (id) => id.replace('models/', '');
-const getStatusDesc = (code) => HTTP_STATUS_DESC[code] || '';
-const getStatusLabel = (code) => {
-  if (!code) return { text: '未知', color: '#94a3b8' };
-  if (code >= 500) return { text: '服务器错误', color: '#ef4444' };
-  if (code >= 400) return { text: '客户端错误', color: '#f59e0b' };
-  return { text: '成功', color: '#22c55e' };
-};
+const SECTIONS = [
+  { id: 'overview', label: '实时监控', icon: '📈', desc: '核心指标与流量趋势' },
+  { id: 'quota', label: '模型配额', icon: '⚡', desc: '用量 · 限额 · 耗尽预测' },
+  { id: 'traffic', label: '流量分析', icon: '🧬', desc: '模型分布与状态构成' },
+  { id: 'logs', label: '请求日志', icon: '📋', desc: '最近请求与慢请求' },
+  { id: 'errors', label: '错误分析', icon: '🚨', desc: '错误明细与时序分布' },
+  { id: 'system', label: '系统状态', icon: '🔗', desc: '上游与缓存健康度' },
+];
 
 // =============================================================================
-// 响应式 Hook
+// 工具函数
+// =============================================================================
+const formatTime = (iso) => {
+  try { return new Date(iso).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch { return String(iso ?? ''); }
+};
+const shortModel = (id) => String(id || '').replace('models/', '');
+const getStatusLabel = (code) => {
+  if (!code) return { text: '未知', color: '#94a3b8' };
+  if (code >= 500) return { text: '服务端', color: '#f87171' };
+  if (code >= 400) return { text: '客户端', color: '#fbbf24' };
+  return { text: '成功', color: '#4ade80' };
+};
+const formatDuration = (minutes) => {
+  if (minutes == null || !isFinite(minutes)) return '—';
+  if (minutes < 1) return '< 1 分钟';
+  if (minutes < 60) return `${Math.round(minutes)} 分钟`;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  if (h >= 24) return `${(h / 24).toFixed(1)} 天`;
+  return m > 0 ? `${h} 时 ${m} 分` : `${h} 小时`;
+};
+const getTimeUntilReset = () => {
+  const total = getSecondsUntilQuotaReset();
+  return { hours: Math.floor(total / 3600), minutes: Math.floor((total % 3600) / 60), seconds: total % 60 };
+};
+const formatCountdown = (cd) =>
+  String(cd.hours).padStart(2, '0') + ':' + String(cd.minutes).padStart(2, '0') + ':' + String(cd.seconds).padStart(2, '0');
+
+const parseUserAgent = (ua) => {
+  if (!ua || ua === 'unknown') return { type: '未知', icon: '🔌' };
+  if (ua.includes('Postman')) return { type: 'Postman', icon: '🔌' };
+  if (ua.includes('curl')) return { type: 'curl', icon: '💻' };
+  if (ua.includes('python-requests')) return { type: 'Python', icon: '🐍' };
+  if (ua.includes('node-fetch')) return { type: 'Node.js', icon: '🟢' };
+  if (ua.includes('axios')) return { type: 'Axios', icon: '📦' };
+  if (ua.includes('Go-http-client')) return { type: 'Go', icon: '🔵' };
+  if (ua.includes('Java')) return { type: 'Java', icon: '☕' };
+  if (ua.includes('Mozilla/5.0')) {
+    if (ua.includes('Chrome')) return { type: 'Chrome', icon: '🌐' };
+    if (ua.includes('Firefox')) return { type: 'Firefox', icon: '🦊' };
+    if (ua.includes('Safari')) return { type: 'Safari', icon: '🧭' };
+  }
+  return { type: '其他', icon: '🔌' };
+};
+
+const predictQuotaExhaustion = (used, limit, hoursElapsed) => {
+  if (!used || !limit || hoursElapsed <= 0) return null;
+  const rate = used / hoursElapsed;
+  if (rate <= 0) return null;
+  const remaining = limit - used;
+  if (remaining <= 0) return { exhausted: true, minutes: 0, rate, remaining: 0 };
+  return { exhausted: false, minutes: (remaining / rate) * 60, rate, remaining };
+};
+
+const exportToCSV = (rows, filename) => {
+  if (!rows || rows.length === 0) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [
+    headers.join(','),
+    ...rows.map(r => headers.map(h => {
+      const v = r[h];
+      return (typeof v === 'string' && (v.includes(',') || v.includes('"'))) ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(',')),
+  ].join('\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+const fmt = (n) => (typeof n === 'number' ? n.toLocaleString() : String(n ?? '—'));
+const fmtCompact = (n) => {
+  if (typeof n !== 'number' || !isFinite(n)) return '—';
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (Math.abs(n) >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+  return n.toLocaleString();
+};
+const pctOf = (part, whole) => (whole > 0 ? (part / whole) * 100 : 0);
+
+// =============================================================================
+// 主题（暗色为默认：深蓝紫渐变 + 霓虹线条）
+// =============================================================================
+function buildTheme(dark) {
+  if (dark) {
+    return {
+      dark: true,
+      body: { background: 'linear-gradient(160deg,#0b1020 0%,#0f172a 34%,#151433 68%,#1b1746 100%)', color: '#cbd5e1' },
+      hover: 'rgba(148,163,184,0.07)',
+      topbar: { background: 'rgba(9,13,27,0.86)', borderBottom: '1px solid rgba(148,163,184,0.12)' },
+      sidebar: { background: 'rgba(9,13,27,0.62)', borderRight: '1px solid rgba(148,163,184,0.1)' },
+      card: {
+        background: 'linear-gradient(155deg,rgba(30,41,59,.72),rgba(13,20,38,.78))',
+        border: '1px solid rgba(148,163,184,.12)',
+        boxShadow: '0 10px 30px rgba(2,6,23,.5), inset 0 1px 0 rgba(255,255,255,.045)',
+      },
+      inset: { background: 'rgba(2,6,23,.5)', border: '1px solid rgba(148,163,184,.09)' },
+      navActive: { background: 'linear-gradient(90deg,rgba(129,140,248,.22),rgba(129,140,248,.03))', color: '#e0e7ff' },
+      navIdle: { color: '#7c8aa5' },
+      text: { hi: '#f1f5f9', main: '#dbe3ef', sub: '#94a3b8', muted: '#64748b' },
+      grid: 'rgba(148,163,184,.1)',
+      axis: 'rgba(148,163,184,.22)',
+      tipBg: 'rgba(2,6,23,.96)',
+      accent: '#818cf8', accent2: '#22d3ee', accent3: '#a78bfa',
+      ok: '#4ade80', warn: '#fbbf24', err: '#f87171',
+      ring: 'rgba(148,163,184,.14)', heatOff: 'rgba(148,163,184,.07)',
+      heroBg: 'linear-gradient(150deg,rgba(34,211,238,.1),rgba(99,102,241,.07) 45%,rgba(167,139,250,.11))',
+      heroBorder: '1px solid rgba(129,140,248,.26)',
+    };
+  }
+  return {
+    dark: false,
+    body: { background: 'linear-gradient(160deg,#f5f8ff 0%,#eef2ff 42%,#f6f4ff 74%,#eef2ff 100%)', color: '#334155' },
+    hover: 'rgba(99,102,241,0.06)',
+    topbar: { background: 'rgba(255,255,255,.88)', borderBottom: '1px solid rgba(99,102,241,.14)' },
+    sidebar: { background: 'rgba(255,255,255,.72)', borderRight: '1px solid rgba(99,102,241,.12)' },
+    card: {
+      background: 'rgba(255,255,255,.92)',
+      border: '1px solid rgba(99,102,241,.14)',
+      boxShadow: '0 6px 22px rgba(79,70,229,.08), 0 1px 2px rgba(15,23,42,.04)',
+    },
+    inset: { background: '#f7f9ff', border: '1px solid rgba(99,102,241,.1)' },
+    navActive: { background: 'linear-gradient(90deg,rgba(99,102,241,.14),rgba(99,102,241,.02))', color: '#4338ca' },
+    navIdle: { color: '#64748b' },
+    text: { hi: '#0f172a', main: '#1e293b', sub: '#475569', muted: '#94a3b8' },
+    grid: 'rgba(99,102,241,.11)',
+    axis: 'rgba(99,102,241,.24)',
+    tipBg: 'rgba(15,23,42,.96)',
+    accent: '#6366f1', accent2: '#0891b2', accent3: '#7c3aed',
+    ok: '#16a34a', warn: '#d97706', err: '#dc2626',
+    ring: 'rgba(99,102,241,.12)', heatOff: 'rgba(99,102,241,.07)',
+    heroBg: 'linear-gradient(150deg,rgba(34,211,238,.09),rgba(99,102,241,.07) 45%,rgba(139,92,246,.09))',
+    heroBorder: '1px solid rgba(99,102,241,.24)',
+  };
+}
+
+// =============================================================================
+// Hooks
 // =============================================================================
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -88,263 +239,162 @@ function useResponsive() {
   return isMobile;
 }
 
-// ⚠️ 配额重置倒计时统一走 lib/utils.js 的共享实现（与后端 getQuotaDate 同源）。
-//    旧实现内联了一份 `reset.setUTCHours(7, 0, 0, 0)`，与后端的配额日界各写各的，
-//    任何一方改动都会让「倒计时」和「实际重置」对不上。
-const getTimeUntilReset = () => {
-  const totalSeconds = getSecondsUntilQuotaReset();
-  return {
-    hours: Math.floor(totalSeconds / 3600),
-    minutes: Math.floor((totalSeconds % 3600) / 60),
-    seconds: totalSeconds % 60
-  };
-};
-
-const formatCountdown = (cd) =>
-  String(cd.hours).padStart(2, '0') + ':' + String(cd.minutes).padStart(2, '0') + ':' + String(cd.seconds).padStart(2, '0');
-
-// 数字格式化动画辅助
-const formatNumber = (num) => num?.toLocaleString?.() ?? String(num);
-
-// 格式化时间段（如 "2 小时 30 分"）
-const formatDuration = (minutes) => {
-  if (minutes < 1) return '不到 1 分钟';
-  if (minutes < 60) return `${Math.round(minutes)}分钟`;
-  const hours = Math.floor(minutes / 60);
-  const mins = Math.round(minutes % 60);
-  if (hours >= 24) {
-    const days = (hours / 24).toFixed(1);
-    return `${days}天`;
-  }
-  return mins > 0 ? `${hours}小时${mins}分` : `${hours}小时`;
-};
-
-// 计算配额耗尽预测（基于当前使用速率）
-const predictQuotaExhaustion = (used, limit, hoursElapsed) => {
-  if (!used || !limit || hoursElapsed <= 0) return null;
-  const hourlyRate = used / hoursElapsed;
-  if (hourlyRate <= 0) return null;
-  const remaining = limit - used;
-  if (remaining <= 0) return { exhausted: true, minutes: 0, rate: hourlyRate };
-  const hoursUntilExhaustion = remaining / hourlyRate;
-  const minutesUntilExhaustion = hoursUntilExhaustion * 60;
-  return {
-    exhausted: false,
-    minutes: minutesUntilExhaustion,
-    rate: hourlyRate,
-    remaining,
-  };
-};
-
-// 导出 CSV 数据
-const exportToCSV = (data, filename) => {
-  if (!data || data.length === 0) return;
-  const headers = Object.keys(data[0]);
-  const csvContent = [
-    headers.join(','),
-    ...data.map(row => headers.map(field => {
-      const value = row[field];
-      // 处理包含逗号或引号的字符串
-      if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
-        return `"${value.replace(/"/g, '""')}"`;
+// 滚动位置决定当前分区（左侧导航高亮）
+const SECTION_IDS = SECTIONS.map(s => s.id);
+function useActiveSection(ready) {
+  const [active, setActive] = useState(SECTION_IDS[0]);
+  useEffect(() => {
+    if (!ready) return;
+    const onScroll = () => {
+      const probe = window.innerHeight * 0.34;
+      let current = SECTION_IDS[0];
+      for (const id of SECTION_IDS) {
+        const el = document.getElementById(`sec-${id}`);
+        if (el && el.getBoundingClientRect().top <= probe) current = id;
       }
-      return value;
-    }).join(','))
-  ].join('\n');
-  
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(link.href);
-};
-
-// 解析 User-Agent 识别客户端类型
-const parseUserAgent = (ua) => {
-  if (!ua || ua === 'unknown') return { type: '未知', icon: '🔌' };
-  if (ua.includes('Postman')) return { type: 'Postman', icon: '🔌' };
-  if (ua.includes('curl')) return { type: 'curl', icon: '💻' };
-  if (ua.includes('python-requests')) return { type: 'Python', icon: '🐍' };
-  if (ua.includes('node-fetch')) return { type: 'Node.js', icon: '🟢' };
-  if (ua.includes('axios')) return { type: 'Axios', icon: '📦' };
-  if (ua.includes('Go-http-client')) return { type: 'Go', icon: '🔵' };
-  if (ua.includes('Java')) return { type: 'Java', icon: '☕' };
-  if (ua.includes('Mozilla/5.0')) {
-    if (ua.includes('Chrome')) return { type: 'Browser (Chrome)', icon: '🌐' };
-    if (ua.includes('Firefox')) return { type: 'Browser (Firefox)', icon: '🦊' };
-    if (ua.includes('Safari')) return { type: 'Browser (Safari)', icon: '🧭' };
-  }
-  return { type: '其他', icon: '🔌' };
-};
+      setActive(prev => (prev === current ? prev : current));
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [ready]);
+  return active;
+}
 
 // =============================================================================
-// 主题
+// 图表组件（自绘 SVG）
 // =============================================================================
-const getTheme = (dark) => ({
-  page: { 
-    backgroundColor: dark ? '#050914' : '#eef2ff', 
-    color: dark ? '#cbd5e1' : '#0f172a',
-    backgroundGradient: dark 
-      ? 'radial-gradient(ellipse 60% 50% at 15% 10%, rgba(34,211,238,0.10) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 85% 25%, rgba(99,102,241,0.12) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.08) 0%, transparent 55%)'
-      : 'radial-gradient(ellipse 60% 50% at 12% 8%, rgba(34,211,238,0.14) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 88% 22%, rgba(99,102,241,0.16) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.12) 0%, transparent 55%), radial-gradient(ellipse 40% 30% at 70% 70%, rgba(34,211,238,0.08) 0%, transparent 55%)'
-  },
-  card: {
-    backgroundColor: dark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.78)',
-    border: dark ? '1px solid rgba(34,211,238,0.14)' : '1px solid rgba(99,102,241,0.20)',
-    boxShadow: dark ? '0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(34,211,238,0.04), inset 0 1px 0 rgba(255,255,255,0.06)' : '0 8px 32px rgba(99,102,241,0.12), 0 0 20px rgba(34,211,238,0.06), inset 0 1px 0 rgba(255,255,255,0.9)',
-  },
-  text: { main: dark ? '#f1f5f9' : '#0f172a', sub: dark ? '#94a3b8' : '#475569', muted: dark ? '#64748b' : '#64748b' },
-  bar: { bg: dark ? 'rgba(30,41,59,0.6)' : '#eef2ff' },
-  input: { backgroundColor: dark ? 'rgba(2,6,23,0.6)' : 'white', border: dark ? '1px solid rgba(34,211,238,0.2)' : '1px solid rgba(99,102,241,0.25)', color: dark ? '#f1f5f9' : '#0f172a' },
-  glow: dark ? '0 0 24px rgba(34,211,238,0.10)' : '0 0 28px rgba(99,102,241,0.16), 0 0 12px rgba(34,211,238,0.10)',
-  neonGlow: dark ? '0 0 8px rgba(34,211,238,0.35), 0 0 20px rgba(99,102,241,0.18)' : '0 0 10px rgba(99,102,241,0.30), 0 0 24px rgba(34,211,238,0.16)',
-  // BI 大屏强调色：霓虹青 → 靛蓝 → 紫
-  accent: dark ? '#22d3ee' : '#6366f1',
-  accent2: dark ? '#6366f1' : '#8b5cf6',
-  gridLine: dark ? 'rgba(34,211,238,0.05)' : 'rgba(99,102,241,0.10)',
-});
 
-// =============================================================================
-// SparklineChart — 带 tooltip 交互的折线图
-// =============================================================================
-function SparklineChart({ data, width = 700, height = 180, theme, yesterdayData }) {
+// 数字滚动动画
+function AnimatedNumber({ value, duration = 900, color, suffix = '' }) {
+  const [display, setDisplay] = useState(0);
+  useEffect(() => {
+    const target = Number(value);
+    if (!isFinite(target)) { setDisplay(0); return; }
+    if (Math.abs(target) < 5) { setDisplay(target); return; }
+    const start = performance.now();
+    let raf;
+    const tick = (now) => {
+      const p = Math.min((now - start) / duration, 1);
+      setDisplay(Math.round(target * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+  return <span style={color ? { color } : undefined}>{display.toLocaleString()}{suffix}</span>;
+}
+
+// 时间序列面积图（今天 vs 昨天），带十字准星与 tooltip
+function TimeSeriesChart({ data, height = 210, theme }) {
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
   const [hover, setHover] = useState(null);
-  const t = theme || { text: { sub: '#94a3b8' }, card: { backgroundColor: '#1e293b' } };
+  const W = 760, H = height, padL = 46, padR = 16, padT = 16, padB = 26;
 
   if (!data || data.length === 0) {
-    return (
-      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.text.sub, fontSize: '14px' }}>
-        📊 暂无数据
-      </div>
-    );
+    return <EmptyHint icon="📉" text="暂无时间线数据" theme={theme} height={height} />;
   }
 
-  const maxVal = Math.max(...data.map(d => d.count), ...((yesterdayData || []).map(d => d.yesterday || 0)), 1);
-  const padX = 50, padY = 28, rPad = 20;
-  const chartW = width - padX - rPad;
-  const chartH = height - padY * 2;
-  const stepX = chartW / (Math.max(data.length - 1, 1));
-  const points = data.map((d, i) => ({
-    x: padX + i * stepX, y: padY + chartH - (d.count / maxVal) * chartH, ...d
-  }));
-  
-  // 昨天的数据点
-  const yesterdayPoints = (yesterdayData || []).map((d, i) => ({
-    x: padX + i * stepX, y: padY + chartH - ((d.yesterday || 0) / maxVal) * chartH
-  }));
-  const yesterdayLinePath = yesterdayPoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  const maxVal = Math.max(...data.map(d => d.today || 0), ...data.map(d => d.yesterday || 0), 1);
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const stepX = chartW / Math.max(data.length - 1, 1);
+  const px = (i) => padL + i * stepX;
+  const py = (v) => padT + chartH - (Math.max(v || 0, 0) / maxVal) * chartH;
 
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
-  const areaPath = `${linePath} L${points[points.length - 1].x},${padY + chartH} L${points[0].x},${padY + chartH} Z`;
+  const pts = data.map((d, i) => ({ ...d, x: px(i), y: py(d.today) }));
+  const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const area = `${line} L${pts[pts.length - 1].x.toFixed(1)},${(padT + chartH).toFixed(1)} L${padL},${(padT + chartH).toFixed(1)} Z`;
+  const yLine = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(d.yesterday).toFixed(1)}`).join(' ');
 
-  // Y 轴刻度
-  const yTicks = 5;
-  const yStep = chartH / yTicks;
-  const yValues = [];
-  for (let i = 0; i <= yTicks; i++) {
-    yValues.push(Math.round((maxVal / yTicks) * (yTicks - i)));
-  }
-
-  // Tooltip
-  const tip = hover !== null ? points[hover] : null;
-  const tipW = 160, tipH = 64;
-  const tipX = tip ? Math.min(Math.max(tip.x - tipW / 2, 4), width - tipW - 4) : 0;
-  const tipY = tip ? Math.max(tip.y - tipH - 20, 4) : 0;
+  const yTicks = 4;
+  const tip = hover != null ? pts[hover] : null;
+  const tipW = 168, tipH = 82;
+  const tipX = tip ? Math.min(Math.max(tip.x - tipW / 2, 4), W - tipW - 4) : 0;
+  const tipY = tip ? Math.max(tip.y - tipH - 14, 2) : 0;
 
   return (
     <div style={{ position: 'relative', width: '100%' }}>
-      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}
-        style={{ display: 'block' }}
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
-          const scaleX = width / rect.width;
-          const mx = (e.clientX - rect.left) * scaleX;
-          let closest = 0, minDist = Infinity;
-          points.forEach((p, i) => { const d = Math.abs(p.x - mx); if (d < minDist) { minDist = d; closest = i; } });
-          if (hover !== closest) setHover(closest);
+          const mx = (e.clientX - rect.left) * (W / rect.width);
+          let best = 0, dist = Infinity;
+          pts.forEach((p, i) => { const d = Math.abs(p.x - mx); if (d < dist) { dist = d; best = i; } });
+          if (hover !== best) setHover(best);
         }}
         onMouseLeave={() => setHover(null)}
       >
         <defs>
-          <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.30" />
-            <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.02" />
+          <linearGradient id={`area-${uid}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={theme.accent} stopOpacity="0.34" />
+            <stop offset="100%" stopColor={theme.accent} stopOpacity="0.01" />
           </linearGradient>
-          <filter id="glowFilter">
-            <feGaussianBlur stdDeviation="2.5" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
+          <linearGradient id={`stroke-${uid}`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={theme.accent2} />
+            <stop offset="55%" stopColor={theme.accent} />
+            <stop offset="100%" stopColor={theme.accent3} />
+          </linearGradient>
         </defs>
 
-        {/* Y 轴网格 */}
-        {yValues.map((v, i) => (
-          <g key={i}>
-            <line x1={padX} y1={padY + i * yStep} x2={width - rPad} y2={padY + i * yStep}
-              stroke={t.bar?.bg || '#e2e8f0'} strokeWidth="1" strokeDasharray="4 3" />
-            <text x={padX - 8} y={padY + i * yStep + 4} textAnchor="end"
-              fill={t.text?.sub || '#94a3b8'} fontSize="11" fontFamily="monospace">
-              {v.toLocaleString()}
-            </text>
-          </g>
-        ))}
+        {Array.from({ length: yTicks + 1 }).map((_, i) => {
+          const y = padT + (chartH / yTicks) * i;
+          const v = Math.round((maxVal / yTicks) * (yTicks - i));
+          return (
+            <g key={i}>
+              <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={theme.grid} strokeWidth="1" strokeDasharray={i === yTicks ? '0' : '3 4'} />
+              <text x={padL - 9} y={y + 3.5} textAnchor="end" fill={theme.text.muted} fontSize="10" fontFamily="ui-monospace,monospace">
+                {fmtCompact(v)}
+              </text>
+            </g>
+          );
+        })}
 
-        {/* 面积 */}
-        <path d={areaPath} fill="url(#lineGrad)" />
-
-        {/* 昨天的对比线 */}
-        {yesterdayPoints.length > 0 && (
-          <path d={yesterdayLinePath} fill="none" stroke="#94a3b8" strokeWidth="2"
-            strokeDasharray="5 5" opacity="0.5" />
+        <path d={area} fill={`url(#area-${uid})`} />
+        {data.some(d => (d.yesterday || 0) > 0) && (
+          <path d={yLine} fill="none" stroke={theme.text.muted} strokeWidth="1.6" strokeDasharray="5 5" opacity="0.6" />
         )}
-      
-        {/* 折线 */}
-        <path d={linePath} fill="none" stroke="#22d3ee" strokeWidth="2.5"
-          strokeLinecap="round" strokeLinejoin="round" filter="url(#glowFilter)" />
+        <path d={line} fill="none" stroke={`url(#stroke-${uid})`} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
 
-        {/* X 轴标签 */}
-        {points.filter((_, i) => i % 3 === 0 || i === data.length - 1).map((p, i) => (
-          <text key={i} x={p.x} y={height - 4} textAnchor="middle"
-            fill={t.text?.muted || '#94a3b8'} fontSize="10" fontFamily="monospace">{p.label}</text>
-        ))}
-
-        {/* 数据点 */}
-        {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={hover === i ? 6 : 3}
-            fill={hover === i ? '#4f46e5' : '#6366f1'}
-            stroke={hover === i ? '#fff' : 'none'}
-            strokeWidth="2"
-            style={{ transition: 'r 0.15s, fill 0.15s', cursor: 'crosshair' }} />
-        ))}
-
-        {/* 当前小时高亮线 */}
+        {/* 当前小时指示线 */}
         {(() => {
-          const now = new Date();
-          const curHour = (now.getUTCHours() + 8) % 24;
-          const idx = data.findIndex(d => d.hour === curHour);
-          if (idx >= 0) {
-            const p = points[idx];
-            return (
-              <line x1={p.x} y1={padY} x2={p.x} y2={padY + chartH}
-                stroke="#6366f1" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
-            );
-          }
-          return null;
+          const nowHour = new Date().getHours();
+          const idx = data.findIndex(d => d.hour === nowHour);
+          if (idx < 0) return null;
+          return (
+            <g>
+              <line x1={pts[idx].x} y1={padT} x2={pts[idx].x} y2={padT + chartH} stroke={theme.accent} strokeWidth="1" strokeDasharray="2 3" opacity="0.55" />
+              <circle cx={pts[idx].x} cy={padT - 4} r="2.6" fill={theme.accent} />
+            </g>
+          );
         })()}
 
-        {/* Tooltip */}
+        {pts.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={hover === i ? 5 : 0}
+            fill={theme.dark ? '#0b1020' : '#fff'} stroke={theme.accent} strokeWidth="2.2" />
+        ))}
+
+        {data.map((d, i) => (i % 3 === 0 || i === data.length - 1) ? (
+          <text key={i} x={px(i)} y={H - 8} textAnchor="middle" fill={theme.text.muted} fontSize="9.5" fontFamily="ui-monospace,monospace">
+            {String(d.hour).padStart(2, '0')}
+          </text>
+        ) : null)}
+
         {tip && (
-          <g>
-            <rect x={tipX} y={tipY} width={tipW} height={tipH} rx="8"
-              fill={darkCheck(t)} opacity="0.95" />
-            <text x={tipX + tipW / 2} y={tipY + 18} textAnchor="middle"
-              fill="#e2e8f0" fontSize="12" fontWeight="600">{tip.label}</text>
-            <text x={tipX + tipW / 2} y={tipY + 36} textAnchor="middle"
-              fill="#a5b4fc" fontSize="20" fontWeight="700" fontFamily="monospace">
-              {tip.count.toLocaleString()}
+          <g style={{ pointerEvents: 'none' }}>
+            <line x1={tip.x} y1={padT} x2={tip.x} y2={padT + chartH} stroke={theme.accent} strokeWidth="1" opacity="0.4" />
+            <rect x={tipX} y={tipY} width={tipW} height={tipH} rx="9" fill={theme.tipBg} stroke={theme.accent + '55'} strokeWidth="1" />
+            <text x={tipX + tipW / 2} y={tipY + 19} textAnchor="middle" fill="#cbd5e1" fontSize="11" fontWeight="600">{tip.label}</text>
+            <text x={tipX + tipW / 2} y={tipY + 43} textAnchor="middle" fill="#e0e7ff" fontSize="20" fontWeight="700" fontFamily="ui-monospace,monospace">
+              {fmt(tip.today)}
             </text>
-            <text x={tipX + tipW / 2} y={tipY + 52} textAnchor="middle"
-              fill="#94a3b8" fontSize="10">次请求</text>
+            <text x={tipX + tipW / 2} y={tipY + 60} textAnchor="middle" fill="#94a3b8" fontSize="10">
+              昨日 {fmt(tip.yesterday || 0)}
+            </text>
+            <text x={tipX + tipW / 2} y={tipY + 74} textAnchor="middle"
+              fill={(tip.change || 0) >= 0 ? '#4ade80' : '#f87171'} fontSize="10" fontFamily="ui-monospace,monospace">
+              {(tip.change || 0) >= 0 ? '▲' : '▼'} {Math.abs(tip.change || 0)}% 同比
+            </text>
           </g>
         )}
       </svg>
@@ -352,404 +402,282 @@ function SparklineChart({ data, width = 700, height = 180, theme, yesterdayData 
   );
 }
 
-const darkCheck = (t) => {
-  const bg = t?.card?.backgroundColor || '#1e293b';
-  return bg === '#1e293b' || bg === '#131c31' || bg.includes('13');
-};
-
-// =============================================================================
-// AnimatedCounter — 数字跳数动画
-// =============================================================================
-function AnimatedCounter({ value, duration = 800, color, prefix = '', suffix = '' }) {
-  const [display, setDisplay] = useState(0);
-  const ref = useRef(null);
-  
-  useEffect(() => {
-    const target = Number(value) || 0;
-    const start = performance.now();
-    let raf;
-    
-    // 如果值太小就不动画（ms 级别的值直接显示）
-    if (target < 5) {
-      setDisplay(target);
-      return;
-    }
-    
-    const animate = (now) => {
-      const elapsed = now - start;
-      const progress = Math.min(elapsed / duration, 1);
-      // ease-out
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(Math.round(target * eased));
-      if (progress < 1) {
-        raf = requestAnimationFrame(animate);
-      } else {
-        setDisplay(target);
-      }
-    };
-    raf = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(raf);
-  }, [value, duration]);
-
-  return <span style={color ? { color } : {}}>{prefix}{display.toLocaleString()}{suffix}</span>;
-}
-
-// =============================================================================
-// DonutChart — 环形进度图
-// =============================================================================
-function DonutChart({ percent, size = 80, strokeWidth = 6, color, bgColor = 'rgba(99,102,241,0.12)', animate = true, children }) {
-  const r = (size / 2) - (strokeWidth / 2);
+// 环形进度
+function Ring({ percent, size = 68, stroke = 6, color, children }) {
+  const r = size / 2 - stroke / 2;
   const circ = 2 * Math.PI * r;
-  const offset = circ - (Math.min(percent, 100) / 100) * circ;
+  const offset = circ - (Math.min(Math.max(percent, 0), 100) / 100) * circ;
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.strokeDashoffset = circ;
+    const id = requestAnimationFrame(() => { el.style.transition = 'stroke-dashoffset 1.1s cubic-bezier(.4,0,.2,1)'; el.style.strokeDashoffset = offset; });
+    return () => cancelAnimationFrame(id);
+  }, [offset, circ]);
   return (
     <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={bgColor} strokeWidth={strokeWidth} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none"
-          stroke={color} strokeWidth={strokeWidth} strokeLinecap="round"
-          strokeDasharray={circ}
-          strokeDashoffset={animate ? circ : offset}
-          style={{
-            transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1)',
-          }}
-          ref={el => { if (el && animate) requestAnimationFrame(() => el.style.strokeDashoffset = offset); }}
-        />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(148,163,184,0.15)" strokeWidth={stroke} />
+        <circle ref={ref} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={circ}
+          style={{ filter: `drop-shadow(0 0 4px ${color}66)` }} />
       </svg>
-      {children && <div style={{
-        position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-        justifyContent: 'center', fontSize: '13px', fontWeight: '700',
-        fontFamily: 'monospace', color,
-        transform: 'rotate(0deg)',
-      }}>{children}</div>}
-    </div>
-  );
-}
-
-// =============================================================================
-// MiniStatusPie — HTTP 状态码迷你饼图（简化版小圆比分部）
-// =============================================================================
-function MiniStatusPie({ counts, size = 100 }) {
-  const segments = [
-    { key: '2xx', value: counts[2], color: '#22c55e' },
-    { key: '4xx', value: counts[4], color: '#f59e0b' },
-    { key: '5xx', value: counts[5], color: '#ef4444' },
-  ].filter(s => s.value > 0);
-  const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
-  let cumulative = 0;
-  const slices = segments.map((seg, i) => {
-    const startAngle = (cumulative / total) * 360;
-    const angle = (seg.value / total) * 360;
-    cumulative += seg.value;
-    return { ...seg, startAngle, angle, isLast: i === segments.length - 1 };
-  });
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      {slices.length === 1 ? (
-        <circle cx={size / 2} cy={size / 2} r={size / 2 - 2} fill={slices[0].color} />
-      ) : (() => {
-        const r = size / 2 - 2;
-        return slices.map((seg, i) => {
-          if (seg.isLast) {
-            const startRad = ((seg.startAngle - 90) * Math.PI) / 180;
-            const endRad = ((seg.startAngle + seg.angle - 90) * Math.PI) / 180;
-            const x1 = size / 2 + r * Math.cos(startRad);
-            const y1 = size / 2 + r * Math.sin(startRad);
-            const x2 = size / 2 + r * Math.cos(endRad);
-            const y2 = size / 2 + r * Math.sin(endRad);
-            return (
-              <path key={i} d={`M${size/2},${size/2} L${x1},${y1} A${r},${r} 0 0 1 ${x2},${y2} Z`}
-                fill={seg.color} />
-            );
-          }
-          const startRad = ((seg.startAngle - 90) * Math.PI) / 180;
-          const endRad = ((seg.startAngle + seg.angle - 90) * Math.PI) / 180;
-          const x1 = size / 2 + r * Math.cos(startRad);
-          const y1 = size / 2 + r * Math.sin(startRad);
-          const x2 = size / 2 + r * Math.cos(endRad);
-          const y2 = size / 2 + r * Math.sin(endRad);
-          const largeArc = seg.angle > 180 ? 1 : 0;
-          return (
-            <path key={i} d={`M${size/2},${size/2} L${x1},${y1} A${r},${r} ${largeArc} 1 ${x2},${y2} Z`}
-              fill={seg.color} />
-          );
-        });
-      })()}
-    </svg>
-  );
-}
-
-// =============================================================================
-// 小组件
-// =============================================================================
-function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, badge }) {
-  const isDark = darkCheck(theme);
-  return (
-    <div onClick={onClick}
-      style={{
-        background: selected ? `linear-gradient(135deg, ${color}15, ${color}08)` : theme.card.backgroundColor,
-        border: selected ? `1.5px solid ${color}` : theme.card.border,
-        borderRadius: '18px', padding: '18px 20px',
-        boxShadow: selected ? `0 0 24px ${color}20, 0 4px 24px rgba(0,0,0,0.2)` : theme.card.boxShadow,
-        cursor: onClick ? 'pointer' : 'default',
-        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        position: 'relative', overflow: 'hidden',
-      }}
-      onMouseEnter={e => { 
-        if (!selected) { 
-          e.currentTarget.style.transform = 'translateY(-4px) scale(1.02)'; 
-          e.currentTarget.style.boxShadow = theme.glow; 
-          e.currentTarget.style.borderColor = `${color}60`;
-        } 
-      }}
-      onMouseLeave={e => { 
-        if (!selected) { 
-          e.currentTarget.style.transform = 'translateY(0) scale(1)'; 
-          e.currentTarget.style.boxShadow = theme.card.boxShadow; 
-          e.currentTarget.style.borderColor = theme.card.border;
-        } 
-      }}
-    >
-      {/* 红点提示 */}
-      {badge > 0 && (
-        <span style={{
-          position: 'absolute',
-          top: '12px',
-          right: '12px',
-          minWidth: '18px',
-          height: '18px',
-          borderRadius: '9px',
-          backgroundColor: '#ef4444',
-          color: 'white',
-          fontSize: '10px',
-          fontWeight: '700',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)',
-          zIndex: 10,
-          padding: '0 5px',
-        }}>
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-      
-      {/* 顶部装饰条 - 选中时发光 */}
-      {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '18px 18px 0 0', boxShadow: `0 0 12px ${color}` }} />}
-      {!selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '1px', background: `linear-gradient(90deg, transparent, ${color}40, transparent)`, borderRadius: '18px 18px 0 0', opacity: 0.5 }} />}
-      
-      {/* 四角装饰括号（BI 大屏元素，hover 时增强） */}
-      <div style={{ position: 'absolute', top: 8, left: 8, width: 10, height: 10, borderTop: `1px solid ${color}50`, borderLeft: `1px solid ${color}50`, borderRadius: '2px 0 0 0', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite' }} />
-      <div style={{ position: 'absolute', top: 8, right: 8, width: 10, height: 10, borderTop: `1px solid ${color}50`, borderRight: `1px solid ${color}50`, borderRadius: '0 2px 0 0', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite 0.5s' }} />
-      <div style={{ position: 'absolute', bottom: 8, left: 8, width: 10, height: 10, borderBottom: `1px solid ${color}50`, borderLeft: `1px solid ${color}50`, borderRadius: '0 0 0 2px', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite 1s' }} />
-      <div style={{ position: 'absolute', bottom: 8, right: 8, width: 10, height: 10, borderBottom: `1px solid ${color}50`, borderRight: `1px solid ${color}50`, borderRadius: '0 0 2px 0', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite 1.5s' }} />
-      
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{
-          width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `linear-gradient(135deg, ${color}26, ${color}0d)`,
-          border: `1px solid ${color}50`,
-          boxShadow: isDark ? `0 0 14px ${color}20` : `0 0 18px ${color}30, 0 2px 8px ${color}20`,
-          fontSize: '22px',
-        }}>{icon}</span>
-        <span style={{
-          fontSize: '27px', fontWeight: '800', color, fontFamily: 'monospace', letterSpacing: '-0.03em',
-          textShadow: selected 
-            ? `0 0 24px ${color}60` 
-            : isDark ? `0 0 12px ${color}30` : `0 0 16px ${color}35`,
-          transition: 'all 0.3s ease'
-        }}>{value}</span>
-      </div>
-      <div style={{ marginTop: '10px', fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{label}</div>
-      {sub && <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '3px' }}>{sub}</div>}
-    </div>
-  );
-}
-
-function ProgressBar({ label, value, max, color, theme }) {
-  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
-  return (
-    <div style={{ marginBottom: '14px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
-        <span style={{ fontWeight: '600', color: theme.text.main, letterSpacing: '0.02em' }}>{label}</span>
-        <span style={{ fontFamily: 'monospace', color: theme.text.sub, fontWeight: '500' }}>{value.toLocaleString()}</span>
-      </div>
-      <div style={{ 
-        backgroundColor: theme.bar.bg, 
-        height: '8px', 
-        borderRadius: '4px', 
-        overflow: 'hidden',
-        boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)',
-      }}>
-        <div style={{ 
-          height: '100%', 
-          width: `${pct}%`, 
-          backgroundColor: color, 
-          borderRadius: '4px', 
-          transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: `0 0 10px ${color}60`,
-          position: 'relative'
-        }}>
-          {/* 进度条高光效果 */}
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
-            animation: 'shimmer 2s infinite',
-          }} />
+      {children && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: 1.1 }}>
+          {children}
         </div>
+      )}
+    </div>
+  );
+}
+
+// 状态构成（2xx / 4xx / 5xx）水平堆叠条
+function StatusBar({ counts, theme }) {
+  const total = counts.ok + counts.client + counts.server;
+  if (total <= 0) return null;
+  const parts = [
+    { k: '成功', v: counts.ok, c: theme.ok },
+    { k: '客户端', v: counts.client, c: theme.warn },
+    { k: '服务端', v: counts.server, c: theme.err },
+  ];
+  return (
+    <div>
+      <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', gap: 2, background: theme.ring }}>
+        {parts.filter(p => p.v > 0).map(p => (
+          <div key={p.k} title={`${p.k} ${p.v}`} style={{
+            width: `${(p.v / total) * 100}%`, background: p.c, borderRadius: 3,
+            transition: 'width .8s cubic-bezier(.4,0,.2,1)', boxShadow: `0 0 8px ${p.c}55`,
+          }} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 9, flexWrap: 'wrap' }}>
+        {parts.map(p => (
+          <div key={p.k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+            <span style={{ width: 7, height: 7, borderRadius: 2, background: p.c, boxShadow: `0 0 6px ${p.c}77` }} />
+            <span style={{ color: theme.text.muted }}>{p.k}</span>
+            <span style={{ color: theme.text.main, fontFamily: 'ui-monospace,monospace', fontWeight: 700 }}>{fmt(p.v)}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function LogRow({ time, badge, label, sub, color, badgeColor, theme }) {
+// 24 小时 × 状态 热力图（从错误/时间线数据推导）
+function HeatStrip({ series, theme }) {
+  if (!series || series.length === 0) return null;
+  const max = Math.max(...series.map(s => s.value), 1);
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px',
-      borderRadius: '10px', backgroundColor: theme.bar.bg,
-      fontSize: '12px', fontFamily: 'monospace', marginBottom: '6px',
-      transition: 'all 0.2s ease',
-      border: `1px solid transparent`,
-    }}
-    onMouseEnter={e => {
-      e.currentTarget.style.borderColor = `${color}30`;
-      e.currentTarget.style.backgroundColor = `${color}08`;
-    }}
-    onMouseLeave={e => {
-      e.currentTarget.style.borderColor = 'transparent';
-      e.currentTarget.style.backgroundColor = theme.bar.bg;
-    }}
-    >
-      <span style={{ color: theme.text.muted, fontSize: '11px', minWidth: '70px', flexShrink: 0, fontFamily: 'monospace' }}>{time}</span>
-      <span style={{
-        padding: '2px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: '700',
-        backgroundColor: (badgeColor || color) + '18',
-        color: badgeColor || color, border: '1px solid ' + (badgeColor || color) + '40',
-        minWidth: '36px', textAlign: 'center', flexShrink: 0,
-        boxShadow: '0 0 8px ' + (badgeColor || color) + '30',
-      }}>{badge}</span>
-      <span style={{ color: theme.text.main, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: '500' }}>{label}</span>
-      {sub && <span style={{ color: theme.text.muted, textAlign: 'right', flexShrink: 0, fontFamily: 'monospace' }}>{sub}</span>}
+    <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end' }}>
+      {series.map((s, i) => {
+        const t = s.value / max;
+        const bg = s.value === 0 ? theme.heatOff
+          : s.bad
+            ? `rgba(248,113,113,${0.25 + t * 0.65})`
+            : `rgba(129,140,248,${0.18 + t * 0.72})`;
+        return (
+          <div key={i} title={`${String(s.hour).padStart(2, '0')}:00 · ${s.value}`}
+            style={{ flex: 1, height: 30, borderRadius: 3, background: bg, cursor: 'default', transition: 'transform .14s ease' }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scaleY(1.16)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scaleY(1)'; }} />
+        );
+      })}
     </div>
   );
 }
 
-function EmptyCard({ emoji, text, sub, tips, theme }) {
+// 空态
+function EmptyHint({ icon, text, sub, theme, height = 140 }) {
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      padding: '48px 24px', color: theme.text.muted, gap: '8px'
+    <div style={{ minHeight: height, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '18px 12px' }}>
+      <div style={{ fontSize: 34, opacity: 0.75, animation: 'db-float 3.4s ease-in-out infinite' }}>{icon}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text.sub }}>{text}</div>
+      {sub && <div style={{ fontSize: 11, color: theme.text.muted, textAlign: 'center', maxWidth: 300, lineHeight: 1.6 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// =============================================================================
+// 布局与基础 UI 组件
+// =============================================================================
+
+// 分区卡片外壳
+function Panel({ id, icon, title, meta, actions, children, theme, accent, style }) {
+  return (
+    <section id={`sec-${id}`} className="db-card" style={{
+      ...theme.card, borderRadius: 16, padding: '16px 18px', scrollMarginTop: 84, ...style,
+    }}>
+      <header style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+        flexWrap: 'wrap', marginBottom: 15, paddingBottom: 12,
+        borderBottom: `1px solid ${theme.grid}`,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span style={{
+            width: 27, height: 27, borderRadius: 8, flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14,
+            background: `linear-gradient(135deg,${accent || theme.accent}30,${accent || theme.accent}0d)`,
+            border: `1px solid ${accent || theme.accent}40`,
+          }}>{icon}</span>
+          <h2 className="db-sec-title" style={{ fontSize: 15, fontWeight: 700, color: theme.text.hi, margin: 0, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>
+            {title}
+          </h2>
+          {meta && <span className="db-hide-xs" style={{ fontSize: 11, color: theme.text.muted, fontFamily: 'ui-monospace,monospace' }}>{meta}</span>}
+        </div>
+        {actions && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>{actions}</div>}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+// 小徽标
+function Chip({ children, tone = 'neutral', theme, dot }) {
+  const palette = {
+    neutral: { bg: theme.ring, fg: theme.text.sub, bd: theme.grid },
+    ok: { bg: theme.ok + '1f', fg: theme.ok, bd: theme.ok + '44' },
+    warn: { bg: theme.warn + '1f', fg: theme.warn, bd: theme.warn + '44' },
+    err: { bg: theme.err + '1f', fg: theme.err, bd: theme.err + '44' },
+    info: { bg: theme.accent + '1f', fg: theme.accent, bd: theme.accent + '44' },
+  }[tone] || {};
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+      padding: '3px 9px', borderRadius: 20, whiteSpace: 'nowrap',
+      background: palette.bg, color: palette.fg, border: `1px solid ${palette.bd}`,
+    }}>
+      {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: palette.fg, boxShadow: `0 0 6px ${palette.fg}` }} />}
+      {children}
+    </span>
+  );
+}
+
+// 顶部指标卡（大数字 + 趋势）
+function StatCard({ icon, label, value, unit, foot, color, theme, badge, spark, onClick, active }) {
+  return (
+    <div className="db-qcard" onClick={onClick} style={{
+      position: 'relative', overflow: 'hidden',
+      background: active ? `linear-gradient(150deg,${color}1f,${color}08)` : theme.card.background,
+      border: active ? `1px solid ${color}88` : theme.card.border,
+      borderRadius: 14, padding: '15px 16px',
+      boxShadow: theme.card.boxShadow,
+      cursor: onClick ? 'pointer' : 'default',
     }}>
       <div style={{
-        fontSize: '48px', lineHeight: 1, marginBottom: '4px',
-        animation: 'float 3s ease-in-out infinite',
-        filter: 'grayscale(0.3)'
-      }}>{emoji}</div>
-      <span style={{ fontSize: '14px', fontWeight: '600', color: theme.text.sub }}>{text}</span>
-      {sub && <span style={{ fontSize: '12px', color: theme.text.muted, textAlign: 'center', maxWidth: '280px', lineHeight: 1.5 }}>{sub}</span>}
-      {tips && <div style={{
-        marginTop: '12px', padding: '8px 14px', borderRadius: '8px',
-        backgroundColor: theme.bar?.bg || 'rgba(99,102,241,0.08)',
-        fontSize: '11px', color: '#6366f1', maxWidth: '300px', textAlign: 'center',
-        lineHeight: 1.5
-      }}>
-        💡 {tips}
-      </div>}
+        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+        background: `linear-gradient(90deg,transparent,${color},${color}00)`, opacity: active ? 0.95 : 0.45,
+      }} />
+      {badge > 0 && (
+        <span style={{
+          position: 'absolute', top: 11, right: 11, minWidth: 18, height: 18, padding: '0 5px',
+          borderRadius: 9, background: theme.err, color: '#fff', fontSize: 10, fontWeight: 700,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 10px ${theme.err}99`,
+        }}>{badge > 99 ? '99+' : badge}</span>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, opacity: 0.9 }}>{icon}</span>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, letterSpacing: '0.02em' }}>{label}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 3, fontFamily: 'ui-monospace,SFMono-Regular,monospace' }}>
+        <span style={{ fontSize: 27, fontWeight: 800, color: color, letterSpacing: '-0.03em', lineHeight: 1, textShadow: theme.dark ? `0 0 18px ${color}44` : 'none' }}>
+          {value}
+        </span>
+        {unit && <span style={{ fontSize: 12, fontWeight: 600, color: theme.text.muted }}>{unit}</span>}
+      </div>
+      {spark && <div style={{ marginTop: 9, opacity: 0.9 }}>{spark}</div>}
+      {foot && <div style={{ marginTop: 8, fontSize: 10.5, color: theme.text.muted, lineHeight: 1.5 }}>{foot}</div>}
     </div>
   );
 }
 
-// =============================================================================
-// Skeleton skeleton components
-// =============================================================================
-function SkeletonBar({ w = '60%', h = '12px', theme }) {
+// 迷你趋势条（指标卡内嵌）
+function MiniBars({ series, color, theme }) {
+  if (!series || series.length === 0) return null;
+  const max = Math.max(...series.map(s => s.v), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1.5, height: 22 }}>
+      {series.map((s, i) => (
+        <div key={i} title={`${String(s.h).padStart(2, '0')}:00 · ${s.v}`} style={{
+          flex: 1, minWidth: 2, borderRadius: 1.5,
+          height: `${Math.max((s.v / max) * 100, s.v > 0 ? 12 : 4)}%`,
+          background: s.v > 0 ? color : theme.ring, opacity: s.v > 0 ? 0.5 + (s.v / max) * 0.5 : 1,
+        }} />
+      ))}
+    </div>
+  );
+}
+
+// 日志行（最近请求 / 慢请求 / 错误）
+function LogRow({ time, badge, badgeColor, label, meta, theme }) {
+  return (
+    <div className="db-row" style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', marginBottom: 5,
+      borderRadius: 9, background: theme.inset.background, border: theme.inset.border, fontSize: 12,
+    }}>
+      <span style={{ color: theme.text.muted, fontSize: 11, fontFamily: 'ui-monospace,monospace', minWidth: 62, flexShrink: 0 }}>{time}</span>
+      <span style={{
+        padding: '2px 8px', borderRadius: 5, fontSize: 10.5, fontWeight: 700, minWidth: 34, textAlign: 'center', flexShrink: 0,
+        fontFamily: 'ui-monospace,monospace', background: badgeColor + '20', color: badgeColor, border: `1px solid ${badgeColor}44`,
+      }}>{badge}</span>
+      <span style={{ color: theme.text.main, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{label}</span>
+      {meta && <span className="db-hide-xs" style={{ color: theme.text.muted, fontSize: 11, fontFamily: 'ui-monospace,monospace', flexShrink: 0 }}>{meta}</span>}
+    </div>
+  );
+}
+
+// 骨架屏
+function Skeleton({ w = '60%', h = 12, theme, r = 6 }) {
   return (
     <div style={{
-      width: w, height: h, borderRadius: '6px',
-      background: `linear-gradient(90deg, ${theme.bar.bg}, ${theme.card.backgroundColor}, ${theme.bar.bg})`,
-      backgroundSize: '200% 100%',
-      animation: 'shimmer 1.5s ease-in-out infinite',
+      width: w, height: h, borderRadius: r,
+      background: `linear-gradient(90deg,${theme.ring},${theme.dark ? 'rgba(148,163,184,.14)' : 'rgba(99,102,241,.06)'},${theme.ring})`,
+      backgroundSize: '200% 100%', animation: 'db-shimmer 1.5s ease-in-out infinite',
     }} />
   );
 }
 
-function SkeletonMetricCard({ theme }) {
+function SkeletonPanel({ theme, rows = 4 }) {
   return (
-    <div style={{
-      borderRadius: '16px', padding: '18px 20px',
-      backgroundColor: theme.card.backgroundColor,
-      border: theme.card.border,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-        <SkeletonBar w="32px" h="32px" theme={theme} />
-        <SkeletonBar w="60px" h="26px" theme={theme} />
+    <div style={{ ...theme.card, borderRadius: 16, padding: '16px 18px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Skeleton w="140px" h={15} theme={theme} />
+        <Skeleton w="70px" h={13} theme={theme} />
       </div>
-      <SkeletonBar w="50%" h="13px" theme={theme} style={{ marginBottom: '8px' }} />
-      <SkeletonBar w="35%" h="11px" theme={theme} />
-    </div>
-  );
-}
-
-function SkeletonRow({ theme }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: `1px solid ${theme.bar.bg}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <SkeletonBar w="40px" h="20px" theme={theme} />
-        <SkeletonBar w="120px" h="12px" theme={theme} />
-      </div>
-      <SkeletonBar w="60px" h="11px" theme={theme} />
-    </div>
-  );
-}
-
-function SkeletonQuotaCard({ theme }) {
-  return (
-    <div style={{
-      borderRadius: '16px', padding: '16px', display: 'flex', alignItems: 'center', gap: '14px',
-      backgroundColor: theme.card.backgroundColor, border: theme.card.border,
-    }}>
-      <div style={{
-        width: '60px', height: '60px', borderRadius: '50%', flexShrink: 0,
-        background: `conic-gradient(${theme.bar.bg} 75%, ${theme.bar.bg}40 25%)`,
-      }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <SkeletonBar w="70%" h="13px" theme={theme} style={{ marginBottom: '6px' }} />
-        <SkeletonBar w="50%" h="11px" theme={theme} style={{ marginBottom: '8px' }} />
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <SkeletonBar w="50px" h="18px" theme={theme} />
-          <SkeletonBar w="50px" h="18px" theme={theme} />
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 9 }}>
+          <Skeleton w="52px" h={10} theme={theme} />
+          <Skeleton w="38px" h={16} theme={theme} />
+          <Skeleton w="50%" h={11} theme={theme} />
         </div>
-      </div>
+      ))}
     </div>
   );
 }
 
-function SkeletonTimeline({ theme }) {
+// 顶栏按钮
+function IconButton({ onClick, title, children, theme, spinning, disabled, wide }) {
   return (
-    <div style={{ padding: '8px 0' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-        <SkeletonBar w="120px" h="16px" theme={theme} />
-        <SkeletonBar w="80px" h="14px" theme={theme} />
-      </div>
-      <div style={{ display: 'flex', gap: '4px', alignItems: 'flex-end', height: '120px' }}>
-        {Array.from({length: 24}).map((_, i) => (
-          <div key={i} style={{
-            flex: 1, borderRadius: '3px 3px 0 0',
-            height: `${25 + (i * 3) % 60}%`,
-            background: `linear-gradient(to top, ${theme.bar.bg}, ${theme.bar.bg}60)`,
-          }} />
-        ))}
-      </div>
-    </div>
+    <button className="db-btn" onClick={onClick} title={title} disabled={disabled} style={{
+      height: 34, minWidth: wide ? undefined : 34, padding: wide ? '0 12px' : 0,
+      borderRadius: 9, cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 13,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+      background: theme.inset.background, border: theme.inset.border, color: theme.text.sub,
+      opacity: disabled ? 0.55 : 1, animation: spinning ? 'db-spin 1s linear infinite' : 'none',
+    }}>{children}</button>
   );
 }
 
 // =============================================================================
-// 主组件
+// 入口
 // =============================================================================
 export default function DashboardPage() {
   return (
-    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>Loading Dashboard...</div>}>
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b1020', color: '#64748b', fontFamily: 'ui-monospace,monospace', fontSize: 13 }}>
+        正在初始化控制台…
+      </div>
+    }>
       <DashboardContent />
     </Suspense>
   );
@@ -759,13 +687,14 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  
+
   const [dark, setDark] = useState(() => {
-    // 优先从 URL 恢复，其次从 localStorage
-    const fromUrl = searchParams.get('dark');
-    if (fromUrl === '1') return true;
+    // 新 UI 默认暗色；仅在明确存储过亮色偏好时才用亮色
+    if (searchParams.get('dark') === '0') return false;
+    if (searchParams.get('dark') === '1') return true;
+    if (typeof window === 'undefined') return true;
     const saved = localStorage.getItem('dashboard_dark');
-    return saved === 'true';
+    return saved === null ? true : saved === 'true';
   });
   const [authed, setAuthed] = useState(false);
   const [password, setPassword] = useState('');
@@ -778,75 +707,47 @@ function DashboardContent() {
   const [selectedModel, setSelectedModel] = useState(null);
   const [authError, setAuthError] = useState('');
   const [countdown, setCountdown] = useState(getTimeUntilReset());
-  const [collapsedSections, setCollapsedSections] = useState(() => {
-    const fromUrl = searchParams.get('collapsed');
-    if (fromUrl) {
-      try { return JSON.parse(fromUrl); } catch { return {}; }
-    }
-    return {};
-  });
   const [exporting, setExporting] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshTime, setLastRefreshTime] = useState(null);
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [unreadErrors, setUnreadErrors] = useState(0);
+  const [now, setNow] = useState(() => new Date());
 
   const isMobile = useResponsive();
+  const theme = useMemo(() => buildTheme(dark), [dark]);
 
-
-  const theme = getTheme(dark);
-
-  // 倒计时每秒更新
+  // 每秒：配额重置倒计时 + 顶栏时钟
   useEffect(() => {
-    const timer = setInterval(() => setCountdown(getTimeUntilReset()), 1000);
+    const timer = setInterval(() => { setCountdown(getTimeUntilReset()); setNow(new Date()); }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 刷新进度条（30 秒倒计时）
+  // 自动刷新进度条
   useEffect(() => {
     if (!authed) return;
-    let progress = 0;
-    const interval = REFRESH_INTERVAL / 100; // 100 步
+    let step = 0;
     const timer = setInterval(() => {
-      progress += 1;
-      setRefreshProgress(Math.min(progress, 100));
-      if (progress >= 100) {
-        progress = 0;
-      }
-    }, interval);
+      step = (step + 1) % 100;
+      setRefreshProgress(step);
+    }, REFRESH_INTERVAL / 100);
     return () => clearInterval(timer);
   }, [authed]);
 
-  // 从 localStorage 恢复暗色模式和密码（仅当 URL 没有时）
+  // 恢复登录态
   useEffect(() => {
     const saved = localStorage.getItem('dashboard_token');
     if (saved && !searchParams.get('authed')) { setPassword(saved); setAuthed(true); }
-    // dark 已经从 useState 初始化时处理了
   }, [searchParams]);
 
-  // 同步状态到 URL（暗色模式、折叠状态）
+  // 同步主题到 URL
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
-    
-    // 同步 dark
-    if (dark) params.set('dark', '1');
-    else params.delete('dark');
-    
-    // 同步 collapsedSections
-    const hasCollapsed = Object.values(collapsedSections).some(v => v);
-    if (hasCollapsed) {
-      params.set('collapsed', JSON.stringify(collapsedSections));
-    } else {
-      params.delete('collapsed');
-    }
-    
-    // 只有当 URL 真正变化时才 replace
-    const newSearch = params.toString();
-    if (window.location.search !== newSearch) {
-      router.replace(`?${newSearch}`, { scroll: false });
-    }
-  }, [dark, collapsedSections, router, searchParams]);
+    if (dark) { params.set('dark', '1'); } else { params.set('dark', '0'); }
+    const next = params.toString();
+    if (window.location.search !== next) router.replace(`${pathname}?${next}`, { scroll: false });
+  }, [dark, router, pathname, searchParams]);
 
   const handleLogin = async (e) => {
     e?.preventDefault();
@@ -859,20 +760,20 @@ function DashboardContent() {
         setAuthed(true);
         return;
       }
-      // 区分各类失败原因，避免一律提示「密码错误」掩盖真实问题
-      if (res.status === 503) {
-        setAuthError('服务端未配置 DASHBOARD_PASSWORD，请到部署平台设置后重新部署');
-      } else if (res.status === 401) {
-        setAuthError('密码错误，请重试');
-      } else if (res.status === 404) {
-        setAuthError('接口不存在（请确认访问的是 Vercel 部署，而非 Cloudflare Worker）');
-      } else {
-        setAuthError(`登录失败（HTTP ${res.status}）`);
-      }
+      if (res.status === 503) setAuthError('服务端未配置 DASHBOARD_PASSWORD，请到部署平台设置后重新部署');
+      else if (res.status === 401) setAuthError('密码错误，请重试');
+      else if (res.status === 404) setAuthError('接口不存在（请确认访问的是 Vercel 部署，而非 Cloudflare Worker）');
+      else setAuthError(`登录失败（HTTP ${res.status}）`);
     } catch {
       setAuthError('连接失败，请检查网络后重试');
     }
   };
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('dashboard_token');
+    setAuthed(false); setPassword(''); setQuota(null); setHealth(null); setErrors(null);
+    setTimeline(null); setRecent(null); setLoading(true);
+  }, []);
 
   const authFetch = useCallback(async (url) => {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${password}` } });
@@ -886,16 +787,19 @@ function DashboardContent() {
     setLastRefreshTime(new Date());
     try {
       const [q, h, e, t, r] = await Promise.all([
-        authFetch('/api/quota').then(r => r?.json()),
-        authFetch('/api/health').then(r => r?.json()).catch(() => null),
-        authFetch('/api/errors').then(r => r?.json()).catch(() => null),
-        authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
-        authFetch('/api/recent').then(r => r?.json()).catch(() => null),
+        authFetch('/api/quota').then(res => res?.json()),
+        authFetch('/api/health').then(res => res?.json()).catch(() => null),
+        authFetch('/api/errors').then(res => res?.json()).catch(() => null),
+        authFetch('/api/timeline').then(res => res?.json()).catch(() => null),
+        authFetch('/api/recent').then(res => res?.json()).catch(() => null),
       ]);
       if (!q && !h && !e && !t && !r) return;
       setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setRecent(r);
-    } catch (err) { console.error(err); }
-    finally { setRefreshing(false); setLoading(false); }
+    } catch (err) {
+      console.error('刷新数据失败:', err);
+    } finally {
+      setRefreshing(false); setLoading(false);
+    }
   }, [authed, authFetch]);
 
   useEffect(() => {
@@ -904,1453 +808,790 @@ function DashboardContent() {
     return () => clearInterval(timer);
   }, [fetchData]);
 
-  // 追踪未读错误数（每次刷新后重置，5 秒后自动标记为已读）
+  // 未读错误角标
   useEffect(() => {
     if (errors?.count > 0) {
-      setUnreadErrors(prev => prev === 0 ? errors.count : prev);
-      // 5 秒后自动标记为已读
-      const timer = setTimeout(() => setUnreadErrors(0), 5000);
+      setUnreadErrors(prev => (prev === 0 ? errors.count : prev));
+      const timer = setTimeout(() => setUnreadErrors(0), 6000);
       return () => clearTimeout(timer);
     }
   }, [errors?.count]);
 
   const toggleDark = useCallback(() => {
-    setDark(prev => {
-      const next = !prev;
-      localStorage.setItem('dashboard_dark', next);
-      return next;
-    });
+    setDark(prev => { localStorage.setItem('dashboard_dark', String(!prev)); return !prev; });
   }, []);
 
-  // 键盘快捷键
+  // 快捷键：R 刷新 / D 主题 / E 导出 / Q 退出
   useEffect(() => {
     if (!authed) return;
-    const handleKeyDown = (e) => {
-      // 忽略输入框中的按键
+    const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      
-      const key = e.key.toLowerCase();
-      if (key === 'r') {
-        e.preventDefault();
-        fetchData();
-      } else if (key === 'd') {
-        e.preventDefault();
-        toggleDark();
-      } else if (key === 'e') {
-        e.preventDefault();
-        setShowExportMenu(prev => !prev);
-      }
+      const k = e.key.toLowerCase();
+      if (k === 'r') { e.preventDefault(); fetchData(); }
+      else if (k === 'd') { e.preventDefault(); toggleDark(); }
+      else if (k === 'e') { e.preventDefault(); setShowExportMenu(p => !p); }
+      else if (k === 'q') { e.preventDefault(); logout(); }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [authed, fetchData, toggleDark]);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [authed, fetchData, toggleDark, logout]);
 
-  // 注入 CSS 动画
+  // 注入全局样式
   useEffect(() => {
-    const id = 'dashboard-animations';
+    const id = 'db-console-styles';
     if (!document.getElementById(id)) {
       const el = document.createElement('style');
       el.id = id;
-      el.textContent = styles;
+      el.textContent = ANIM_CSS;
       document.head.appendChild(el);
     }
   }, []);
 
-  const toggleSection = (key) => {
-    setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
-  };
+  const activeSection = useActiveSection(authed && !loading);
 
-  // 导出数据功能
+  const goTo = useCallback((id) => {
+    const el = document.getElementById(`sec-${id}`);
+    if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 78, behavior: 'smooth' });
+  }, []);
+
+  // 导出
   const handleExport = useCallback((type) => {
     setExporting(true);
     setShowExportMenu(false);
-    
     try {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-      
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
       if (type === 'quota') {
-        // 导出配额数据
-        const quotaExport = quota?.data?.map(d => ({
-          model: shortModel(d.model),
-          used: d.used,
-          limit: d.limit,
+        exportToCSV((quota?.data || []).map(d => ({
+          model: shortModel(d.model), used: d.used, limit: d.limit,
           percent: d.percent.toFixed(2) + '%',
-          tpmUsed: d.tpmUsed != null ? d.tpmUsed : 0,
-          tpmLimit: d.tpmLimit != null ? d.tpmLimit : 'N/A',
+          tpmUsed: d.tpmUsed ?? 0, tpmLimit: d.tpmLimit ?? 'N/A',
           tpmPercent: d.tpmPercent != null ? d.tpmPercent + '%' : 'N/A',
-          avgLatency: d.avgLatency ? `${d.avgLatency}ms` : 'N/A',
-        })) || [];
-        exportToCSV(quotaExport, `配额数据_${timestamp}.csv`);
+          avgLatency: d.avgLatency != null ? d.avgLatency + 'ms' : 'N/A',
+        })), `配额数据_${ts}.csv`);
       } else if (type === 'timeline') {
-        // 导出时间线数据
-        const timelineExport = timeline?.timeline?.map(d => ({
-          hour: d.label,
-          requests: d.count,
-        })) || [];
-        exportToCSV(timelineExport, `时间线_${timestamp}.csv`);
+        exportToCSV((timeline?.timeline || []).map(d => ({
+          hour: d.label, today: d.today, yesterday: d.yesterday, change_percent: d.change,
+        })), `时间线_${ts}.csv`);
       } else if (type === 'errors') {
-        // 导出错误日志
-        const errorExport = errors?.errors?.slice(0, 100).map(e => ({
-          time: formatTime(e.ts),
-          status: e.status,
-          model: shortModel(e.model),
-          message: e.message || '',
-          latency: e.latency ? `${e.latency}ms` : 'N/A',
-        })) || [];
-        exportToCSV(errorExport, `错误日志_${timestamp}.csv`);
+        exportToCSV((errors?.errors || []).slice(0, 200).map(x => ({
+          time: formatTime(x.ts), status: x.status, model: shortModel(x.model),
+          message: x.message || '', latency: x.latency != null ? x.latency + 'ms' : 'N/A',
+          ip: x.ip || '',
+        })), `错误日志_${ts}.csv`);
       } else if (type === 'all') {
-        // 导出所有数据（JSON 格式）
-        const allExport = {
+        const payload = {
           exportTime: new Date().toISOString(),
-          quotaData: quota?.data?.map(d => ({
-            model: shortModel(d.model),
-            used: d.used,
-            limit: d.limit,
-            percent: d.percent,
-            avgLatency: d.avgLatency,
-          })),
-          timelineData: timeline?.timeline,
-          errorStats: {
-            totalErrors: errors?.count,
-            errors: errors?.errors?.slice(0, 100),
-          },
+          quota: quota?.data, summary: quota && { globalRequests: quota.globalRequests, globalErrorRate: quota.globalErrorRate },
+          timeline: timeline?.timeline, timelineSummary: timeline?.summary,
+          errorCount: errors?.count, errors: (errors?.errors || []).slice(0, 200),
+          recent: (recent?.recent || []).slice(0, 60), slowRequests: recent?.slowRequests || [],
         };
-        const blob = new Blob([JSON.stringify(allExport, null, 2)], { type: 'application/json' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `完整数据_${timestamp}.json`;
-        link.click();
-        URL.revokeObjectURL(link.href);
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `完整数据_${ts}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
       }
     } catch (err) {
       console.error('导出失败:', err);
     } finally {
       setExporting(false);
     }
-  }, [quota, timeline, errors, exportToCSV, shortModel, formatTime]);
+  }, [quota, timeline, errors, recent]);
 
+  // ===========================================================================
   // 派生数据
-  const modelDistribution = useMemo(() => {
+  // ===========================================================================
+  const modelStats = useMemo(() => {
     if (!quota?.data) return [];
-    return quota.data.map((d, i) => ({
-      label: shortModel(d.model), value: d.used, max: Math.max(...quota.data.map(x => x.used), 1),
-      color: getModelColor(d.model), rawModel: d.model, avgLatency: d.avgLatency, percent: d.percent, limit: d.limit
-    })).sort((a, b) => b.value - a.value);
+    const maxUsed = Math.max(...quota.data.map(x => x.used || 0), 1);
+    return quota.data.map(d => ({
+      model: d.model,
+      label: shortModel(d.model),
+      color: getModelColor(d.model),
+      used: d.used || 0,
+      limit: d.limit,
+      percent: d.percent || 0,
+      share: pctOf(d.used || 0, maxUsed),
+      avgLatency: d.avgLatency,
+      tpmUsed: d.tpmUsed, tpmLimit: d.tpmLimit, tpmPercent: d.tpmPercent,
+    })).sort((a, b) => b.used - a.used);
   }, [quota]);
 
-  // 配额预测（基于当前使用速率）
-  const quotaPredictions = useMemo(() => {
-    if (!quota?.data) return {};
+  // 配额耗尽预测：按今日已用速率线性外推
+  const predictions = useMemo(() => {
+    const out = {};
+    if (!quota?.data) return out;
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const quotaDate = today.split('-').slice(1).join(''); // MMDD
-    // 计算从今天 00:00 到现在经过了多少小时
-    const startOfDay = new Date(today + 'T00:00:00');
-    const hoursElapsed = Math.max((now - startOfDay) / (1000 * 60 * 60), 0.5); // 至少按 0.5 小时算
-    
-    const predictions = {};
+    const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
+    const hoursElapsed = Math.max((now - startOfDay) / 3600000, 0.5);
     quota.data.forEach(d => {
-      const prediction = predictQuotaExhaustion(d.used, d.limit, hoursElapsed);
-      if (prediction) {
-        predictions[d.model] = {
-          ...prediction,
-          formatted: formatDuration(prediction.minutes),
-          exhausted: prediction.exhausted || prediction.remaining <= 0,
-        };
-      }
+      const p = predictQuotaExhaustion(d.used, d.limit, hoursElapsed);
+      if (p) out[d.model] = p;
     });
-    return predictions;
+    return out;
   }, [quota]);
+
+  // HTTP 状态分布：优先用 recent 明细统计，回退到 quota 的全局错误率
+  const statusCounts = useMemo(() => {
+    const rows = recent?.recent || [];
+    const counts = { ok: 0, client: 0, server: 0 };
+    rows.forEach(r => {
+      if (r.status >= 500) counts.server++;
+      else if (r.status >= 400) counts.client++;
+      else if (r.status) counts.ok++;
+    });
+    if (counts.ok + counts.client + counts.server === 0) {
+      const total = quota?.globalRequests || 0;
+      const bad = errors?.count || 0;
+      if (total > 0) { counts.ok = Math.max(total - bad, 0); counts.client = bad; }
+    }
+    return counts;
+  }, [recent, quota, errors]);
+
+  // 错误按小时分布（热力条）
+  const errorHeat = useMemo(() => {
+    const buckets = new Array(24).fill(0);
+    (errors?.errors || []).forEach(e => {
+      const h = new Date(e.ts).getHours();
+      if (!isNaN(h)) buckets[h]++;
+    });
+    return buckets.map((value, hour) => ({ hour, value, bad: true }));
+  }, [errors]);
+
+  const requestHeat = useMemo(() => {
+    return (timeline?.timeline || []).map(d => ({ hour: d.hour, value: d.today || 0, bad: false }));
+  }, [timeline]);
+
+  const hourlySpark = useMemo(() => (timeline?.timeline || []).map(d => ({ h: d.hour, v: d.today || 0 })), [timeline]);
+
+  const latencySpark = useMemo(() => {
+    const rows = recent?.recent || [];
+    if (rows.length === 0) return null;
+    const buckets = new Array(12).fill(null).map(() => ({ sum: 0, n: 0 }));
+    const now = Date.now();
+    rows.forEach(r => {
+      if (r.latency == null) return;
+      const ageMin = (now - new Date(r.ts).getTime()) / 60000;
+      const idx = 11 - Math.min(Math.floor(ageMin / 5), 11);
+      buckets[idx].sum += r.latency; buckets[idx].n++;
+    });
+    return buckets.map((b, i) => ({ h: i, v: b.n ? Math.round(b.sum / b.n) : 0 }));
+  }, [recent]);
 
   const filteredRecent = useMemo(() => {
-    if (!selectedModel || !recent?.recent) return recent?.recent || [];
-    return recent.recent.filter(r => shortModel(r.model) === selectedModel || r.model === selectedModel);
+    const rows = recent?.recent || [];
+    if (!selectedModel) return rows;
+    return rows.filter(r => shortModel(r.model) === selectedModel || r.model === selectedModel);
   }, [selectedModel, recent]);
 
   const retryCount = recent?.retries || 0;
   const globalRequests = quota?.globalRequests || 0;
   const errorCount = errors?.count || 0;
-  const errorRate = globalRequests > 0 ? ((errorCount / globalRequests) * 100).toFixed(2) : '0.00';
-  const avgLatency = health?.avgLatency || quota?.data?.reduce((s, d) => s + (d.avgLatency || 0), 0) / Math.max(quota?.data?.length || 1, 1) || null;
+  const errorRate = quota?.globalErrorRate != null
+    ? Number(quota.globalErrorRate).toFixed(2)
+    : (globalRequests > 0 ? ((errorCount / globalRequests) * 100).toFixed(2) : '0.00');
+  const avgLatency = useMemo(() => {
+    const rows = (quota?.data || []).filter(d => d.avgLatency != null);
+    if (rows.length === 0) return null;
+    return Math.round(rows.reduce((s, d) => s + d.avgLatency, 0) / rows.length);
+  }, [quota]);
+  const successCount = Math.max(globalRequests - errorCount, 0);
+  const successRate = globalRequests > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100.0';
+  const alertLevel = quota?.errorAlert?.level || 'normal';
+  const nearLimit = modelStats.filter(m => m.percent > 90);
+  const topModel = modelStats[0];
+  const timelineSummary = timeline?.summary || null;
 
-  const peakHour = timeline?.timeline?.length
-    ? timeline.timeline.reduce((a, b) => b.count > a.count ? b : a, { count: 0 }) : null;
-
-  const successCount = globalRequests - errorCount;
-
-  // ============= 登录页 =============
+  // ===========================================================================
+  // 登录页
+  // ===========================================================================
   if (!authed) {
     return (
       <div style={{
-        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'linear-gradient(135deg, #0b1121 0%, #1a1f3a 30%, #0f172a 70%, #0b1121 100%)',
-        position: 'relative', overflow: 'hidden'
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        background: 'linear-gradient(160deg,#0b1020 0%,#0f172a 36%,#151433 70%,#1b1746 100%)',
+        position: 'relative', overflow: 'hidden', fontFamily: 'Inter,system-ui,-apple-system,"PingFang SC",sans-serif',
       }}>
-        {/* 背景装饰光晕 - 动态极光 */}
+        <style>{ANIM_CSS}</style>
         <div style={{
-          position: 'absolute', top: '-30%', right: '-20%', width: '800px', height: '800px',
-          borderRadius: '50%', background: 'radial-gradient(circle, rgba(34,211,238,0.12) 0%, transparent 60%)',
-          pointerEvents: 'none', animation: 'aurora-shift 16s ease-in-out infinite'
+          position: 'fixed', inset: 0, pointerEvents: 'none',
+          backgroundImage: 'linear-gradient(rgba(129,140,248,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(129,140,248,.055) 1px,transparent 1px)',
+          backgroundSize: '44px 44px', animation: 'db-shimmer 40s linear infinite',
+          maskImage: 'radial-gradient(ellipse 70% 60% at 50% 45%,#000 20%,transparent 80%)',
+          WebkitMaskImage: 'radial-gradient(ellipse 70% 60% at 50% 45%,#000 20%,transparent 80%)',
         }} />
-        <div style={{
-          position: 'absolute', bottom: '-40%', left: '-10%', width: '600px', height: '600px',
-          borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.12) 0%, transparent 60%)',
-          pointerEvents: 'none', animation: 'aurora-shift 22s ease-in-out infinite reverse'
-        }} />
-        
-        {/* 动态网格背景 */}
-        <div style={{
-          position: 'absolute', inset: 0,
-          backgroundImage: `
-            linear-gradient(rgba(34,211,238,0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(34,211,238,0.05) 1px, transparent 1px)
-          `,
-          backgroundSize: '48px 48px',
-          pointerEvents: 'none',
-          animation: 'grid-drift 30s linear infinite',
-          maskImage: 'radial-gradient(circle at center, black 0%, transparent 75%)',
-          WebkitMaskImage: 'radial-gradient(circle at center, black 0%, transparent 75%)'
-        }} />
-        
-        <div style={{
-          background: 'rgba(15,23,42,0.7)', backdropFilter: 'blur(28px)',
-          padding: '56px 48px', borderRadius: '26px', border: '1px solid rgba(34,211,238,0.25)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.5), 0 0 50px rgba(34,211,238,0.12), 0 0 30px rgba(99,102,241,0.1), inset 0 1px 0 rgba(255,255,255,0.08)',
-          width: '100%', maxWidth: '400px',
-          position: 'relative', zIndex: 1,
-          animation: 'slide-up 0.6s ease-out',
+        <div style={{ position: 'fixed', top: '-18%', right: '-8%', width: 620, height: 620, borderRadius: '50%', background: 'radial-gradient(circle,rgba(34,211,238,.13),transparent 68%)', pointerEvents: 'none', animation: 'db-pulse 9s ease-in-out infinite' }} />
+        <div style={{ position: 'fixed', bottom: '-24%', left: '-10%', width: 520, height: 520, borderRadius: '50%', background: 'radial-gradient(circle,rgba(167,139,250,.13),transparent 68%)', pointerEvents: 'none', animation: 'db-pulse 12s ease-in-out infinite 2s' }} />
+
+        <form onSubmit={handleLogin} className="db-card" style={{
+          position: 'relative', zIndex: 1, width: '100%', maxWidth: 396, padding: '44px 38px',
+          background: 'rgba(11,16,32,.78)', backdropFilter: 'blur(22px)',
+          border: '1px solid rgba(129,140,248,.24)', borderRadius: 18,
+          boxShadow: '0 24px 60px rgba(2,6,23,.7), inset 0 1px 0 rgba(255,255,255,.06)',
         }}>
-          {/* 登录卡顶部发光细线 */}
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
-            background: 'linear-gradient(90deg, transparent, #22d3ee, #6366f1, #8b5cf6, transparent)',
-            borderRadius: '26px 26px 0 0', opacity: 0.8,
-          }} />
-          {/* 四角装饰 */}
-          <div style={{ position: 'absolute', top: 12, left: 12, width: 14, height: 14, borderTop: '2px solid rgba(34,211,238,0.4)', borderLeft: '2px solid rgba(34,211,238,0.4)', borderRadius: '3px 0 0 0' }} />
-          <div style={{ position: 'absolute', top: 12, right: 12, width: 14, height: 14, borderTop: '2px solid rgba(34,211,238,0.4)', borderRight: '2px solid rgba(34,211,238,0.4)', borderRadius: '0 3px 0 0' }} />
-          <div style={{ position: 'absolute', bottom: 12, left: 12, width: 14, height: 14, borderBottom: '2px solid rgba(34,211,238,0.4)', borderLeft: '2px solid rgba(34,211,238,0.4)', borderRadius: '0 0 0 3px' }} />
-          <div style={{ position: 'absolute', bottom: 12, right: 12, width: 14, height: 14, borderBottom: '2px solid rgba(34,211,238,0.4)', borderRight: '2px solid rgba(34,211,238,0.4)', borderRadius: '0 0 3px 0' }} />
-          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <div style={{ position: 'absolute', top: 0, left: 22, right: 22, height: 1.5, background: 'linear-gradient(90deg,transparent,#22d3ee,#818cf8,#a78bfa,transparent)' }} />
+          <div style={{ textAlign: 'center', marginBottom: 30 }}>
             <div style={{
-              width: '72px', height: '72px', borderRadius: '22px', margin: '0 auto 16px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-              fontSize: '36px',
-              boxShadow: '0 12px 36px rgba(34,211,238,0.4), 0 0 40px rgba(99,102,241,0.3)',
-              animation: 'float 3s ease-in-out infinite',
+              width: 64, height: 64, margin: '0 auto 15px', borderRadius: 18,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30,
+              background: 'linear-gradient(135deg,#22d3ee,#818cf8,#a78bfa)',
+              boxShadow: '0 12px 32px rgba(99,102,241,.45), 0 0 40px rgba(34,211,238,.22)',
+              animation: 'db-float 3.6s ease-in-out infinite',
             }}>🛡️</div>
-            <h2 style={{ color: '#f1f5f9', margin: 0, fontSize: '25px', fontWeight: '800', letterSpacing: '-0.02em' }}>代理监控控制台</h2>
-            <p style={{ color: '#64748b', fontSize: '14px', marginTop: '8px', fontWeight: '500' }}>Gemini Transparent Proxy</p>
-            <div style={{ 
-              fontSize: '11px', color: '#8b9cf4', marginTop: '14px', 
-              padding: '5px 14px', borderRadius: '20px',
-              backgroundColor: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)',
-              display: 'inline-block'
-            }}>
-              🔒 安全访问
-            </div>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.02em' }}>监控控制台</h1>
+            <p style={{ margin: '7px 0 0', fontSize: 12.5, color: '#64748b', fontFamily: 'ui-monospace,monospace' }}>Gemini Transparent Proxy</p>
           </div>
-          <form onSubmit={handleLogin}>
-            <div style={{ position: 'relative', marginBottom: '12px' }}>
-              <input 
-                type="password" 
-                value={password} 
-                onChange={e => setPassword(e.target.value)}
-                placeholder="输入访问密码" 
-                autoFocus
-                style={{
-                  width: '100%', padding: '14px 18px',
-                  borderRadius: '12px', border: '1px solid rgba(99,102,241,0.3)',
-                  background: 'rgba(15,23,42,0.6)', color: '#f1f5f9',
-                  fontSize: '14px', outline: 'none', boxSizing: 'border-box',
-                  transition: 'all 0.2s ease',
-                  boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.3)',
-                }}
-                onFocus={e => {
-                  e.target.style.borderColor = '#6366f1';
-                  e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.15), inset 0 1px 3px rgba(0,0,0,0.3)';
-                }}
-                onBlur={e => {
-                  e.target.style.borderColor = 'rgba(99,102,241,0.3)';
-                  e.target.style.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.3)';
-                }}
-              />
-            </div>
-            {authError && (
-              <div style={{ 
-                color: '#ef4444', fontSize: '13px', marginBottom: '12px',
-                padding: '8px 12px', borderRadius: '8px',
-                backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
-                display: 'flex', alignItems: 'center', gap: '6px',
-                animation: 'shake 0.4s ease-in-out'
-              }}>
-                <span>⚠️</span> {authError}
-              </div>
-            )}
-            <button type="submit"
-              style={{
-                width: '100%', padding: '14px', border: 'none', borderRadius: '12px',
-                background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #6366f1 100%)',
-                backgroundSize: '200% 100%',
-                color: 'white', fontSize: '15px', fontWeight: '600', cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                boxShadow: '0 4px 16px rgba(99,102,241,0.4), 0 0 20px rgba(99,102,241,0.2)',
-                letterSpacing: '0.02em',
-              }}
-              onMouseEnter={e => {
-                e.target.style.backgroundPosition = 'right center';
-                e.target.style.transform = 'translateY(-2px)';
-                e.target.style.boxShadow = '0 6px 20px rgba(99,102,241,0.5), 0 0 30px rgba(99,102,241,0.3)';
-              }}
-              onMouseLeave={e => {
-                e.target.style.backgroundPosition = 'left center';
-                e.target.style.transform = 'translateY(0)';
-                e.target.style.boxShadow = '0 4px 16px rgba(99,102,241,0.4), 0 0 20px rgba(99,102,241,0.2)';
-              }}
-            >
-              进入控制台 ✨
-            </button>
-          </form>
-          <div style={{
-            marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(99,102,241,0.15)',
-            textAlign: 'center', fontSize: '12px', color: '#475569'
-          }}>
-            <span>实时监控 · 智能分析 · 配额管理</span>
+          <input
+            type="password" value={password} autoFocus
+            onChange={e => setPassword(e.target.value)}
+            placeholder="访问密码"
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 10, fontSize: 14,
+              background: 'rgba(2,6,23,.6)', border: '1px solid rgba(129,140,248,.28)', color: '#f1f5f9',
+              outline: 'none', transition: 'border-color .18s ease, box-shadow .18s ease',
+            }}
+            onFocus={e => { e.target.style.borderColor = '#818cf8'; e.target.style.boxShadow = '0 0 0 3px rgba(129,140,248,.16)'; }}
+            onBlur={e => { e.target.style.borderColor = 'rgba(129,140,248,.28)'; e.target.style.boxShadow = 'none'; }}
+          />
+          {authError && (
+            <div style={{
+              marginTop: 12, padding: '9px 12px', borderRadius: 9, fontSize: 12.5, color: '#fca5a5',
+              background: 'rgba(248,113,113,.11)', border: '1px solid rgba(248,113,113,.32)',
+              animation: 'db-shake .4s ease-in-out',
+            }}>⚠️ {authError}</div>
+          )}
+          <button type="submit" className="db-btn" style={{
+            width: '100%', marginTop: 16, padding: '13px', border: 'none', borderRadius: 10, cursor: 'pointer',
+            background: 'linear-gradient(135deg,#6366f1,#818cf8,#a78bfa)', color: '#fff',
+            fontSize: 14.5, fontWeight: 700, letterSpacing: '0.01em',
+            boxShadow: '0 6px 20px rgba(99,102,241,.42)',
+          }}>进入控制台</button>
+          <div style={{ marginTop: 20, paddingTop: 15, borderTop: '1px solid rgba(148,163,184,.1)', textAlign: 'center', fontSize: 11, color: '#475569', fontFamily: 'ui-monospace,monospace' }}>
+            实时监控 · 配额管理 · 错误分析
           </div>
-        </div>
+        </form>
       </div>
     );
   }
 
-  if (loading) {
-    return (
-      <div style={{ ...theme.page, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{
-            width: '40px', height: '40px', margin: '0 auto 16px',
-            border: '3px solid rgba(99,102,241,0.2)', borderTopColor: '#6366f1',
-            borderRadius: '50%', animation: 'spin 0.8s linear infinite'
-          }} />
-          <p style={{ color: theme.text.sub }}>正在加载控制台…</p>
-        </div>
-      </div>
-    );
-  }
+  // ===========================================================================
+  // 主界面
+  // ===========================================================================
+  const loadingSkeleton = loading && authed;
 
-  // 已认证但数据加载中 → 在页面上显示骨架屏
-  const showSkeleton = loading && authed;
-
-  // ============= 主界面 =============
   return (
     <div style={{
-      ...theme.page, 
-      minHeight: '100vh',
-      padding: '0', 
-      fontFamily: '"Inter", system-ui, -apple-system, "PingFang SC", sans-serif',
-      backgroundImage: theme.page.backgroundGradient,
-      backgroundAttachment: 'fixed',
-      position: 'relative',
-      overflow: 'hidden',
+      ...theme.body, minHeight: '100vh', position: 'relative',
+      fontFamily: 'Inter,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif',
+      WebkitFontSmoothing: 'antialiased',
     }}>
-      {/* BI 大屏背景层：动态网格点阵 */}
-      <div style={{
-        position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0,
-        backgroundImage: `
-          linear-gradient(${theme.gridLine} 1px, transparent 1px),
-          linear-gradient(90deg, ${theme.gridLine} 1px, transparent 1px)
-        `,
-        backgroundSize: '48px 48px',
-        animation: 'grid-drift 30s linear infinite',
-        maskImage: 'radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 90%)',
-        WebkitMaskImage: 'radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 90%)',
-      }} />
-      {/* 极光光晕 */}
-      <div style={{
-        position: 'fixed', top: '-20%', right: '-10%', width: '700px', height: '700px',
-        borderRadius: '50%',
-        background: `radial-gradient(circle, ${dark ? 'rgba(34,211,238,0.10)' : 'rgba(34,211,238,0.16)'} 0%, transparent 70%)`,
-        pointerEvents: 'none', zIndex: 0,
-        animation: 'aurora-shift 18s ease-in-out infinite',
-      }} />
-      <div style={{
-        position: 'fixed', bottom: '-30%', left: '-15%', width: '500px', height: '500px',
-        borderRadius: '50%',
-        background: `radial-gradient(circle, ${dark ? 'rgba(139,92,246,0.10)' : 'rgba(139,92,246,0.14)'} 0%, transparent 70%)`,
-        pointerEvents: 'none', zIndex: 0,
-        animation: 'aurora-shift 24s ease-in-out infinite reverse',
-      }} />
-      <div style={{
-        position: 'fixed', top: '30%', left: '40%', width: '400px', height: '400px',
-        borderRadius: '50%',
-        background: `radial-gradient(circle, ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.12)'} 0%, transparent 70%)`,
-        pointerEvents: 'none', zIndex: 0,
-        animation: 'aurora-shift 28s ease-in-out infinite 4s',
-      }} />
-      {/* 扫描线（两种模式都显示，亮色模式用更淡的青色） */}
-      <div style={{
-        position: 'fixed', left: 0, right: 0, top: 0, height: '180px',
-        pointerEvents: 'none', zIndex: 0,
-        background: dark
-          ? 'linear-gradient(to bottom, transparent, rgba(34,211,238,0.04), transparent)'
-          : 'linear-gradient(to bottom, transparent, rgba(99,102,241,0.03), transparent)',
-        animation: 'scanline 9s linear infinite',
-      }} />
+      <style>{ANIM_CSS}</style>
 
-      <div style={{ position: 'relative', zIndex: 1, maxWidth: '1360px', margin: '0 auto', padding: isMobile ? '16px 12px' : '28px 24px' }}>
-        {/* ====== 顶部导航 ====== */}
-        <header style={{
-          display: 'flex', flexDirection: isMobile ? 'column' : 'row',
-          justifyContent: isMobile ? 'flex-start' : 'space-between',
-          alignItems: isMobile ? 'stretch' : 'center',
-          gap: isMobile ? '16px' : 0,
-          marginBottom: isMobile ? '20px' : '28px', paddingBottom: isMobile ? '16px' : '20px',
-          borderBottom: `1px solid ${dark ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.08)'}`,
-          position: 'relative'
-        }}>
-          {/* 刷新进度条 */}
+      {/* 背景光晕 */}
+      <div style={{ position: 'fixed', top: '-16%', right: '-6%', width: 660, height: 660, borderRadius: '50%', background: `radial-gradient(circle,${theme.glowLayer},transparent 66%)`, pointerEvents: 'none', zIndex: 0, animation: 'db-pulse 11s ease-in-out infinite' }} />
+      <div style={{ position: 'fixed', bottom: '-22%', left: '-10%', width: 540, height: 540, borderRadius: '50%', background: `radial-gradient(circle,${theme.glowLayer2},transparent 66%)`, pointerEvents: 'none', zIndex: 0, animation: 'db-pulse 14s ease-in-out infinite 3s' }} />
+
+      {/* ============ 固定顶栏 ============ */}
+      <header className="db-topbar" style={{
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 60, height: 58,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: '0 20px',
+        ...theme.topbar, backdropFilter: 'blur(16px)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
           <div style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: '2px',
-            backgroundColor: theme.bar.bg,
-            borderRadius: '2px',
-            overflow: 'hidden'
-          }}>
-            <div style={{
-              width: '100%', height: '100%',
-              background: 'linear-gradient(90deg, #22d3ee, #6366f1, #8b5cf6)',
-              transition: 'width 0.3s linear',
-              boxShadow: '0 0 8px rgba(34,211,238,0.4)',
-            }} />
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{
-                width: '46px', height: '46px', borderRadius: '14px', flexShrink: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                fontSize: '23px', boxShadow: dark ? '0 0 20px rgba(34,211,238,0.4), 0 4px 16px rgba(99,102,241,0.4)' : '0 4px 16px rgba(99,102,241,0.4)',
-              }}>🛡️</div>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{
-                    width: '9px', height: '9px', borderRadius: '50%',
-                    backgroundColor: health?.status === 'ok' ? '#22c55e' : '#ef4444',
-                    boxShadow: `0 0 12px ${health?.status === 'ok' ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'}`,
-                    animation: health?.status === 'ok' ? 'pulse-glow 2s ease-in-out infinite' : 'none'
-                  }} />
-                  <h1 style={{ fontSize: isMobile ? '22px' : '26px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
-                    Gemini <span style={{ 
-                      background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                      WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor: 'transparent',
-                      backgroundClip: 'text'
-                    }}>代理</span>
-                  </h1>
-                </div>
-                <p style={{ color: theme.text.muted, fontSize: '13px', margin: '4px 0 0', fontWeight: '500' }}>
-                  实时监控 · 智能分析 · 配额管理
-                </p>
-              </div>
+            width: 32, height: 32, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'linear-gradient(135deg,#22d3ee,#818cf8,#a78bfa)', fontSize: 16,
+            boxShadow: theme.dark ? '0 0 18px rgba(34,211,238,.4)' : '0 3px 10px rgba(99,102,241,.35)',
+          }}>🛡️</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 14.5, fontWeight: 800, color: theme.text.hi, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>
+                Gemini <span style={{ color: theme.accent }}>Proxy</span>
+              </span>
+              <span className="db-hide-xs" style={{
+                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                background: health?.status === 'ok' ? theme.ok : theme.err,
+                boxShadow: `0 0 8px ${health?.status === 'ok' ? theme.ok : theme.err}`,
+                animation: health?.status === 'ok' ? 'db-pulse 2.2s ease-in-out infinite' : 'none',
+              }} />
             </div>
-            {lastRefreshTime && (
-              <p style={{ color: theme.text.muted, fontSize: '11px', margin: '8px 0 0', fontFamily: 'monospace' }}>
-                上次刷新：{lastRefreshTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </p>
-            )}
+            <div className="db-hide-xs" style={{ fontSize: 10.5, color: theme.text.muted, fontFamily: 'ui-monospace,monospace' }}>
+              Operations Console
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
-            <span style={{ 
-              fontSize: '12px', 
-              color: theme.text.muted, 
-              fontFamily: 'monospace',
-              padding: '6px 12px',
-              borderRadius: '10px',
-              backgroundColor: theme.bar.bg,
-              border: `1px solid ${dark ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.1)'}`,
+        </div>
+
+        <div className="db-topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="db-hide-xs" style={{
+            fontSize: 11, color: theme.text.sub, fontFamily: 'ui-monospace,monospace',
+            padding: '5px 10px', borderRadius: 8, background: theme.inset.background, border: theme.inset.border,
+          }}>
+            {now.toLocaleTimeString('zh-CN', { hour12: false })}
+          </span>
+          <span className="db-hide-xs" style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: theme.text.sub,
+            fontFamily: 'ui-monospace,monospace', padding: '5px 10px', borderRadius: 8,
+            background: theme.inset.background, border: theme.inset.border,
+          }}>
+            <span style={{
+              width: 22, height: 3, borderRadius: 2, background: theme.ring, position: 'relative', overflow: 'hidden', display: 'inline-block',
             }}>
-              {new Date().toLocaleTimeString('zh-CN', { hour12: false })}
+              <span style={{
+                position: 'absolute', inset: 0, width: `${refreshProgress}%`,
+                background: `linear-gradient(90deg,${theme.accent2},${theme.accent})`, transition: 'width .3s linear',
+              }} />
             </span>
-            <button onClick={toggleDark} title={dark ? '切换亮色模式' : '切换暗色模式'}
-              style={{
-                width: '38px', height: '38px', borderRadius: '12px',
-                border: theme.card.border, backgroundColor: theme.card.backgroundColor,
-                cursor: 'pointer', fontSize: '18px', display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                transition: 'all 0.2s ease',
-                boxShadow: theme.card.boxShadow,
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.transform = 'scale(1.1)';
-                e.currentTarget.style.boxShadow = theme.glow;
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.transform = 'scale(1)';
-                e.currentTarget.style.boxShadow = theme.card.boxShadow;
-              }}
-            >{dark ? '☀️' : '🌙'}</button>
-            <button onClick={fetchData} title={refreshing ? '刷新中...' : '刷新数据'}
-              style={{
-                width: '38px', height: '38px', borderRadius: '12px',
-                border: theme.card.border, backgroundColor: theme.card.backgroundColor,
-                cursor: refreshing ? 'not-allowed' : 'pointer', fontSize: '18px', display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                transition: 'all 0.2s ease',
-                boxShadow: theme.card.boxShadow,
-                opacity: refreshing ? 0.6 : 1,
-                animation: refreshing ? 'spin 1s linear infinite' : 'none',
-              }}
-              onMouseEnter={e => {
-                if (!refreshing) {
-                  e.currentTarget.style.transform = 'scale(1.1) rotate(180deg)';
-                  e.currentTarget.style.boxShadow = theme.glow;
-                }
-              }}
-              onMouseLeave={e => {
-                if (!refreshing) {
-                  e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
-                  e.currentTarget.style.boxShadow = theme.card.boxShadow;
-                }
-              }}
-            >{refreshing ? '⏳' : '⟳'}</button>
-            
-            {/* 导出按钮 */}
-            <div style={{ position: 'relative' }}>
-              <button 
-                onClick={() => setShowExportMenu(!showExportMenu)}
-                disabled={exporting}
-                title="导出数据"
-                style={{
-                  width: '38px', height: '38px', borderRadius: '12px',
-                  border: theme.card.border, 
-                  backgroundColor: exporting ? theme.bar.bg : theme.card.backgroundColor,
-                  cursor: exporting ? 'not-allowed' : 'pointer', 
-                  fontSize: '18px', 
-                  display: 'flex',
-                  alignItems: 'center', 
-                  justifyContent: 'center',
-                  transition: 'all 0.2s ease',
-                  boxShadow: theme.card.boxShadow,
-                  opacity: exporting ? 0.6 : 1,
-                }}
-                onMouseEnter={e => {
-                  if (!exporting) {
-                    e.currentTarget.style.transform = 'scale(1.1)';
-                    e.currentTarget.style.boxShadow = theme.glow;
-                  }
-                }}
-                onMouseLeave={e => {
-                  if (!exporting) {
-                    e.currentTarget.style.transform = 'scale(1)';
-                    e.currentTarget.style.boxShadow = theme.card.boxShadow;
-                  }
-                }}
-              >
-                {exporting ? '⏳' : '📥'}
-              </button>
-              
-              {/* 导出菜单 */}
-              {showExportMenu && (
-                <div style={{
-                  position: 'absolute',
-                  top: '48px',
-                  right: 0,
-                  zIndex: 100,
-                  minWidth: '180px',
-                  backgroundColor: theme.card.backgroundColor,
-                  border: theme.card.border,
-                  borderRadius: '12px',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.2), ' + theme.glow,
-                  padding: '8px',
-                  animation: 'slide-up 0.2s ease-out',
+            {lastRefreshTime ? formatTime(lastRefreshTime.toISOString()) : '--:--:--'}
+          </span>
+          <IconButton theme={theme} onClick={toggleDark} title="切换主题 (D)">{dark ? '☀️' : '🌙'}</IconButton>
+          <div style={{ position: 'relative' }}>
+            <IconButton theme={theme} onClick={() => setShowExportMenu(p => !p)} title="导出数据 (E)" disabled={exporting}>
+              {exporting ? '⏳' : '📥'}
+            </IconButton>
+            {showExportMenu && (
+              <>
+                <div onClick={() => setShowExportMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
+                <div className="db-card" style={{
+                  position: 'absolute', top: 42, right: 0, zIndex: 80, minWidth: 190, padding: 6,
+                  ...theme.card, borderRadius: 12, backdropFilter: 'blur(18px)',
                 }}>
-                  <div style={{ 
-                    fontSize: '11px', 
-                    fontWeight: '700', 
-                    color: theme.text.muted, 
-                    padding: '8px 12px 6px',
-                    borderBottom: `1px solid ${theme.bar.bg}`,
-                    marginBottom: '4px',
-                  }}>导出数据</div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: theme.text.muted, padding: '7px 10px 8px', letterSpacing: '0.06em' }}>导出数据</div>
                   {[
-                    { type: 'quota', label: '配额数据', icon: '📊' },
-                    { type: 'timeline', label: '时间线', icon: '📈' },
-                    { type: 'errors', label: '错误日志', icon: '⚠️' },
-                    { type: 'all', label: '完整数据 (JSON)', icon: '💾' },
+                    { t: 'quota', i: '⚡', l: '模型配额 (CSV)' },
+                    { t: 'timeline', i: '📈', l: '时间线 (CSV)' },
+                    { t: 'errors', i: '🚨', l: '错误日志 (CSV)' },
+                    { t: 'all', i: '💾', l: '完整快照 (JSON)' },
                   ].map(item => (
-                    <button
-                      key={item.type}
-                      onClick={() => handleExport(item.type)}
-                      disabled={exporting}
-                      style={{
-                        width: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '10px',
-                        padding: '10px 12px',
-                        margin: '4px 0',
-                        border: 'none',
-                        borderRadius: '8px',
-                        backgroundColor: 'transparent',
-                        color: theme.text.main,
-                        fontSize: '13px',
-                        cursor: exporting ? 'not-allowed' : 'pointer',
-                        transition: 'all 0.2s ease',
-                        textAlign: 'left',
-                      }}
-                      onMouseEnter={e => {
-                        if (!exporting) {
-                          e.currentTarget.style.backgroundColor = theme.bar.bg;
-                          e.currentTarget.style.transform = 'translateX(4px)';
-                        }
-                      }}
-                      onMouseLeave={e => {
-                        if (!exporting) {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                          e.currentTarget.style.transform = 'translateX(0)';
-                        }
-                      }}
-                    >
-                      <span style={{ fontSize: '16px' }}>{item.icon}</span>
-                      <span style={{ flex: 1 }}>{item.label}</span>
-                      {exporting && <span style={{ fontSize: '12px', color: theme.text.muted }}>⏳</span>}
+                    <button key={item.t} className="db-nav" onClick={() => handleExport(item.t)} disabled={exporting} style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 10px',
+                      border: 'none', borderRadius: 8, background: 'transparent', cursor: exporting ? 'not-allowed' : 'pointer',
+                      color: theme.text.main, fontSize: 12.5, textAlign: 'left', opacity: exporting ? 0.6 : 1,
+                    }}>
+                      <span style={{ fontSize: 14 }}>{item.i}</span>{item.l}
                     </button>
                   ))}
-                  <button
-                    onClick={() => setShowExportMenu(false)}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      marginTop: '4px',
-                      border: 'none',
-                      borderRadius: '8px',
-                      backgroundColor: 'transparent',
-                      color: theme.text.muted,
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      textAlign: 'center',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.color = theme.text.main}
-                    onMouseLeave={e => e.currentTarget.style.color = theme.text.muted}
-                  >
-                    取消
-                  </button>
                 </div>
-              )}
-            </div>
-          </div>
-        </header>
-
-        {/* ====== 核心指标行 ====== */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '14px', marginBottom: '24px'
-        }}>
-                    {showSkeleton ? [1,2,3,4,5].map(i => <SkeletonMetricCard key={i} theme={theme} />)
-          : <>
-<MetricCard icon="📡" label="总请求数" value={<AnimatedCounter value={globalRequests} color="#6366f1" />}
-            sub={`今日累计`} color="#6366f1" theme={theme} />
-          <MetricCard icon="✅" label="成功请求" value={<AnimatedCounter value={successCount} color="#22c55e" />}
-            sub={`成功率 ${successCount > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100'}%`}
-            color="#22c55e" theme={theme} />
-          <MetricCard icon="⚠️" label="错误数" value={<AnimatedCounter value={errorCount} color={errorCount > 0 ? '#ef4444' : '#22c55e'} />}
-            sub={`错误率 ${errorRate}%`}
-            color={errorCount > 0 ? '#ef4444' : '#22c55e'} 
-            theme={theme} 
-            badge={unreadErrors}
-          />
-          <MetricCard icon="⏱️" label="平均延迟" value={avgLatency ? <span style={{ color: '#f59e0b' }}>{Math.round(avgLatency)}<span style={{ fontSize: '14px', fontWeight: 500 }}>ms</span></span> : <span style={{ color: '#f59e0b' }}>—</span>}
-            sub="所有模型综合" color="#f59e0b" theme={theme} />
-          <MetricCard icon="🔄" label="配额重置" value={<span style={{ color: '#8b5cf6', fontFamily: 'monospace', fontWeight: 800 }}>{formatCountdown(countdown)}</span>}
-            sub="UTC+8 07:00 重置" color="#8b5cf6" theme={theme} />
-          </>}
-          
-        </div>
-
-        {/* ====== 双列布局 ====== */}
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-
-          {/* 请求时间线 */}
-                    <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
-
-                      {showSkeleton ? <SkeletonTimeline theme={theme} /> : <>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-                        <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-                          <span style={{
-                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            width: '28px', height: '28px', borderRadius: '9px',
-                            background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                            fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
-                          }}>📊</span>
-                          请求时间线
-                          {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
-                        </h2>
-                        {timeline?.summary && (
-                          <span style={{
-                            fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
-                            backgroundColor: timeline.summary.overallChange > 20 
-                              ? '#ef444418' 
-                              : timeline.summary.overallChange > 0 
-                                ? '#f59e0b18' 
-                                : '#22c55e18',
-                            color: timeline.summary.overallChange > 20 
-                              ? '#ef4444' 
-                              : timeline.summary.overallChange > 0 
-                                ? '#f59e0b' 
-                                : '#22c55e',
-                            border: `1px solid ${
-                              timeline.summary.overallChange > 20 
-                                ? '#ef444430' 
-                                : timeline.summary.overallChange > 0 
-                                  ? '#f59e0b30' 
-                                  : '#22c55e30'
-                            }`,
-                            fontWeight: '600'
-                          }}>
-                            {timeline.summary.overallChange > 0 ? '📈' : '📉'} {Math.abs(timeline.summary.overallChange)}% vs 昨天
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ position: 'relative' }}>
-                        <SparklineChart 
-                          data={(timeline?.timeline || []).map(d => ({ hour: d.hour, count: d.today }))} 
-                          yesterdayData={timeline?.timeline}
-                          theme={theme}
-                        />
-                        {/* 昨天对比线（半透明） */}
-                        <div style={{
-                          position: 'absolute',
-                          top: '10px',
-                          right: '10px',
-                          fontSize: '11px',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          backgroundColor: theme.bar?.bg || '#f1f5f9',
-                          color: theme.text?.muted || '#64748b',
-                          border: `1px solid ${theme.bar?.border || '#e2e8f0'}`,
-                        }}>
-                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50', backgroundColor: '#6366f1', marginRight: '4px' }} />今天
-                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50', backgroundColor: '#94a3b850', marginLeft: '8px', marginRight: '4px' }} />昨天
-                        </div>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginTop: '12px', fontSize: '12px', color: theme.text.muted }}>
-                        <div>
-                          <div style={{ fontSize: '10px', marginBottom: '2px' }}>今日总计</div>
-                          <div style={{ fontSize: '14px', fontWeight: '700', color: theme.text.main }}>
-                            {(timeline?.summary?.todayTotal || 0).toLocaleString()} 次
-                          </div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '10px', marginBottom: '2px' }}>昨日总计</div>
-                          <div style={{ fontSize: '14px', fontWeight: '700', color: theme.text.main }}>
-                            {(timeline?.summary?.yesterdayTotal || 0).toLocaleString()} 次
-                          </div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '10px', marginBottom: '2px' }}>峰值时段</div>
-                          <div style={{ fontSize: '14px', fontWeight: '700', color: '#6366f1' }}>
-                            {String(timeline?.summary?.peakHour || 0).padStart(2, '0')}:00
-                          </div>
-                        </div>
-                      </div>
-                      </>}
-                    </div>
-
-          {/* 模型分布 + HTTP 状态分布 */}
-          <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '28px', height: '28px', borderRadius: '9px',
-                  background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                  fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
-                }}>🧬</span>
-                模型路由分布
-                {quota?.data && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>共 {quota.data.length} 个模型</span>}
-              </h2>
-              {errors?.statusBreakdown && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#22c55e' }}>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e' }} />2xx
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#f59e0b' }}>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b' }} />4xx
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#ef4444' }}>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ef4444' }} />5xx
-                  </div>
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '14px', alignItems: 'stretch', minHeight: '140px' }}>
-              {/* 模型小环形图 */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', justifyContent: 'center' }}>
-                {modelDistribution.length > 0 ? modelDistribution.slice(0, 4).map((d, i) => {
-                  const pct = d.max > 0 ? (d.value / d.max) * 100 : 0;
-                  return (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', gap: '10px',
-                      padding: '9px 12px', borderRadius: '12px',
-                      backgroundColor: theme.bar.bg,
-                      border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}`,
-                    }}>
-                      <DonutChart percent={pct} size={32} strokeWidth={4} color={d.color}>
-                        <span style={{ fontSize: '9px', fontWeight: '700', color: d.color }}>
-                          {(d.value / (d.max || 1) * 100).toFixed(0)}%
-                        </span>
-                      </DonutChart>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '12px', fontWeight: '600', color: theme.text.main, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {d.label}
-                        </div>
-                        <div style={{ fontSize: '10px', color: theme.text.muted, fontFamily: 'monospace' }}>
-                          {d.value.toLocaleString()} 次
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }) : <EmptyCard emoji="📭" text="暂无模型数据" sub="模型在首次请求后才会出现在这里" tips="发送一次 API 调用即可激活模型统计" theme={theme} />}
-              </div>
-              {/* HTTP 状态迷你饼图 */}
-              {errors?.statusBreakdown && (() => {
-                const pieCounts = { 2: errors.statusBreakdown['2xx'] || 0, 4: errors.statusBreakdown['4xx'] || 0, 5: errors.statusBreakdown['5xx'] || 0 };
-                return (
-                  <div style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                    padding: '0 12px', gap: '8px',
-                    borderLeft: `1px solid ${theme.bar.bg}`,
-                  }}>
-                    <MiniStatusPie counts={pieCounts} size={80} />
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '11px', fontWeight: '600', color: theme.text.main }}>状态分布</div>
-                      <div style={{ fontSize: '10px', color: theme.text.muted }}>
-                        成功 {pieCounts[2] || 0} · 客户端 {pieCounts[4] || 0} · 服务端 {pieCounts[5] || 0}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-            {quota?.errorAlert && quota.errorAlert.level !== 'normal' && (
-              <div style={{
-                marginTop: '12px',
-                padding: '10px 12px',
-                borderRadius: '8px',
-                backgroundColor: quota.errorAlert.level === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
-                border: `1px solid ${quota.errorAlert.level === 'critical' ? 'rgba(239,68,68,0.4)' : 'rgba(245,158,11,0.4)'}`,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '16px' }}>{quota.errorAlert.level === 'critical' ? '🚨' : '⚠️'}</span>
-                  <span style={{ fontWeight: '700', fontSize: '13px', color: quota.errorAlert.level === 'critical' ? '#ef4444' : '#f59e0b' }}>
-                    {quota.errorAlert.message}
-                  </span>
-                </div>
-                <div style={{ fontSize: '11px', color: theme.text.muted }}>
-                  今日 {quota.errorAlert.totalRequests} 次请求，{quota.errorAlert.totalErrors} 次失败
-                </div>
-              </div>
-            )}
-            {quota?.globalErrorRate > 0 && !quota?.errorAlert?.level && (
-              <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.bar.bg}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
-                  <span>🌐 全局错误率</span>
-                  <span style={{ fontWeight: '600', color: '#22c55e' }}>
-                    {quota.globalErrorRate}%
-                  </span>
-                </div>
-              </div>
+              </>
             )}
           </div>
+          <IconButton theme={theme} onClick={fetchData} title="立即刷新 (R)" spinning={refreshing}>⟳</IconButton>
+          <IconButton theme={theme} onClick={logout} title="退出登录 (Q)">⏏</IconButton>
         </div>
+      </header>
 
-        {/* ====== 模型配额监控 ====== */}
-        <div style={{
-          marginBottom: '28px',
-          padding: isMobile ? '20px 16px' : '28px',
-          borderRadius: '22px',
-          background: dark
-            ? 'linear-gradient(135deg, rgba(34,211,238,0.10) 0%, rgba(99,102,241,0.06) 40%, rgba(139,92,246,0.10) 100%)'
-            : 'linear-gradient(135deg, rgba(34,211,238,0.09) 0%, rgba(99,102,241,0.07) 40%, rgba(139,92,246,0.09) 100%)',
-          border: `1px solid ${dark ? 'rgba(34,211,238,0.25)' : 'rgba(99,102,241,0.30)'}`,
-          boxShadow: `${theme.glow}, ${dark ? '0 0 40px rgba(34,211,238,0.06), 0 8px 32px rgba(0,0,0,0.3)' : '0 0 36px rgba(99,102,241,0.14), 0 0 16px rgba(34,211,238,0.08)'}`,
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
-          {/* hero 顶部发光细线 */}
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
-            background: 'linear-gradient(90deg, transparent, #22d3ee, #6366f1, #8b5cf6, transparent)',
-            opacity: dark ? 0.8 : 0.5,
-          }} />
-          {/* hero 四角装饰 */}
-          <div style={{ position: 'absolute', top: 10, left: 10, width: 14, height: 14, borderTop: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderLeft: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '3px 0 0 0' }} />
-          <div style={{ position: 'absolute', top: 10, right: 10, width: 14, height: 14, borderTop: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRight: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '0 3px 0 0' }} />
-          <div style={{ position: 'absolute', bottom: 10, left: 10, width: 14, height: 14, borderBottom: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderLeft: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '0 0 0 3px' }} />
-          <div style={{ position: 'absolute', bottom: 10, right: 10, width: 14, height: 14, borderBottom: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRight: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '0 0 3px 0' }} />
-          {showSkeleton ? [1,2,3,4].map(i => <SkeletonQuotaCard key={i} theme={theme} />) : <>
-          
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px',
-            paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}`,
-          }}>
-            <h2 style={{ fontSize: '17px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '10px', letterSpacing: '-0.01em' }}>
+      {/* ============ 左侧导航 ============ */}
+      <nav className="db-sidebar" style={{
+        position: 'fixed', top: 58, bottom: 0, left: 0, width: 214, zIndex: 50,
+        ...theme.sidebar, backdropFilter: 'blur(14px)', padding: '18px 12px',
+        display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto',
+      }}>
+        <div className="db-hide-xs" style={{ fontSize: 10, fontWeight: 700, color: theme.text.muted, letterSpacing: '0.1em', padding: '0 10px 9px' }}>
+          MONITORING
+        </div>
+        {SECTIONS.map(s => {
+          const isActive = activeSection === s.id;
+          return (
+            <button key={s.id} className="db-nav" onClick={() => goTo(s.id)} style={{
+              display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 11px',
+              borderRadius: 9, border: 'none', cursor: 'pointer', textAlign: 'left',
+              background: isActive ? theme.navActive.background : 'transparent',
+              color: isActive ? theme.navActive.color : theme.navIdle.color,
+              position: 'relative',
+            }}>
               <span style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '30px', height: '30px', borderRadius: '9px',
-                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                fontSize: '16px', boxShadow: dark ? '0 0 16px rgba(34,211,238,0.5), 0 2px 8px rgba(99,102,241,0.4)' : '0 2px 8px rgba(99,102,241,0.3)',
-              }}>⚡</span>
-              模型配额监控
-              {quota?.data?.some(m => m.percent > 90) && (
+                position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)',
+                width: 2.5, height: isActive ? 18 : 0, borderRadius: 2,
+                background: theme.accent, boxShadow: `0 0 8px ${theme.accent}`, transition: 'height .22s ease',
+              }} />
+              <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{s.icon}</span>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 12.5, fontWeight: isActive ? 700 : 600 }}>{s.label}</span>
+              </span>
+              {s.id === 'errors' && errorCount > 0 && (
                 <span style={{
-                  fontSize: '10px', padding: '2px 9px', borderRadius: '12px',
-                  backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444',
-                  border: '1px solid rgba(239,68,68,0.35)', fontWeight: '700',
-                  display: 'flex', alignItems: 'center', gap: '4px',
-                  animation: 'pulse-glow 2s ease-in-out infinite'
-                }}>
-                  ⚠ 配额告警
-                </span>
+                  marginLeft: 'auto', minWidth: 18, height: 17, padding: '0 5px', borderRadius: 9,
+                  background: theme.err, color: '#fff', fontSize: 9.5, fontWeight: 700,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                }}>{errorCount > 99 ? '99+' : errorCount}</span>
               )}
-            </h2>
-            {selectedModel && (
-              <button onClick={() => setSelectedModel(null)}
-                style={{
-                  fontSize: '12px', padding: '5px 12px', borderRadius: '20px',
-                  border: `1px solid ${theme.text.muted}40`, background: 'transparent',
-                  color: theme.text.muted, cursor: 'pointer',
-                  transition: 'all 0.2s ease'
-                }}
-                onMouseEnter={e => { e.target.style.background = theme.bar.bg; e.target.style.borderColor = theme.text.muted; }}
-                onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.borderColor = `${theme.text.muted}40`; }}
-              >清除筛选 ✕</button>
-            )}
-          </div>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-            gap: '14px'
-          }}>
-            {quota?.data?.map((item, i) => {
-              const color = getModelColor(item.model);
-              const pct = Math.min(item.percent, 100);
-              const isSelected = selectedModel === shortModel(item.model);
-              const isHigh = pct > 90;
-              const isMedium = pct > 70;
-              const ringColor = isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color;
-              return (
-                <div key={i}
-                  onClick={() => setSelectedModel(isSelected ? null : shortModel(item.model))}
-                  style={{
-                    borderRadius: '16px', padding: '16px', cursor: 'pointer',
-                    background: isSelected ? `linear-gradient(135deg, ${color}12, ${color}05)` : theme.card.backgroundColor,
-                    border: isSelected 
-                      ? `2px solid ${color}` 
-                      : isHigh 
-                        ? `2px solid rgba(239,68,68,0.4)` 
-                        : theme.card.border,
-                    boxShadow: isSelected 
-                      ? `0 0 24px ${color}20, ${theme.card.boxShadow}`
-                      : isHigh
-                        ? `0 0 16px rgba(239,68,68,0.15), ${theme.card.boxShadow}`
-                        : theme.card.boxShadow,
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    position: 'relative',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '14px',
-                    overflow: 'hidden',
-                    backdropFilter: dark ? 'blur(8px)' : 'none',
-                  }}
-                  onMouseEnter={e => { 
-                    if (!isSelected) { 
-                      e.currentTarget.style.transform = 'translateY(-3px)'; 
-                      e.currentTarget.style.borderColor = isHigh ? '#ef4444' : `${color}50`; 
-                    } 
-                  }}
-                  onMouseLeave={e => { 
-                    if (!isSelected) { 
-                      e.currentTarget.style.transform = 'translateY(0)'; 
-                      e.currentTarget.style.borderColor = isHigh ? 'rgba(239,68,68,0.35)' : theme.card.border; 
-                    } 
-                  }}
-                >
-                  {/* 左侧选中装饰条 */}
-                  {isSelected && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: `linear-gradient(180deg, ${color}, ${color}60)`, borderRadius: '0 2px 2px 0' }} />}
-                  
-                  {/* 环形图 */}
-                  <DonutChart percent={pct} size={70} strokeWidth={6} color={ringColor}>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '17px', fontWeight: '800', color: ringColor, lineHeight: 1 }}>{pct.toFixed(0)}</div>
-                      <div style={{ fontSize: '8px', color: ringColor, opacity: 0.7 }}>%</div>
-                    </div>
-                  </DonutChart>
+              {s.id === 'quota' && nearLimit.length > 0 && (
+                <span style={{
+                  marginLeft: 'auto', fontSize: 9.5, fontWeight: 700, color: theme.warn,
+                  animation: 'db-pulse 2s ease-in-out infinite',
+                }}>⚠</span>
+              )}
+            </button>
+          );
+        })}
 
-                  {/* 右侧信息 */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '13px', fontWeight: '800', color: theme.text.main, fontFamily: 'monospace', marginBottom: '4px', letterSpacing: '-0.01em' }}>
-                      {shortModel(item.model)}
+        <div style={{ marginTop: 'auto', paddingTop: 14, borderTop: `1px solid ${theme.grid}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: theme.text.muted, letterSpacing: '0.1em', padding: '0 10px 8px' }}>HEALTH</div>
+          {[
+            { k: 'Gemini', s: health?.gemini?.status },
+            { k: 'Redis', s: health?.redis?.status },
+            { k: 'Console', s: health?.status },
+          ].map(h => {
+            const c = h.s === 'ok' ? theme.ok : h.s === 'warn' || h.s === 'degraded' ? theme.warn : h.s ? theme.err : theme.text.muted;
+            return (
+              <div key={h.k} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px', fontSize: 11.5 }}>
+                <span style={{ color: theme.text.sub }}>{h.k}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: c, fontFamily: 'ui-monospace,monospace', fontWeight: 600 }}>
+                  <span style={{ width: 5.5, height: 5.5, borderRadius: '50%', background: c, boxShadow: `0 0 6px ${c}` }} />
+                  {h.s === 'ok' ? 'OK' : h.s === 'warn' ? 'WARN' : h.s === 'degraded' ? 'DEGR' : h.s === 'error' ? 'DOWN' : '···'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* ============ 主内容区 ============ */}
+      <main className="db-main" style={{ marginLeft: 214, paddingTop: 58, position: 'relative', zIndex: 1, padding: '74px 22px 48px' }}>
+        <div style={{ maxWidth: 1420, margin: '0 auto' }}>
+
+          {/* 告警条 */}
+          {alertLevel !== 'normal' && (
+            <div className="db-card" style={{
+              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16, padding: '12px 16px',
+              borderRadius: 13, background: alertLevel === 'critical' ? `${theme.err}14` : `${theme.warn}14`,
+              border: `1px solid ${alertLevel === 'critical' ? theme.err : theme.warn}44`,
+            }}>
+              <span style={{ fontSize: 16 }}>{alertLevel === 'critical' ? '🚨' : '⚠️'}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: alertLevel === 'critical' ? theme.err : theme.warn }}>
+                {quota?.errorAlert?.message || '错误率异常'}
+              </span>
+              <span style={{ fontSize: 11.5, color: theme.text.sub, fontFamily: 'ui-monospace,monospace' }}>
+                今日 {fmt(quota?.errorAlert?.totalRequests)} 次请求 · {fmt(quota?.errorAlert?.totalErrors)} 次失败
+              </span>
+              <a href="#sec-errors" onClick={(e) => { e.preventDefault(); goTo('errors'); }}
+                style={{ marginLeft: 'auto', fontSize: 11.5, color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>
+                查看明细 →
+              </a>
+            </div>
+          )}
+
+          {/* ============ 核心指标网格 (Overview) ============ */}
+          <div id="sec-overview" style={{ scrollMarginTop: 78 }}>
+            <div className="db-metrics" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14, marginBottom: 20 }}>
+              {loadingSkeleton ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} style={{ ...theme.card, borderRadius: 14, padding: '16px' }}>
+                    <Skeleton w="40%" h={12} theme={theme} style={{ marginBottom: 12 }} />
+                    <Skeleton w="70%" h={26} theme={theme} style={{ marginBottom: 8 }} />
+                    <Skeleton w="50%" h={10} theme={theme} />
+                  </div>
+                ))
+              ) : (
+                <>
+                  <StatCard icon="📡" label="总请求数" value={<AnimatedNumber value={globalRequests} />} unit="次"
+                    foot={`今日累计 · 相比昨日`} color={theme.accent} theme={theme}
+                    spark={<MiniBars series={hourlySpark} color={theme.accent} theme={theme} />} />
+                  <StatCard icon="✅" label="成功率" value={successRate} unit="%"
+                    foot={`成功 ${fmt(successCount)} / 失败 ${fmt(errorCount)}`} color={theme.ok} theme={theme}
+                    spark={<MiniBars series={hourlySpark} color={theme.ok} theme={theme} />} />
+                  <StatCard icon="⚠️" label="错误与拦截" value={<AnimatedNumber value={errorCount} />} unit="个"
+                    foot={`全局错误率 ${errorRate}%`} color={errorCount > 0 ? theme.err : theme.ok} theme={theme}
+                    badge={unreadErrors} />
+                  <StatCard icon="⏱️" label="平均延迟" value={avgLatency != null ? avgLatency : '—'} unit="ms"
+                    foot="所有活跃模型综合加权" color={theme.warn} theme={theme}
+                    spark={latencySpark ? <MiniBars series={latencySpark} color={theme.warn} theme={theme} /> : null} />
+                  <StatCard icon="🔄" label="配额重置倒计时" value={formatCountdown(countdown)}
+                    foot="UTC+8 每日 07:00 自动清零" color={theme.accent3} theme={theme} />
+                </>
+              )}
+            </div>
+
+            {/* 时间线大图 */}
+            <Panel id="overview-chart" icon="📈" title="24 小时请求趋势" meta={timeline?.date ? `统计日期: ${timeline.date}` : ''}
+              actions={
+                timelineSummary && (
+                  <Chip tone={timelineSummary.overallChange > 20 ? 'err' : timelineSummary.overallChange > 0 ? 'warn' : 'ok'} theme={theme}>
+                    {timelineSummary.overallChange >= 0 ? '▲' : '▼'} {Math.abs(timelineSummary.overallChange)}% vs 昨天
+                  </Chip>
+                )
+              } theme={theme} accent={theme.accent}>
+              {loadingSkeleton ? (
+                <div style={{ height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Skeleton w="100%" h={180} theme={theme} />
+                </div>
+              ) : (
+                <>
+                  <TimeSeriesChart data={timeline?.timeline} height={210} theme={theme} />
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${theme.grid}` }}>
+                    <div>
+                      <div style={{ fontSize: 10.5, color: theme.text.muted }}>今日总计</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: theme.text.hi, fontFamily: 'ui-monospace,monospace' }}>
+                        {fmt(timelineSummary?.todayTotal)} <span style={{ fontSize: 11, fontWeight: 400, color: theme.text.muted }}>次</span>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '12px', color: theme.text.muted, fontFamily: 'monospace', marginBottom: '8px', display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-                      <span style={{ color: isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color, fontWeight: '700', fontSize: '14px' }}>{(item.used || 0).toLocaleString()}</span>
-                      <span style={{ opacity: 0.7 }}>/ {(item.limit || '∞').toLocaleString()}</span>
+                    <div>
+                      <div style={{ fontSize: 10.5, color: theme.text.muted }}>昨日同期</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: theme.text.hi, fontFamily: 'ui-monospace,monospace' }}>
+                        {fmt(timelineSummary?.yesterdayTotal)} <span style={{ fontSize: 11, fontWeight: 400, color: theme.text.muted }}>次</span>
+                      </div>
                     </div>
-                    {/* TPM 子进度条（每分钟输入 token），仅已知 TPM 限额的模型显示 */}
-                    {item.tpmLimit != null && (
-                      <div style={{ marginBottom: '6px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: theme.text.muted, fontFamily: 'monospace', marginBottom: '2px' }}>
-                          <span>TPM</span>
-                          <span style={{ color: item.tpmPercent > 80 ? '#ef4444' : item.tpmPercent > 60 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>
-                            {item.tpmUsed != null ? (item.tpmUsed / 1000).toFixed(1) : '0.0'}K / {(item.tpmLimit / 1000)}K ({item.tpmPercent}%)
+                    <div>
+                      <div style={{ fontSize: 10.5, color: theme.text.muted }}>峰值时段</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: theme.accent, fontFamily: 'ui-monospace,monospace' }}>
+                        {String(timelineSummary?.peakHour ?? 0).padStart(2, '0')}:00 <span style={{ fontSize: 11, fontWeight: 400, color: theme.text.muted }}>({fmt(timelineSummary?.peakCount)} 次)</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </Panel>
+          </div>
+
+          {/* ============ 模型配额监控 (Quota) ============ */}
+          <div style={{ marginTop: 22 }} id="sec-quota" style={{ scrollMarginTop: 78 }}>
+            <Panel id="quota" icon="⚡" title="模型配额监控" meta={`共 ${modelStats.length} 个模型`}
+              actions={
+                selectedModel ? (
+                  <button className="db-btn" onClick={() => setSelectedModel(null)} style={{
+                    fontSize: 11.5, padding: '4px 11px', borderRadius: 14, cursor: 'pointer',
+                    background: theme.inset.background, border: theme.inset.border, color: theme.text.sub,
+                  }}>
+                    清除筛选: {selectedModel} ✕
+                  </button>
+                ) : null
+              } theme={theme} accent={theme.accent2}>
+              {loadingSkeleton ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 14 }}>
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} style={{ ...theme.card, borderRadius: 14, padding: 16, display: 'flex', gap: 14 }}>
+                      <Skeleton w="64px" h={64} r="50%" theme={theme} />
+                      <div style={{ flex: 1 }}>
+                        <Skeleton w="80%" h={13} theme={theme} style={{ marginBottom: 8 }} />
+                        <Skeleton w="60%" h={11} theme={theme} style={{ marginBottom: 10 }} />
+                        <Skeleton w="40%" h={16} theme={theme} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : modelStats.length === 0 ? (
+                <EmptyHint icon="📭" text="暂无模型配额数据" sub="模型在首次 API 请求触发后会自动录入并显示在此处" theme={theme} />
+              ) : (
+                <div className="db-quota-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 14 }}>
+                  {modelStats.map((m) => {
+                    const isSelected = selectedModel === m.label;
+                    const isHigh = m.percent >= 90;
+                    const isWarn = m.percent >= 70 && !isHigh;
+                    const ringColor = isHigh ? theme.err : isWarn ? theme.warn : m.color;
+                    const pred = predictions[m.model];
+                    return (
+                      <div key={m.model} className="db-qcard" onClick={() => setSelectedModel(isSelected ? null : m.label)} style={{
+                        borderRadius: 14, padding: '16px', cursor: 'pointer',
+                        background: isSelected ? `linear-gradient(135deg,${m.color}22,${m.color}07)` : theme.card.background,
+                        border: isSelected ? `2px solid ${m.color}` : isHigh ? `1.5px solid ${theme.err}66` : theme.card.border,
+                        boxShadow: isSelected ? `0 0 24px ${m.color}33` : theme.card.boxShadow,
+                        position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 14,
+                      }}>
+                        <Ring percent={m.percent} size={66} stroke={6} color={ringColor}>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: ringColor, fontFamily: 'ui-monospace,monospace' }}>
+                            {Math.round(m.percent)}%
                           </span>
+                        </Ring>
+
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: theme.text.hi, fontFamily: 'ui-monospace,monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {m.label}
+                            </span>
+                            {isHigh && <Chip tone="err" theme={theme}>超 90%</Chip>}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: theme.text.sub, fontFamily: 'ui-monospace,monospace', marginBottom: 8 }}>
+                            <strong style={{ color: ringColor, fontWeight: 700 }}>{fmt(m.used)}</strong> / {fmt(m.limit)}
+                          </div>
+
+                          {m.tpmLimit != null && (
+                            <div style={{ marginBottom: 6 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: theme.text.muted, fontFamily: 'ui-monospace,monospace', marginBottom: 2 }}>
+                                <span>TPM (每分钟 Token)</span>
+                                <span style={{ color: m.tpmPercent > 80 ? theme.err : theme.text.sub }}>
+                                  {fmtK(m.tpmUsed)} / {fmtK(m.tpmLimit)} ({m.tpmPercent}%)
+                                </span>
+                              </div>
+                              <div style={{ height: 4, borderRadius: 2, background: theme.ring, overflow: 'hidden' }}>
+                                <div style={{
+                                  width: `${Math.min(m.tpmPercent, 100)}%`, height: '100%', borderRadius: 2,
+                                  background: m.tpmPercent > 80 ? theme.err : m.tpmPercent > 60 ? theme.warn : theme.ok,
+                                  transition: 'width .6s ease',
+                                }} />
+                              </div>
+                            </div>
+                          )}
+
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {m.avgLatency != null && (
+                              <span style={{ fontSize: 10.5, color: theme.text.muted, fontFamily: 'ui-monospace,monospace' }}>
+                                ⚡ {m.avgLatency}ms
+                              </span>
+                            )}
+                            {pred && !pred.exhausted && (
+                              <span style={{ fontSize: 10.5, color: pred.minutes < 120 ? theme.err : theme.warn, fontFamily: 'ui-monospace,monospace' }}>
+                                ⏳ 约 {formatDuration(pred.minutes)} 后耗尽
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div style={{ height: '5px', borderRadius: '3px', background: theme.bar?.bg || '#f1f5f9', overflow: 'hidden' }}>
-                          <div style={{
-                            width: `${Math.min(item.tpmPercent, 100)}%`, height: '100%', borderRadius: '3px',
-                            background: item.tpmPercent > 80 ? '#ef4444' : item.tpmPercent > 60 ? '#f59e0b' : '#22c55e',
-                            transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)'
-                          }} />
-                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Panel>
+          </div>
+
+          {/* ============ 流量分析 + 请求日志 + 错误分析 + 系统状态 (p8) ============ */}
+          <div style={{ marginTop: 22 }} id="sec-traffic" style={{ scrollMarginTop: 78 }}>
+            <div className="db-split" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+              
+              {/* 流量分析 */}
+              <Panel id="traffic" icon="🧬" title="模型流量与状态" meta={`总请求数 ${fmt(globalRequests)}`} theme={theme} accent={theme.accent3}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 8 }}>模型用量排行与占比</div>
+                    {modelStats.length === 0 ? (
+                      <EmptyHint icon="📊" text="暂无分布数据" theme={theme} height={90} />
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {modelStats.slice(0, 5).map(m => (
+                          <div key={m.model} style={{ padding: '8px 10px', borderRadius: 10, background: theme.inset.background, border: theme.inset.border }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 5 }}>
+                              <span style={{ fontWeight: 600, color: theme.text.hi, fontFamily: 'ui-monospace,monospace' }}>{m.label}</span>
+                              <span style={{ color: theme.text.sub, fontFamily: 'ui-monospace,monospace' }}>{fmt(m.used)} 次 ({m.percent.toFixed(1)}%)</span>
+                            </div>
+                            <div style={{ height: 6, borderRadius: 3, background: theme.ring, overflow: 'hidden' }}>
+                              <div style={{
+                                width: `${Math.min(m.percent, 100)}%`, height: '100%', borderRadius: 3,
+                                background: m.color, transition: 'width .8s ease',
+                              }} />
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                      {item.avgLatency != null && (
-                        <span style={{
-                          fontSize: '10px', padding: '3px 8px', borderRadius: '6px',
-                          backgroundColor: item.avgLatency > 3000 ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
-                          color: item.avgLatency > 3000 ? '#ef4444' : '#f59e0b',
-                          border: `1px solid ${item.avgLatency > 3000 ? 'rgba(239,68,68,0.2)' : 'rgba(245,158,11,0.2)'}`,
-                        }}>⏱ {item.avgLatency}ms</span>
-                      )}
-                      {item.errorRate > 0 && (
-                        <span style={{
-                          fontSize: '10px', padding: '3px 8px', borderRadius: '6px',
-                          backgroundColor: 'rgba(239,68,68,0.12)', color: '#ef4444',
-                          border: '1px solid rgba(239,68,68,0.2)',
-                        }}>⚠ {item.errorRate}%</span>
-                      )}
+                  </div>
+
+                  <div style={{ paddingTop: 12, borderTop: `1px solid ${theme.grid}` }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 9 }}>HTTP 响应状态构成</div>
+                    <StatusBar counts={statusCounts} theme={theme} />
+                  </div>
+                </div>
+              </Panel>
+
+              {/* 请求日志 (Recent + Slow) */}
+              <div id="sec-logs" style={{ scrollMarginTop: 78 }}>
+                <Panel id="logs" icon="📋" title="最近请求与慢请求" meta={`重试: ${retryCount} 次`} theme={theme} accent={theme.accent}>
+                  <div style={{ maxHeight: 380, overflowY: 'auto', paddingRight: 4 }} className="db-scroll">
+                    {filteredRecent.length === 0 ? (
+                      <EmptyHint icon="📭" text={selectedModel ? `模型 ${selectedModel} 暂无请求` : '暂无请求日志'} sub="向代理发送 API 请求后，实时记录将展示在这里" theme={theme} height={160} />
+                    ) : (
+                      filteredRecent.slice(0, 24).map((r, i) => {
+                        const lbl = getStatusLabel(r.status);
+                        const ua = parseUserAgent(r.ua);
+                        return (
+                          <LogRow key={i} time={formatTime(r.ts)} badge={r.status || '200'} badgeColor={lbl.color}
+                            label={`${shortModel(r.model)} · ${ua.icon} ${ua.type}`}
+                            meta={r.latency != null ? `${r.latency}ms` : undefined} theme={theme} />
+                        );
+                      })
+                    )}
+                  </div>
+                </Panel>
+              </div>
+
+            </div>
+          </div>
+
+          {/* 错误分析 + 系统状态 */}
+          <div style={{ marginTop: 22 }} id="sec-errors" style={{ scrollMarginTop: 78 }}>
+            <div className="db-split" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+              
+              {/* 错误分析 */}
+              <Panel id="errors" icon="🚨" title="错误日志与时序分布" meta={`今日错误数: ${errorCount}`} theme={theme} accent={theme.err}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>错误时序热力 (24h)</div>
+                    <HeatStrip series={errorHeat} theme={theme} />
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }} className="db-scroll">
+                    {errors?.errors?.length === 0 ? (
+                      <EmptyHint icon="✨" text="今日零错误，系统运行稳健" sub="任何 API 拦截或 upstream 4xx/5xx 会实时记录在此" theme={theme} height={130} />
+                    ) : (
+                      errors?.errors?.slice(0, 15).map((e, i) => {
+                        const lbl = getStatusLabel(e.status);
+                        return (
+                          <LogRow key={i} time={formatTime(e.ts)} badge={e.status || 'Err'} badgeColor={lbl.color}
+                            label={`${shortModel(e.model)}: ${e.message || '未知错误'}`}
+                            meta={e.ip || undefined} theme={theme} />
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </Panel>
+
+              {/* 系统状态 */}
+              <div id="sec-system" style={{ scrollMarginTop: 78 }}>
+                <Panel id="system" icon="🔗" title="系统健康与状态速查" meta="Vercel + Cloudflare" theme={theme} accent={theme.accent2}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                    <div style={{ padding: 12, borderRadius: 12, background: theme.inset.background, border: theme.inset.border }}>
+                      <div style={{ fontSize: 11, color: theme.text.muted, marginBottom: 4 }}>Gemini API 上游</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 700, color: theme.text.hi }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: health?.gemini?.status === 'ok' ? theme.ok : theme.err, boxShadow: `0 0 6px ${health?.gemini?.status === 'ok' ? theme.ok : theme.err}` }} />
+                        {health?.gemini?.status === 'ok' ? '正常' : '异常'}
+                        {health?.gemini?.latency && <span style={{ fontSize: 11, fontWeight: 400, color: theme.text.muted }}>({health.gemini.latency}ms)</span>}
+                      </div>
+                    </div>
+                    <div style={{ padding: 12, borderRadius: 12, background: theme.inset.background, border: theme.inset.border }}>
+                      <div style={{ fontSize: 11, color: theme.text.muted, marginBottom: 4 }}>Upstash Redis</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 700, color: theme.text.hi }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: health?.redis?.status === 'ok' ? theme.ok : theme.err, boxShadow: `0 0 6px ${health?.redis?.status === 'ok' ? theme.ok : theme.err}` }} />
+                        {health?.redis?.status === 'ok' ? '正常' : '离线 / 未配置'}
+                        {health?.redis?.latency && <span style={{ fontSize: 11, fontWeight: 400, color: theme.text.muted }}>({health.redis.latency}ms)</span>}
+                      </div>
                     </div>
                   </div>
 
-                  {/* 配额预测条（底部） */}
-                  {item.prediction && !item.prediction.exhausted && (
-                    <div style={{
-                      position: 'absolute', bottom: '0', left: '0', right: '0',
-                      padding: '3px 14px',
-                      background: item.prediction.minutes < 120 
-                        ? 'linear-gradient(90deg, rgba(239,68,68,0.1), transparent)'
-                        : item.prediction.minutes < 240
-                          ? 'linear-gradient(90deg, rgba(245,158,11,0.1), transparent)'
-                          : 'linear-gradient(90deg, rgba(34,197,94,0.1), transparent)',
-                      fontSize: '10px', color: item.prediction.minutes < 120 ? '#ef4444' : item.prediction.minutes < 240 ? '#f59e0b' : '#22c55e',
-                      display: 'flex', alignItems: 'center', gap: '4px',
-                    }}>
-                      🔮 预计 {formatDuration(item.prediction.minutes)} 后耗尽
-                    </div>
-                  )}
-                  {item.prediction?.exhausted && (
-                    <div style={{
-                      position: 'absolute', bottom: '0', left: '0', right: '0',
-                      padding: '3px 14px',
-                      background: 'linear-gradient(90deg, rgba(239,68,68,0.1), transparent)',
-                      fontSize: '10px', color: '#ef4444',
-                      display: 'flex', alignItems: 'center', gap: '4px', fontWeight: '600',
-                    }}>
-                      ⚠ 配额已耗尽
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </>}</div>
-
-        {/* ====== 最近请求（全宽） ====== */}
-        <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
-          {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3,4,5].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '28px', height: '28px', borderRadius: '9px',
-                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
-              }}>📋</span>
-              最近请求
-              {selectedModel && <span style={{ fontSize: '11px', fontWeight: '400', color: '#6366f1' }}>筛选: {selectedModel}</span>}
-            </h2>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {retryCount > 0 && (
-                <span style={{
-                  fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
-                  backgroundColor: '#f59e0b18', color: '#f59e0b',
-                  border: '1px solid #f59e0b30', fontWeight: '600'
-                }}>
-                  重试 {retryCount} 次
-                </span>
-              )}
-            </div>
-          </div>
-          <div style={{ maxHeight: '300px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
-            {(selectedModel ? filteredRecent : recent?.recent)?.length > 0
-              ? (selectedModel ? filteredRecent : recent?.recent).slice(0, 20).map((r, i) => {
-                  const label = getStatusLabel(r.status);
-                  const uaInfo = r.ua ? parseUserAgent(r.ua) : null;
-                  return (
-                    <LogRow key={i} time={formatTime(r.ts)} badge={r.status}
-                      label={`${shortModel(r.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}`}
-                      badgeColor={label.color}
-                      sub={r.ip ? r.ip : (r.latency != null ? `${r.latency}ms` : undefined)}
-                      color={label.color} theme={theme} />
-                  );
-                })
-              : <EmptyCard emoji={selectedModel ? "🔍" : "📭"} text={selectedModel ? '该模型暂无请求记录' : '暂无请求记录'} sub={selectedModel ? '切换到「全部模型」可查看所有请求' : '当你发送 API 请求后，这里会实时显示'} tips={selectedModel ? '试试切换模型筛选' : '请求数据每 30 秒自动刷新'} theme={theme} />}
-          </div>
-          </>}
-        </div>
-
-        {/* ====== 慢请求 TOP 10（全宽） ====== */}
-        <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
-          {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '28px', height: '28px', borderRadius: '9px',
-                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
-              }}>🐢</span>
-              慢请求 TOP 10
-            </h2>
-            {recent?.slowRequests?.length > 0 && (
-              <span style={{
-                fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
-                backgroundColor: '#f59e0b18', color: '#f59e0b',
-                border: '1px solid #f59e0b30', fontWeight: '600'
-              }}>
-                ≥ 10s · 共 {recent.slowRequests.length} 条
-              </span>
-            )}
-          </div>
-          <div style={{ maxHeight: '300px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
-            {recent?.slowRequests?.length > 0
-              ? recent.slowRequests.slice(0, 10).map((s, i) => {
-                  const uaInfo = s.ua ? parseUserAgent(s.ua) : null;
-                  const latColor = s.latency >= 20000 ? '#ef4444' : '#f59e0b';
-                  const latText = s.latency != null ? `${(s.latency / 1000).toFixed(1)}s` : '—';
-                  return (
-                    <LogRow key={i} time={formatTime(s.ts)} badge={latText}
-                      label={`${shortModel(s.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}`}
-                      badgeColor={latColor}
-                      sub={`${s.status != null ? s.status : ''}${s.ip ? ` · ${s.ip}` : ''}` || undefined}
-                      color={latColor} theme={theme} />
-                  );
-                })
-              : <EmptyCard emoji="⚡" text="暂无慢请求，响应都很快" sub="延迟 ≥ 10 秒的请求会记录在这里，最多保留最慢 50 条" tips="慢请求数据每 30 秒自动刷新" theme={theme} />}
-          </div>
-          </>}
-        </div>
-
-        {/* ====== 双列：错误日志 + status 码 ====== */}
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-          {/* 错误日志 */}
-          <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
-            {showSkeleton ? <div>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '28px', height: '28px', borderRadius: '9px',
-                  background: 'linear-gradient(135deg, #ef4444, #f59e0b)',
-                  fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(239,68,68,0.4), 0 2px 6px rgba(239,68,68,0.3)' : '0 2px 6px rgba(239,68,68,0.3)',
-                }}>🚨</span>
-                错误日志
-              </h2>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                {errors?.errorBreakdown && (
-                  <>
-                    <span style={{
-                      fontSize: '10px', padding: '2px 8px', borderRadius: '12px',
-                      backgroundColor: '#f59e0b18', color: '#f59e0b',
-                      border: '1px solid #f59e0b40', fontWeight: '600'
-                    }}>客户端 {errors.errorBreakdown.client4xx || 0}</span>
-                    <span style={{
-                      fontSize: '10px', padding: '2px 8px', borderRadius: '12px',
-                      backgroundColor: '#ef444418', color: '#ef4444',
-                      border: '1px solid #ef444440', fontWeight: '600'
-                    }}>服务端 {errors.errorBreakdown.server5xx || 0}</span>
-                  </>
-                )}
-                {errorCount > 0 && (
-                  <span style={{
-                    fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
-                    backgroundColor: '#ef444418', color: '#ef4444',
-                    border: '1px solid #ef444430', fontWeight: '600'
-                  }}>共 {errorCount} 条</span>
-                )}
-              </div>
-            </div>
-            <div style={{ maxHeight: '280px', overflowY: 'auto', scrollbarWidth: 'thin' }}>
-              {errors?.errors?.length > 0
-                ? errors.errors.slice(0, 20).map((e, i) => {
-                    const label = getStatusLabel(e.status);
-                    const uaInfo = e.ua ? parseUserAgent(e.ua) : null;
-                    return (
-                      <LogRow key={i} time={formatTime(e.ts)} badge={e.status}
-                        label={`${shortModel(e.model)}${uaInfo ? ` · ${uaInfo.icon} ${uaInfo.type}` : ''}${e.message ? ` · ${e.message}` : ''}`}
-                        badgeColor={label.color}
-                        sub={e.ip ? e.ip : (e.latency != null ? `${e.latency}ms` : undefined)}
-                        color={label.color} theme={theme} />
-                    );
-                  })
-                : <EmptyCard emoji="✅" text="今日无错误，一切正常" sub="系统运行状态良好，继续保持" tips="有拦截或错误请求时会自动记录在此" theme={theme} />}
-            </div>
-          </>}</div>
-
-          {/* HTTP 状态码速查 + Gemini/Redis 状态 */}
-          <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '28px', height: '28px', borderRadius: '9px',
-                  background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                  fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
-                }}>🔗</span>
-                系统状态
-              </h2>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-              <div style={{
-                padding: '14px', borderRadius: '10px',
-                backgroundColor: theme.bar.bg,
-                border: health?.redis?.status === 'ok' ? '1px solid #22c55e30' : '1px solid #ef444430'
-              }}>
-                <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>Gemini API</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{
-                    width: '8px', height: '8px', borderRadius: '50%',
-                    backgroundColor: health?.gemini?.status === 'ok' ? '#22c55e' : '#ef4444',
-                    boxShadow: `0 0 6px ${health?.gemini?.status === 'ok' ? '#22c55e60' : '#ef444460'}`
-                  }} />
-                  <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>
-                    {health?.gemini?.status === 'ok' ? '正常' : '异常'}
-                  </span>
-                  {health?.gemini?.latency && (
-                    <span style={{ fontSize: '11px', color: theme.text.muted }}>
-                      {health.gemini.latency}ms
-                    </span>
-                  )}
-                </div>
-                {health?.gemini?.message && (
-                  <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '4px' }}>{health.gemini.message}</div>
-                )}
-              </div>
-              <div style={{
-                padding: '14px', borderRadius: '10px',
-                backgroundColor: theme.bar.bg,
-                border: health?.redis?.status === 'ok' ? '1px solid #22c55e30' : health?.redis?.status === 'warn' ? '1px solid #f59e0b30' : '1px solid #ef444430'
-              }}>
-                <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>Redis</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{
-                    width: '8px', height: '8px', borderRadius: '50%',
-                    backgroundColor: health?.redis?.status === 'ok' ? '#22c55e' : health?.redis?.status === 'warn' ? '#f59e0b' : '#ef4444',
-                    boxShadow: `0 0 6px ${health?.redis?.status === 'ok' ? '#22c55e60' : health?.redis?.status === 'warn' ? '#f59e0b60' : '#ef444460'}`
-                  }} />
-                  <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>
-                    {health?.redis?.status === 'ok' ? '正常' : health?.redis?.status === 'warn' ? '异常' : '离线'}
-                  </span>
-                  {health?.redis?.latency && (
-                    <span style={{ fontSize: '11px', color: theme.text.muted }}>
-                      {health.redis.latency}ms
-                    </span>
-                  )}
-                </div>
-                {health?.redis?.message && (
-                  <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '4px' }}>{health.redis.message}</div>
-                )}
-              </div>
-            </div>
-
-            {/* HTTP 状态码 */}
-            <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main, marginBottom: '10px' }}>
-              📖 HTTP 状态码速查
-            </div>
-            <div style={{
-              display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px'
-            }}>
-              {Object.entries(HTTP_STATUS_DESC).map(([code, desc]) => {
-                const c = parseInt(code);
-                const color = c >= 500 ? '#ef4444' : c >= 400 ? '#f59e0b' : '#22c55e';
-                return (
-                  <div key={code} style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    padding: '6px 10px', borderRadius: '6px',
-                    backgroundColor: theme.bar.bg, fontSize: '12px'
-                  }}>
-                    <span style={{
-                      padding: '1px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700',
-                      fontFamily: 'monospace', backgroundColor: `${color}18`, color,
-                      border: `1px solid ${color}30`
-                    }}>{code}</span>
-                    <span style={{ color: theme.text.sub }}>{desc}</span>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 8 }}>HTTP 状态码速查</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 6 }}>
+                    {Object.entries(HTTP_STATUS_DESC).map(([c, desc]) => {
+                      const code = parseInt(c);
+                      const col = code >= 500 ? theme.err : code >= 400 ? theme.warn : theme.ok;
+                      return (
+                        <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 8px', borderRadius: 6, background: theme.inset.background, fontSize: 11 }}>
+                          <span style={{ padding: '1px 6px', borderRadius: 4, fontFamily: 'ui-monospace,monospace', fontWeight: 700, background: col + '1f', color: col, border: `1px solid ${col}33` }}>{c}</span>
+                          <span style={{ color: theme.text.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{desc}</span>
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                </Panel>
+              </div>
+
             </div>
           </div>
-        </div>
 
-        {/* ====== 运行概览（替代原 Cherry 模拟面板，使用真实统计数据） ====== */}
-        <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', marginBottom: '20px', ...theme.card }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '28px', height: '28px', borderRadius: '9px',
-                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
-                fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
-              }}>📈</span>
-              运行概览
-            </h2>
-            {quota?.data?.some(m => m.percent > 90) && (
-              <span style={{
-                fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
-                backgroundColor: '#ef444418', color: '#ef4444',
-                border: '1px solid #ef444430', fontWeight: '600',
-                animation: 'pulse-glow 2s ease-in-out infinite',
-              }}>⚠ 有模型接近配额上限</span>
-            )}
-          </div>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: '12px',
+          {/* ============ Footer ============ */}
+          <footer style={{
+            display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16,
+            paddingTop: 28, marginTop: 16, borderTop: `1px solid ${theme.grid}`,
+            color: theme.text.muted, fontSize: 12, fontFamily: 'ui-monospace,monospace',
           }}>
-            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
-              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>请求成功率</div>
-              <div style={{ fontSize: '22px', fontWeight: '800', color: '#22c55e', fontFamily: 'monospace' }}>
-                {successCount > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100'}%
-              </div>
-              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>{successCount.toLocaleString()} / {globalRequests.toLocaleString()} 次</div>
-            </div>
-            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
-              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>活跃模型</div>
-              <div style={{ fontSize: '22px', fontWeight: '800', color: '#6366f1', fontFamily: 'monospace' }}>{quota?.data?.length || 0}</div>
-              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>有请求记录的模型数</div>
-            </div>
-            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
-              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>平均延迟</div>
-              <div style={{ fontSize: '22px', fontWeight: '800', color: '#f59e0b', fontFamily: 'monospace' }}>
-                {avgLatency ? Math.round(avgLatency) : '—'}<span style={{ fontSize: '12px', fontWeight: '500' }}>ms</span>
-              </div>
-              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>所有模型综合</div>
-            </div>
-            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
-              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>最高用量模型</div>
-              <div style={{ fontSize: '16px', fontWeight: '800', color: '#8b5cf6', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {modelDistribution[0]?.label || '—'}
-              </div>
-              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>
-                {modelDistribution[0] ? `${(modelDistribution[0].percent || 0).toFixed(0)}% 已用` : '暂无数据'}
-              </div>
-            </div>
-          </div>
+            <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer" style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>
+              GitHub 仓库
+            </a>
+            <span>·</span>
+            <span>Gemini 透明代理 (Vercel + CF Workers)</span>
+            <span>·</span>
+            <span>方案 C 监控大屏</span>
+          </footer>
+
         </div>
-
-        {/* ====== Footer ====== */}
-        <footer style={{
-          display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px',
-          paddingTop: '24px', marginTop: '8px',
-          borderTop: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.06)'}`,
-          color: theme.text.muted, fontSize: '12px'
-        }}>
-          <a href="https://github.com/JE668/gemini-transparent-proxy" target="_blank" rel="noopener noreferrer"
-            style={{ color: '#6366f1', textDecoration: 'none', fontWeight: '500' }}>
-            GitHub
-          </a>
-          <span>·</span>
-          <span>Gemini 透明代理</span>
-          <span>·</span>
-          <span>Vercel Edge</span>
-        </footer>
-
-        {/* 全局 CSS */}
-        <style>{`
-          @keyframes spin { to { transform: rotate(360deg); } }
-          @keyframes shimmer { 
-            0% { transform: translateX(-100%); } 
-            100% { transform: translateX(100%); } 
-          }
-          @keyframes pulse-glow { 
-            0%, 100% { opacity: 0.5; transform: scale(1); } 
-            50% { opacity: 0.8; transform: scale(1.1); } 
-          }
-          @keyframes float { 
-            0%, 100% { transform: translateY(0); } 
-            50% { transform: translateY(-10px); } 
-          }
-          @keyframes slide-up { 
-            from { opacity: 0; transform: translateY(30px); } 
-            to { opacity: 1; transform: translateY(0); } 
-          }
-          @keyframes shake { 
-            0%, 100% { transform: translateX(0); } 
-            25% { transform: translateX(-8px); } 
-            75% { transform: translateX(8px); } 
-          }
-          ::-webkit-scrollbar { width: 6px; height: 6px; }
-          ::-webkit-scrollbar-track { background: transparent; }
-          ::-webkit-scrollbar-thumb { 
-            background: ${darkCheck(theme)} ? '#334155' : '#cbd5e1'; 
-            border-radius: 3px;
-            transition: background 0.2s ease;
-          }
-          ::-webkit-scrollbar-thumb:hover { 
-            background: ${darkCheck(theme)} ? '#475569' : '#94a3b8'; 
-          }
-          @media (max-width: 768px) {
-            body > div > div > div { padding: 16px 12px !important; }
-            /* 标题字体缩小 */
-            h1 { font-size: 20px !important; }
-            h2 { font-size: 15px !important; }
-            /* 状态栏紧凑 */
-            [class*=\"metric-card\"] { padding: 10px 8px !important; }
-            [class*=\"metric-value\"] { font-size: 16px !important; }
-            /* 图表高度减小 */
-            svg[height=\"180\"] { height: 140px !important; }
-            /* 卡片内边距减小 */
-            [style*=\"padding: 20px\"] { padding: 14px !important; }
-          }
-          @media (max-width: 480px) {
-            /* 超小屏幕进一步优化 */
-            body > div > div > div { padding: 12px 8px !important; }
-            h1 { font-size: 18px !important; }
-            h2 { font-size: 14px !important; }
-            /* 隐藏次要信息 */
-            [style*=\"fontSize: '11px'\"] { display: none !important; }
-            /* 简化统计卡片 */
-            [style*=\"gridTemplateColumns: '1fr 1fr 1fr'\"] { 
-              grid-template-columns: 1fr !important; 
-              gap: 8px !important; 
-            }
-            /* 慢请求列表简化 */
-            [style*=\"minWidth: '70px'\"] { display: none !important; }
-            [style*=\"minWidth: '80px'\"] { min-width: 60px !important; font-size: 12px !important; }
-          }
-          @media (max-width: 860px) {
-            [style*="grid-template-columns: 1fr 1fr"] {
-              grid-template-columns: 1fr !important;
-            }
-          }
-        `}</style>
-      </div>
+      </main>
     </div>
   );
 }
