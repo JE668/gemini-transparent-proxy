@@ -16,10 +16,15 @@ const styles = `
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 @keyframes ring-fill { from { stroke-dashoffset: var(--circ); } to { stroke-dashoffset: var(--off); } }
+@keyframes grid-drift { from { background-position: 0 0; } to { background-position: 48px 48px; } }
+@keyframes aurora-shift { 0%,100% { transform: translate(0,0) scale(1); opacity: 0.55; } 33% { transform: translate(30px,-20px) scale(1.12); opacity: 0.7; } 66% { transform: translate(-20px,25px) scale(0.95); opacity: 0.5; } }
+@keyframes scanline { 0% { transform: translateY(-100%); } 100% { transform: translateY(100vh); } }
+@keyframes corner-pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+@keyframes num-tick { 0%,100% { opacity: 1; } 50% { opacity: 0.85; } }
 .dashboard-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
 .dashboard-scroll::-webkit-scrollbar-track { background: transparent; }
-.dashboard-scroll::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 2px; }
-.dashboard-scroll::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
+.dashboard-scroll::-webkit-scrollbar-thumb { background: rgba(34,211,238,0.3); border-radius: 2px; }
+.dashboard-scroll::-webkit-scrollbar-thumb:hover { background: rgba(34,211,238,0.5); }
 `;
 
 // =============================================================================
@@ -178,22 +183,26 @@ const parseUserAgent = (ua) => {
 // =============================================================================
 const getTheme = (dark) => ({
   page: { 
-    backgroundColor: dark ? '#0b1121' : '#f0f5ff', 
-    color: dark ? '#e2e8f0' : '#0f172a',
+    backgroundColor: dark ? '#050914' : '#eef2ff', 
+    color: dark ? '#cbd5e1' : '#0f172a',
     backgroundGradient: dark 
-      ? 'radial-gradient(circle at 20% 30%, rgba(99,102,241,0.08) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(139,92,246,0.06) 0%, transparent 50%)'
-      : 'radial-gradient(circle at 20% 30%, rgba(99,102,241,0.04) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(139,92,246,0.03) 0%, transparent 50%)'
+      ? 'radial-gradient(ellipse 60% 50% at 15% 10%, rgba(34,211,238,0.10) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 85% 25%, rgba(99,102,241,0.12) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.08) 0%, transparent 55%)'
+      : 'radial-gradient(ellipse 60% 50% at 15% 10%, rgba(34,211,238,0.06) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 85% 25%, rgba(99,102,241,0.07) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.05) 0%, transparent 55%)'
   },
   card: {
-    backgroundColor: dark ? '#131c31' : 'white',
-    border: dark ? '1px solid rgba(99,102,241,0.15)' : '1px solid rgba(99,102,241,0.1)',
-    boxShadow: dark ? '0 4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)' : '0 4px 24px rgba(99,102,241,0.06), inset 0 1px 0 rgba(255,255,255,0.8)',
+    backgroundColor: dark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.72)',
+    border: dark ? '1px solid rgba(34,211,238,0.14)' : '1px solid rgba(99,102,241,0.12)',
+    boxShadow: dark ? '0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(34,211,238,0.04), inset 0 1px 0 rgba(255,255,255,0.06)' : '0 8px 32px rgba(99,102,241,0.07), inset 0 1px 0 rgba(255,255,255,0.8)',
   },
   text: { main: dark ? '#f1f5f9' : '#0f172a', sub: dark ? '#94a3b8' : '#475569', muted: dark ? '#64748b' : '#94a3b8' },
-  bar: { bg: dark ? '#1e293b' : '#f1f5f9' },
-  input: { backgroundColor: dark ? '#0f172a' : 'white', border: dark ? '1px solid #1e293b' : '1px solid #e2e8f0', color: dark ? '#f1f5f9' : '#0f172a' },
-  glow: dark ? '0 0 20px rgba(99,102,241,0.12)' : '0 0 20px rgba(99,102,241,0.08)',
-  neonGlow: dark ? '0 0 8px rgba(99,102,241,0.4), 0 0 16px rgba(99,102,241,0.2)' : '0 0 8px rgba(99,102,241,0.2), 0 0 16px rgba(99,102,241,0.1)',
+  bar: { bg: dark ? 'rgba(30,41,59,0.6)' : '#f1f5f9' },
+  input: { backgroundColor: dark ? 'rgba(2,6,23,0.6)' : 'white', border: dark ? '1px solid rgba(34,211,238,0.2)' : '1px solid #e2e8f0', color: dark ? '#f1f5f9' : '#0f172a' },
+  glow: dark ? '0 0 24px rgba(34,211,238,0.10)' : '0 0 24px rgba(99,102,241,0.07)',
+  neonGlow: dark ? '0 0 8px rgba(34,211,238,0.35), 0 0 20px rgba(99,102,241,0.18)' : '0 0 8px rgba(99,102,241,0.2), 0 0 16px rgba(99,102,241,0.1)',
+  // BI 大屏强调色：霓虹青 → 靛蓝 → 紫
+  accent: dark ? '#22d3ee' : '#6366f1',
+  accent2: dark ? '#6366f1' : '#8b5cf6',
+  gridLine: dark ? 'rgba(34,211,238,0.05)' : 'rgba(99,102,241,0.05)',
 });
 
 // =============================================================================
@@ -259,11 +268,11 @@ function SparklineChart({ data, width = 700, height = 180, theme, yesterdayData 
       >
         <defs>
           <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#6366f1" stopOpacity="0.25" />
-            <stop offset="100%" stopColor="#6366f1" stopOpacity="0.02" />
+            <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.30" />
+            <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.02" />
           </linearGradient>
           <filter id="glowFilter">
-            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feGaussianBlur stdDeviation="2.5" result="blur" />
             <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
@@ -290,7 +299,7 @@ function SparklineChart({ data, width = 700, height = 180, theme, yesterdayData 
         )}
       
         {/* 折线 */}
-        <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5"
+        <path d={linePath} fill="none" stroke="#22d3ee" strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round" filter="url(#glowFilter)" />
 
         {/* X 轴标签 */}
@@ -524,15 +533,23 @@ function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, 
         </span>
       )}
       
-      {/* 顶部装饰条 */}
-      {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '18px 18px 0 0' }} />}
+      {/* 顶部装饰条 - 选中时发光 */}
+      {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '18px 18px 0 0', boxShadow: `0 0 12px ${color}` }} />}
+      {!selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '1px', background: `linear-gradient(90deg, transparent, ${color}40, transparent)`, borderRadius: '18px 18px 0 0', opacity: 0.5 }} />}
+      
+      {/* 四角装饰括号（BI 大屏元素，hover 时增强） */}
+      <div style={{ position: 'absolute', top: 8, left: 8, width: 10, height: 10, borderTop: `1px solid ${color}50`, borderLeft: `1px solid ${color}50`, borderRadius: '2px 0 0 0', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite' }} />
+      <div style={{ position: 'absolute', top: 8, right: 8, width: 10, height: 10, borderTop: `1px solid ${color}50`, borderRight: `1px solid ${color}50`, borderRadius: '0 2px 0 0', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite 0.5s' }} />
+      <div style={{ position: 'absolute', bottom: 8, left: 8, width: 10, height: 10, borderBottom: `1px solid ${color}50`, borderLeft: `1px solid ${color}50`, borderRadius: '0 0 0 2px', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite 1s' }} />
+      <div style={{ position: 'absolute', bottom: 8, right: 8, width: 10, height: 10, borderBottom: `1px solid ${color}50`, borderRight: `1px solid ${color}50`, borderRadius: '0 0 2px 0', opacity: 0.7, animation: 'corner-pulse 3s ease-in-out infinite 1.5s' }} />
       
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <span style={{
-          width: '42px', height: '42px', borderRadius: '12px', flexShrink: 0,
+          width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `linear-gradient(135deg, ${color}22, ${color}0d)`,
-          border: `1px solid ${color}30`,
+          background: `linear-gradient(135deg, ${color}26, ${color}0d)`,
+          border: `1px solid ${color}40`,
+          boxShadow: `0 0 14px ${color}20`,
           fontSize: '22px',
         }}>{icon}</span>
         <span style={{
@@ -1067,45 +1084,58 @@ function DashboardContent() {
         background: 'linear-gradient(135deg, #0b1121 0%, #1a1f3a 30%, #0f172a 70%, #0b1121 100%)',
         position: 'relative', overflow: 'hidden'
       }}>
-        {/* 背景装饰光晕 */}
+        {/* 背景装饰光晕 - 动态极光 */}
         <div style={{
           position: 'absolute', top: '-30%', right: '-20%', width: '800px', height: '800px',
-          borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 60%)',
-          pointerEvents: 'none', animation: 'pulse-glow 8s ease-in-out infinite'
+          borderRadius: '50%', background: 'radial-gradient(circle, rgba(34,211,238,0.12) 0%, transparent 60%)',
+          pointerEvents: 'none', animation: 'aurora-shift 16s ease-in-out infinite'
         }} />
         <div style={{
           position: 'absolute', bottom: '-40%', left: '-10%', width: '600px', height: '600px',
           borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.12) 0%, transparent 60%)',
-          pointerEvents: 'none', animation: 'pulse-glow 6s ease-in-out infinite reverse'
+          pointerEvents: 'none', animation: 'aurora-shift 22s ease-in-out infinite reverse'
         }} />
         
-        {/* 网格背景 */}
+        {/* 动态网格背景 */}
         <div style={{
           position: 'absolute', inset: 0,
           backgroundImage: `
-            linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px)
+            linear-gradient(rgba(34,211,238,0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(34,211,238,0.05) 1px, transparent 1px)
           `,
-          backgroundSize: '40px 40px',
+          backgroundSize: '48px 48px',
           pointerEvents: 'none',
-          maskImage: 'radial-gradient(circle at center, black 0%, transparent 70%)'
+          animation: 'grid-drift 30s linear infinite',
+          maskImage: 'radial-gradient(circle at center, black 0%, transparent 75%)',
+          WebkitMaskImage: 'radial-gradient(circle at center, black 0%, transparent 75%)'
         }} />
         
         <div style={{
-          background: 'rgba(19,28,49,0.8)', backdropFilter: 'blur(24px)',
-          padding: '56px 48px', borderRadius: '24px', border: '1px solid rgba(99,102,241,0.3)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 0 40px rgba(99,102,241,0.1), inset 0 1px 0 rgba(255,255,255,0.1)',
+          background: 'rgba(15,23,42,0.7)', backdropFilter: 'blur(28px)',
+          padding: '56px 48px', borderRadius: '26px', border: '1px solid rgba(34,211,238,0.25)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.5), 0 0 50px rgba(34,211,238,0.12), 0 0 30px rgba(99,102,241,0.1), inset 0 1px 0 rgba(255,255,255,0.08)',
           width: '100%', maxWidth: '400px',
           position: 'relative', zIndex: 1,
-          animation: 'slide-up 0.6s ease-out'
+          animation: 'slide-up 0.6s ease-out',
         }}>
+          {/* 登录卡顶部发光细线 */}
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
+            background: 'linear-gradient(90deg, transparent, #22d3ee, #6366f1, #8b5cf6, transparent)',
+            borderRadius: '26px 26px 0 0', opacity: 0.8,
+          }} />
+          {/* 四角装饰 */}
+          <div style={{ position: 'absolute', top: 12, left: 12, width: 14, height: 14, borderTop: '2px solid rgba(34,211,238,0.4)', borderLeft: '2px solid rgba(34,211,238,0.4)', borderRadius: '3px 0 0 0' }} />
+          <div style={{ position: 'absolute', top: 12, right: 12, width: 14, height: 14, borderTop: '2px solid rgba(34,211,238,0.4)', borderRight: '2px solid rgba(34,211,238,0.4)', borderRadius: '0 3px 0 0' }} />
+          <div style={{ position: 'absolute', bottom: 12, left: 12, width: 14, height: 14, borderBottom: '2px solid rgba(34,211,238,0.4)', borderLeft: '2px solid rgba(34,211,238,0.4)', borderRadius: '0 0 0 3px' }} />
+          <div style={{ position: 'absolute', bottom: 12, right: 12, width: 14, height: 14, borderBottom: '2px solid rgba(34,211,238,0.4)', borderRight: '2px solid rgba(34,211,238,0.4)', borderRadius: '0 0 3px 0' }} />
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
             <div style={{
               width: '72px', height: '72px', borderRadius: '22px', margin: '0 auto 16px',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
               fontSize: '36px',
-              boxShadow: '0 12px 36px rgba(99,102,241,0.5), 0 0 40px rgba(99,102,241,0.2)',
+              boxShadow: '0 12px 36px rgba(34,211,238,0.4), 0 0 40px rgba(99,102,241,0.3)',
               animation: 'float 3s ease-in-out infinite',
             }}>🛡️</div>
             <h2 style={{ color: '#f1f5f9', margin: 0, fontSize: '25px', fontWeight: '800', letterSpacing: '-0.02em' }}>代理监控控制台</h2>
@@ -1218,18 +1248,45 @@ function DashboardContent() {
       fontFamily: '"Inter", system-ui, -apple-system, "PingFang SC", sans-serif',
       backgroundImage: theme.page.backgroundGradient,
       backgroundAttachment: 'fixed',
+      position: 'relative',
+      overflow: 'hidden',
     }}>
-      {/* 背景装饰 - 保留但简化 */}
+      {/* BI 大屏背景层：动态网格点阵 */}
       <div style={{
-        position: 'fixed', top: '-50%', right: '-20%', width: '600px', height: '600px',
-        borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.05) 0%, transparent 70%)',
-        pointerEvents: 'none', zIndex: 0
+        position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0,
+        backgroundImage: `
+          linear-gradient(${theme.gridLine} 1px, transparent 1px),
+          linear-gradient(90deg, ${theme.gridLine} 1px, transparent 1px)
+        `,
+        backgroundSize: '48px 48px',
+        animation: 'grid-drift 30s linear infinite',
+        maskImage: 'radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 90%)',
+        WebkitMaskImage: 'radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 90%)',
+      }} />
+      {/* 极光光晕 */}
+      <div style={{
+        position: 'fixed', top: '-20%', right: '-10%', width: '700px', height: '700px',
+        borderRadius: '50%',
+        background: `radial-gradient(circle, ${dark ? 'rgba(34,211,238,0.10)' : 'rgba(34,211,238,0.06)'} 0%, transparent 70%)`,
+        pointerEvents: 'none', zIndex: 0,
+        animation: 'aurora-shift 18s ease-in-out infinite',
       }} />
       <div style={{
-        position: 'fixed', bottom: '-30%', left: '-10%', width: '400px', height: '400px',
-        borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.04) 0%, transparent 70%)',
-        pointerEvents: 'none', zIndex: 0
+        position: 'fixed', bottom: '-30%', left: '-15%', width: '500px', height: '500px',
+        borderRadius: '50%',
+        background: `radial-gradient(circle, ${dark ? 'rgba(139,92,246,0.10)' : 'rgba(139,92,246,0.05)'} 0%, transparent 70%)`,
+        pointerEvents: 'none', zIndex: 0,
+        animation: 'aurora-shift 24s ease-in-out infinite reverse',
       }} />
+      {/* 扫描线（暗色模式才显示，增强科技感） */}
+      {dark && (
+        <div style={{
+          position: 'fixed', left: 0, right: 0, top: 0, height: '180px',
+          pointerEvents: 'none', zIndex: 0,
+          background: 'linear-gradient(to bottom, transparent, rgba(34,211,238,0.04), transparent)',
+          animation: 'scanline 9s linear infinite',
+        }} />
+      )}
 
       <div style={{ position: 'relative', zIndex: 1, maxWidth: '1360px', margin: '0 auto', padding: isMobile ? '16px 12px' : '28px 24px' }}>
         {/* ====== 顶部导航 ====== */}
@@ -1254,19 +1311,19 @@ function DashboardContent() {
             overflow: 'hidden'
           }}>
             <div style={{
-              width: `${refreshProgress}%`,
-              height: '100%',
-              background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+              width: '100%', height: '100%',
+              background: 'linear-gradient(90deg, #22d3ee, #6366f1, #8b5cf6)',
               transition: 'width 0.3s linear',
+              boxShadow: '0 0 8px rgba(34,211,238,0.4)',
             }} />
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <div style={{
-                width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
+                width: '46px', height: '46px', borderRadius: '14px', flexShrink: 0,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                fontSize: '22px', boxShadow: '0 4px 16px rgba(99,102,241,0.4)',
+                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                fontSize: '23px', boxShadow: dark ? '0 0 20px rgba(34,211,238,0.4), 0 4px 16px rgba(99,102,241,0.4)' : '0 4px 16px rgba(99,102,241,0.4)',
               }}>🛡️</div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1278,7 +1335,7 @@ function DashboardContent() {
                   }} />
                   <h1 style={{ fontSize: isMobile ? '22px' : '26px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
                     Gemini <span style={{ 
-                      background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                      background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
                       WebkitBackgroundClip: 'text',
                       WebkitTextFillColor: 'transparent',
                       backgroundClip: 'text'
@@ -1516,9 +1573,9 @@ function DashboardContent() {
                         <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
                           <span style={{
                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            width: '26px', height: '26px', borderRadius: '8px',
-                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                            fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                            width: '28px', height: '28px', borderRadius: '9px',
+                            background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                            fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
                           }}>📊</span>
                           请求时间线
                           {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
@@ -1600,9 +1657,9 @@ function DashboardContent() {
               <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '26px', height: '26px', borderRadius: '8px',
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                  fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                  width: '28px', height: '28px', borderRadius: '9px',
+                  background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                  fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
                 }}>🧬</span>
                 模型路由分布
                 {quota?.data && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>共 {quota.data.length} 个模型</span>}
@@ -1704,27 +1761,40 @@ function DashboardContent() {
 
         {/* ====== 模型配额监控 ====== */}
         <div style={{
-          marginBottom: '24px',
-          padding: isMobile ? '18px 14px' : '24px',
-          borderRadius: '20px',
+          marginBottom: '28px',
+          padding: isMobile ? '20px 16px' : '28px',
+          borderRadius: '22px',
           background: dark
-            ? 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.03) 50%, rgba(99,102,241,0.05) 100%)'
-            : 'linear-gradient(135deg, rgba(99,102,241,0.05) 0%, rgba(139,92,246,0.02) 50%, rgba(99,102,241,0.04) 100%)',
-          border: `1px solid ${dark ? 'rgba(99,102,241,0.18)' : 'rgba(99,102,241,0.12)'}`,
-          boxShadow: theme.glow,
+            ? 'linear-gradient(135deg, rgba(34,211,238,0.10) 0%, rgba(99,102,241,0.06) 40%, rgba(139,92,246,0.10) 100%)'
+            : 'linear-gradient(135deg, rgba(34,211,238,0.06) 0%, rgba(99,102,241,0.04) 40%, rgba(139,92,246,0.06) 100%)',
+          border: `1px solid ${dark ? 'rgba(34,211,238,0.25)' : 'rgba(99,102,241,0.15)'}`,
+          boxShadow: `${theme.glow}, ${dark ? '0 0 40px rgba(34,211,238,0.06), 0 8px 32px rgba(0,0,0,0.3)' : '0 0 30px rgba(99,102,241,0.05)'}`,
+          position: 'relative',
+          overflow: 'hidden',
         }}>
+          {/* hero 顶部发光细线 */}
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
+            background: 'linear-gradient(90deg, transparent, #22d3ee, #6366f1, #8b5cf6, transparent)',
+            opacity: dark ? 0.8 : 0.5,
+          }} />
+          {/* hero 四角装饰 */}
+          <div style={{ position: 'absolute', top: 10, left: 10, width: 14, height: 14, borderTop: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderLeft: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '3px 0 0 0' }} />
+          <div style={{ position: 'absolute', top: 10, right: 10, width: 14, height: 14, borderTop: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRight: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '0 3px 0 0' }} />
+          <div style={{ position: 'absolute', bottom: 10, left: 10, width: 14, height: 14, borderBottom: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderLeft: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '0 0 0 3px' }} />
+          <div style={{ position: 'absolute', bottom: 10, right: 10, width: 14, height: 14, borderBottom: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRight: `2px solid ${dark ? 'rgba(34,211,238,0.5)' : 'rgba(99,102,241,0.4)'}`, borderRadius: '0 0 3px 0' }} />
           {showSkeleton ? [1,2,3,4].map(i => <SkeletonQuotaCard key={i} theme={theme} />) : <>
           
           <div style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px',
             paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}`,
           }}>
-            <h2 style={{ fontSize: '17px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px', letterSpacing: '-0.01em' }}>
+            <h2 style={{ fontSize: '17px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '10px', letterSpacing: '-0.01em' }}>
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '28px', height: '28px', borderRadius: '8px',
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                fontSize: '15px', boxShadow: '0 2px 8px rgba(99,102,241,0.35)',
+                width: '30px', height: '30px', borderRadius: '9px',
+                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                fontSize: '16px', boxShadow: dark ? '0 0 16px rgba(34,211,238,0.5), 0 2px 8px rgba(99,102,241,0.4)' : '0 2px 8px rgba(99,102,241,0.3)',
               }}>⚡</span>
               模型配额监控
               {quota?.data?.some(m => m.percent > 90) && (
@@ -1769,14 +1839,14 @@ function DashboardContent() {
                   onClick={() => setSelectedModel(isSelected ? null : shortModel(item.model))}
                   style={{
                     borderRadius: '16px', padding: '16px', cursor: 'pointer',
-                    background: isSelected ? `linear-gradient(135deg, ${color}10, ${color}05)` : theme.card.backgroundColor,
+                    background: isSelected ? `linear-gradient(135deg, ${color}12, ${color}05)` : theme.card.backgroundColor,
                     border: isSelected 
                       ? `2px solid ${color}` 
                       : isHigh 
-                        ? `2px solid rgba(239,68,68,0.35)` 
+                        ? `2px solid rgba(239,68,68,0.4)` 
                         : theme.card.border,
                     boxShadow: isSelected 
-                      ? `0 0 20px ${color}10, ${theme.card.boxShadow}`
+                      ? `0 0 24px ${color}20, ${theme.card.boxShadow}`
                       : isHigh
                         ? `0 0 16px rgba(239,68,68,0.15), ${theme.card.boxShadow}`
                         : theme.card.boxShadow,
@@ -1786,6 +1856,7 @@ function DashboardContent() {
                     alignItems: 'center',
                     gap: '14px',
                     overflow: 'hidden',
+                    backdropFilter: dark ? 'blur(8px)' : 'none',
                   }}
                   onMouseEnter={e => { 
                     if (!isSelected) { 
@@ -1897,9 +1968,9 @@ function DashboardContent() {
             <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '26px', height: '26px', borderRadius: '8px',
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                width: '28px', height: '28px', borderRadius: '9px',
+                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
               }}>📋</span>
               最近请求
               {selectedModel && <span style={{ fontSize: '11px', fontWeight: '400', color: '#6366f1' }}>筛选: {selectedModel}</span>}
@@ -1941,9 +2012,9 @@ function DashboardContent() {
             <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '26px', height: '26px', borderRadius: '8px',
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                width: '28px', height: '28px', borderRadius: '9px',
+                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
               }}>🐢</span>
               慢请求 TOP 10
             </h2>
@@ -1985,9 +2056,9 @@ function DashboardContent() {
               <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '26px', height: '26px', borderRadius: '8px',
+                  width: '28px', height: '28px', borderRadius: '9px',
                   background: 'linear-gradient(135deg, #ef4444, #f59e0b)',
-                  fontSize: '13px', boxShadow: '0 2px 6px rgba(239,68,68,0.3)',
+                  fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(239,68,68,0.4), 0 2px 6px rgba(239,68,68,0.3)' : '0 2px 6px rgba(239,68,68,0.3)',
                 }}>🚨</span>
                 错误日志
               </h2>
@@ -2038,9 +2109,9 @@ function DashboardContent() {
               <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '26px', height: '26px', borderRadius: '8px',
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                  fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                  width: '28px', height: '28px', borderRadius: '9px',
+                  background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                  fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
                 }}>🔗</span>
                 系统状态
               </h2>
@@ -2133,9 +2204,9 @@ function DashboardContent() {
             <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '26px', height: '26px', borderRadius: '8px',
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                width: '28px', height: '28px', borderRadius: '9px',
+                background: 'linear-gradient(135deg, #22d3ee, #6366f1, #8b5cf6)',
+                fontSize: '14px', boxShadow: dark ? '0 0 12px rgba(34,211,238,0.4), 0 2px 6px rgba(99,102,241,0.3)' : '0 2px 6px rgba(99,102,241,0.3)',
               }}>📈</span>
               运行概览
             </h2>
