@@ -136,10 +136,10 @@ test('两端限流归属维度一致：都按 API Key 指纹，不按客户端 I
     'CF Worker 不得再按 clientIP 做 TPM 限流');
 });
 
-test('两端 RPM 上限一致：共用 parseRpmLimit，默认 15', async () => {
+test('两端 RPM 上限一致：共用 parseRpmLimit，默认 60', async () => {
   const { parseRpmLimit, DEFAULT_RPM_LIMIT } = await import('../lib/rate-limit.js');
-  assert.equal(DEFAULT_RPM_LIMIT, 15);
-  assert.equal(parseRpmLimit(undefined), 15);
+  assert.equal(DEFAULT_RPM_LIMIT, 60);
+  assert.equal(parseRpmLimit(undefined), 60);
   assert.equal(parseRpmLimit('30'), 30);
   assert.equal(parseRpmLimit('0'), 0, '0 必须表示关闭限流');
   assert.match(cfSource, /parseRpmLimit\(env\.RATE_LIMIT_RPM\)/,

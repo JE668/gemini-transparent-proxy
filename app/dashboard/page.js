@@ -827,11 +827,27 @@ function DashboardContent() {
   const handleLogin = async (e) => {
     e?.preventDefault();
     setAuthError('');
+    if (!password) { setAuthError('请输入访问密码'); return; }
     try {
       const res = await fetch('/api/quota', { headers: { Authorization: `Bearer ${password}` } });
-      if (res.ok) { localStorage.setItem('dashboard_token', password); setAuthed(true); }
-      else { setAuthError('密码错误'); }
-    } catch { setAuthError('连接失败'); }
+      if (res.ok) {
+        localStorage.setItem('dashboard_token', password);
+        setAuthed(true);
+        return;
+      }
+      // 区分各类失败原因，避免一律提示「密码错误」掩盖真实问题
+      if (res.status === 503) {
+        setAuthError('服务端未配置 DASHBOARD_PASSWORD，请到部署平台设置后重新部署');
+      } else if (res.status === 401) {
+        setAuthError('密码错误，请重试');
+      } else if (res.status === 404) {
+        setAuthError('接口不存在（请确认访问的是 Vercel 部署，而非 Cloudflare Worker）');
+      } else {
+        setAuthError(`登录失败（HTTP ${res.status}）`);
+      }
+    } catch {
+      setAuthError('连接失败，请检查网络后重试');
+    }
   };
 
   const authFetch = useCallback(async (url) => {

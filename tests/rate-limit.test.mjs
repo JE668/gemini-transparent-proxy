@@ -72,9 +72,9 @@ class FakeRedis {
 
 const NOW = 1_000_000;
 
-test('parseRpmLimit: 默认 15，非法值视为不限流', () => {
-  assert.equal(parseRpmLimit(undefined), 15);
-  assert.equal(parseRpmLimit(''), 15);
+test('parseRpmLimit: 默认 60，非法值视为不限流', () => {
+  assert.equal(parseRpmLimit(undefined), 60);
+  assert.equal(parseRpmLimit(''), 60);
   assert.equal(parseRpmLimit('30'), 30);
   assert.equal(parseRpmLimit('0'), 0);
   assert.equal(parseRpmLimit('-1'), 0);

@@ -56,7 +56,7 @@ model:
 | 遥测/Redis | ✅ | ✅（Upstash REST 写入，与 Vercel 端共用同一套 key，数据打通） |
 | Dashboard | ✅ | 遥测共用（由 Next.js 端 `/dashboard` 展示 CF 流量数据） |
 | 流式响应 | ✅ | ✅ |
-| 限流归属 | API Key 指纹（Redis 滑动窗口，跨实例共享） | API Key 指纹（内存滑动窗口，单实例；RPM 默认 15，可用 `RATE_LIMIT_RPM` 覆盖，0 = 关闭） |
+| 限流归属 | API Key 指纹（Redis 滑动窗口，跨实例共享） | API Key 指纹（内存滑动窗口，单实例；RPM 默认 60，可用 `RATE_LIMIT_RPM` 覆盖，0 = 关闭） |
 | 目前状态 | ⚠️ 几乎不可用，仅容灾备选 | ⭐ 主力平台 |
 
 > 注：CF Worker 通过 `ctx.waitUntil` 异步写 Upstash（status / timeline / quota / recent / errors / tpm / retries / slow 全量 key），字段与 Vercel 端一致，Dashboard 无需区分流量来源即可看到 CF 侧统计。
