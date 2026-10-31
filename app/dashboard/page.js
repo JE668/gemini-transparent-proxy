@@ -479,7 +479,7 @@ function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, 
       style={{
         background: selected ? `linear-gradient(135deg, ${color}15, ${color}08)` : theme.card.backgroundColor,
         border: selected ? `1.5px solid ${color}` : theme.card.border,
-        borderRadius: '16px', padding: '18px 20px',
+        borderRadius: '18px', padding: '18px 20px',
         boxShadow: selected ? `0 0 24px ${color}20, 0 4px 24px rgba(0,0,0,0.2)` : theme.card.boxShadow,
         cursor: onClick ? 'pointer' : 'default',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -525,17 +525,23 @@ function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, 
       )}
       
       {/* 顶部装饰条 */}
-      {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '16px 16px 0 0' }} />}
+      {selected && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', backgroundColor: color, borderRadius: '18px 18px 0 0' }} />}
       
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: '24px', opacity: 0.9, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}>{icon}</span>
         <span style={{
-          fontSize: '26px', fontWeight: '800', color, fontFamily: 'monospace', letterSpacing: '-0.03em',
+          width: '42px', height: '42px', borderRadius: '12px', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: `linear-gradient(135deg, ${color}22, ${color}0d)`,
+          border: `1px solid ${color}30`,
+          fontSize: '22px',
+        }}>{icon}</span>
+        <span style={{
+          fontSize: '27px', fontWeight: '800', color, fontFamily: 'monospace', letterSpacing: '-0.03em',
           textShadow: selected ? `0 0 20px ${color}40` : 'none',
           transition: 'all 0.3s ease'
         }}>{value}</span>
       </div>
-      <div style={{ marginTop: '8px', fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{label}</div>
+      <div style={{ marginTop: '10px', fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{label}</div>
       {sub && <div style={{ fontSize: '11px', color: theme.text.muted, marginTop: '3px' }}>{sub}</div>}
     </div>
   );
@@ -765,7 +771,6 @@ function DashboardContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshTime, setLastRefreshTime] = useState(null);
   const [refreshProgress, setRefreshProgress] = useState(0);
-  const [cherry, setCherry] = useState(null);
   const [unreadErrors, setUnreadErrors] = useState(0);
 
   const isMobile = useResponsive();
@@ -861,16 +866,15 @@ function DashboardContent() {
     setRefreshing(true);
     setLastRefreshTime(new Date());
     try {
-      const [q, h, e, t, r, ch] = await Promise.all([
+      const [q, h, e, t, r] = await Promise.all([
         authFetch('/api/quota').then(r => r?.json()),
         authFetch('/api/health').then(r => r?.json()).catch(() => null),
         authFetch('/api/errors').then(r => r?.json()).catch(() => null),
         authFetch('/api/timeline').then(r => r?.json()).catch(() => null),
         authFetch('/api/recent').then(r => r?.json()).catch(() => null),
-        authFetch('/api/cherry').then(r => r?.json()).catch(() => null),
       ]);
-      if (!q && !h && !e && !t && !r && !ch) return;
-      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setRecent(r); setCherry(ch);
+      if (!q && !h && !e && !t && !r) return;
+      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setRecent(r);
     } catch (err) { console.error(err); }
     finally { setRefreshing(false); setLoading(false); }
   }, [authed, authFetch]);
@@ -1096,17 +1100,20 @@ function DashboardContent() {
           animation: 'slide-up 0.6s ease-out'
         }}>
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <div style={{ 
-              fontSize: '48px', marginBottom: '12px', 
-              filter: 'drop-shadow(0 0 20px rgba(99,102,241,0.4))',
-              animation: 'float 3s ease-in-out infinite'
+            <div style={{
+              width: '72px', height: '72px', borderRadius: '22px', margin: '0 auto 16px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              fontSize: '36px',
+              boxShadow: '0 12px 36px rgba(99,102,241,0.5), 0 0 40px rgba(99,102,241,0.2)',
+              animation: 'float 3s ease-in-out infinite',
             }}>🛡️</div>
-            <h2 style={{ color: '#f1f5f9', margin: 0, fontSize: '24px', fontWeight: '700', letterSpacing: '-0.02em' }}>代理监控控制台</h2>
+            <h2 style={{ color: '#f1f5f9', margin: 0, fontSize: '25px', fontWeight: '800', letterSpacing: '-0.02em' }}>代理监控控制台</h2>
             <p style={{ color: '#64748b', fontSize: '14px', marginTop: '8px', fontWeight: '500' }}>Gemini Transparent Proxy</p>
             <div style={{ 
-              fontSize: '11px', color: '#475569', marginTop: '12px', 
-              padding: '4px 12px', borderRadius: '20px',
-              backgroundColor: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)',
+              fontSize: '11px', color: '#8b9cf4', marginTop: '14px', 
+              padding: '5px 14px', borderRadius: '20px',
+              backgroundColor: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)',
               display: 'inline-block'
             }}>
               🔒 安全访问
@@ -1254,27 +1261,37 @@ function DashboardContent() {
             }} />
           </div>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <div style={{
-                width: '10px', height: '10px', borderRadius: '50%',
-                backgroundColor: health?.status === 'ok' ? '#22c55e' : '#ef4444',
-                boxShadow: `0 0 12px ${health?.status === 'ok' ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'}`,
-                animation: health?.status === 'ok' ? 'pulse-glow 2s ease-in-out infinite' : 'none'
-              }} />
-              <h1 style={{ fontSize: isMobile ? '22px' : '28px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
-                Gemini <span style={{ 
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text'
-                }}>代理</span>
-              </h1>
+                width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                fontSize: '22px', boxShadow: '0 4px 16px rgba(99,102,241,0.4)',
+              }}>🛡️</div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '9px', height: '9px', borderRadius: '50%',
+                    backgroundColor: health?.status === 'ok' ? '#22c55e' : '#ef4444',
+                    boxShadow: `0 0 12px ${health?.status === 'ok' ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'}`,
+                    animation: health?.status === 'ok' ? 'pulse-glow 2s ease-in-out infinite' : 'none'
+                  }} />
+                  <h1 style={{ fontSize: isMobile ? '22px' : '26px', fontWeight: '800', margin: 0, color: theme.text.main, letterSpacing: '-0.03em' }}>
+                    Gemini <span style={{ 
+                      background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                      backgroundClip: 'text'
+                    }}>代理</span>
+                  </h1>
+                </div>
+                <p style={{ color: theme.text.muted, fontSize: '13px', margin: '4px 0 0', fontWeight: '500' }}>
+                  实时监控 · 智能分析 · 配额管理
+                </p>
+              </div>
             </div>
-            <p style={{ color: theme.text.muted, fontSize: '13px', margin: '4px 0 0', fontWeight: '500' }}>
-              实时监控 · 智能分析 · 配额管理
-            </p>
             {lastRefreshTime && (
-              <p style={{ color: theme.text.muted, fontSize: '11px', margin: '6px 0 0', fontFamily: 'monospace' }}>
+              <p style={{ color: theme.text.muted, fontSize: '11px', margin: '8px 0 0', fontFamily: 'monospace' }}>
                 上次刷新：{lastRefreshTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </p>
             )}
@@ -1284,8 +1301,8 @@ function DashboardContent() {
               fontSize: '12px', 
               color: theme.text.muted, 
               fontFamily: 'monospace',
-              padding: '6px 10px',
-              borderRadius: '8px',
+              padding: '6px 12px',
+              borderRadius: '10px',
               backgroundColor: theme.bar.bg,
               border: `1px solid ${dark ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.1)'}`,
             }}>
@@ -1492,17 +1509,23 @@ function DashboardContent() {
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
           {/* 请求时间线 */}
-                    <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
+                    <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
 
                       {showSkeleton ? <SkeletonTimeline theme={theme} /> : <>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                        <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          📊 请求时间线
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+                        <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            width: '26px', height: '26px', borderRadius: '8px',
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                            fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                          }}>📊</span>
+                          请求时间线
                           {timeline?.date && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>{timeline.date}</span>}
                         </h2>
                         {timeline?.summary && (
                           <span style={{
-                            fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                            fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
                             backgroundColor: timeline.summary.overallChange > 20 
                               ? '#ef444418' 
                               : timeline.summary.overallChange > 0 
@@ -1572,10 +1595,16 @@ function DashboardContent() {
                     </div>
 
           {/* 模型分布 + HTTP 状态分布 */}
-          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                🧬 模型路由分布
+          <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '26px', height: '26px', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                }}>🧬</span>
+                模型路由分布
                 {quota?.data && <span style={{ fontSize: '11px', fontWeight: '400', color: theme.text.muted }}>共 {quota.data.length} 个模型</span>}
               </h2>
               {errors?.statusBreakdown && (
@@ -1600,8 +1629,9 @@ function DashboardContent() {
                   return (
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center', gap: '10px',
-                      padding: '8px 10px', borderRadius: '10px',
+                      padding: '9px 12px', borderRadius: '12px',
                       backgroundColor: theme.bar.bg,
+                      border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}`,
                     }}>
                       <DonutChart percent={pct} size={32} strokeWidth={4} color={d.color}>
                         <span style={{ fontSize: '9px', fontWeight: '700', color: d.color }}>
@@ -1673,17 +1703,35 @@ function DashboardContent() {
         </div>
 
         {/* ====== 模型配额监控 ====== */}
-        <div style={{ marginBottom: '20px' }}>
+        <div style={{
+          marginBottom: '24px',
+          padding: isMobile ? '18px 14px' : '24px',
+          borderRadius: '20px',
+          background: dark
+            ? 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.03) 50%, rgba(99,102,241,0.05) 100%)'
+            : 'linear-gradient(135deg, rgba(99,102,241,0.05) 0%, rgba(139,92,246,0.02) 50%, rgba(99,102,241,0.04) 100%)',
+          border: `1px solid ${dark ? 'rgba(99,102,241,0.18)' : 'rgba(99,102,241,0.12)'}`,
+          boxShadow: theme.glow,
+        }}>
           {showSkeleton ? [1,2,3,4].map(i => <SkeletonQuotaCard key={i} theme={theme} />) : <>
           
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              ⚡ 模型配额监控
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px',
+            paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}`,
+          }}>
+            <h2 style={{ fontSize: '17px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px', letterSpacing: '-0.01em' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: '28px', height: '28px', borderRadius: '8px',
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                fontSize: '15px', boxShadow: '0 2px 8px rgba(99,102,241,0.35)',
+              }}>⚡</span>
+              模型配额监控
               {quota?.data?.some(m => m.percent > 90) && (
                 <span style={{
-                  fontSize: '10px', padding: '2px 8px', borderRadius: '12px',
+                  fontSize: '10px', padding: '2px 9px', borderRadius: '12px',
                   backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444',
-                  border: '1px solid rgba(239,68,68,0.3)', fontWeight: '700',
+                  border: '1px solid rgba(239,68,68,0.35)', fontWeight: '700',
                   display: 'flex', alignItems: 'center', gap: '4px',
                   animation: 'pulse-glow 2s ease-in-out infinite'
                 }}>
@@ -1694,7 +1742,7 @@ function DashboardContent() {
             {selectedModel && (
               <button onClick={() => setSelectedModel(null)}
                 style={{
-                  fontSize: '12px', padding: '4px 12px', borderRadius: '20px',
+                  fontSize: '12px', padding: '5px 12px', borderRadius: '20px',
                   border: `1px solid ${theme.text.muted}40`, background: 'transparent',
                   color: theme.text.muted, cursor: 'pointer',
                   transition: 'all 0.2s ease'
@@ -1706,8 +1754,8 @@ function DashboardContent() {
           </div>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: '12px'
+            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+            gap: '14px'
           }}>
             {quota?.data?.map((item, i) => {
               const color = getModelColor(item.model);
@@ -1756,21 +1804,21 @@ function DashboardContent() {
                   {isSelected && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: `linear-gradient(180deg, ${color}, ${color}60)`, borderRadius: '0 2px 2px 0' }} />}
                   
                   {/* 环形图 */}
-                  <DonutChart percent={pct} size={60} strokeWidth={5} color={ringColor}>
+                  <DonutChart percent={pct} size={70} strokeWidth={6} color={ringColor}>
                     <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '15px', fontWeight: '800', color: ringColor, lineHeight: 1 }}>{pct.toFixed(0)}</div>
+                      <div style={{ fontSize: '17px', fontWeight: '800', color: ringColor, lineHeight: 1 }}>{pct.toFixed(0)}</div>
                       <div style={{ fontSize: '8px', color: ringColor, opacity: 0.7 }}>%</div>
                     </div>
                   </DonutChart>
 
                   {/* 右侧信息 */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '13px', fontWeight: '700', color: theme.text.main, fontFamily: 'monospace', marginBottom: '2px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '800', color: theme.text.main, fontFamily: 'monospace', marginBottom: '4px', letterSpacing: '-0.01em' }}>
                       {shortModel(item.model)}
                     </div>
-                    <div style={{ fontSize: '11px', color: theme.text.muted, fontFamily: 'monospace', marginBottom: '6px' }}>
-                      <span style={{ color: isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color, fontWeight: '600' }}>{(item.used || 0).toLocaleString()}</span>
-                      {' / '}{(item.limit || '∞').toLocaleString()}
+                    <div style={{ fontSize: '12px', color: theme.text.muted, fontFamily: 'monospace', marginBottom: '8px', display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                      <span style={{ color: isHigh ? '#ef4444' : isMedium ? '#f59e0b' : color, fontWeight: '700', fontSize: '14px' }}>{(item.used || 0).toLocaleString()}</span>
+                      <span style={{ opacity: 0.7 }}>/ {(item.limit || '∞').toLocaleString()}</span>
                     </div>
                     {/* TPM 子进度条（每分钟输入 token），仅已知 TPM 限额的模型显示 */}
                     {item.tpmLimit != null && (
@@ -1781,9 +1829,9 @@ function DashboardContent() {
                             {item.tpmUsed != null ? (item.tpmUsed / 1000).toFixed(1) : '0.0'}K / {(item.tpmLimit / 1000)}K ({item.tpmPercent}%)
                           </span>
                         </div>
-                        <div style={{ height: '4px', borderRadius: '2px', background: theme.bar?.bg || '#f1f5f9', overflow: 'hidden' }}>
+                        <div style={{ height: '5px', borderRadius: '3px', background: theme.bar?.bg || '#f1f5f9', overflow: 'hidden' }}>
                           <div style={{
-                            width: `${Math.min(item.tpmPercent, 100)}%`, height: '100%', borderRadius: '2px',
+                            width: `${Math.min(item.tpmPercent, 100)}%`, height: '100%', borderRadius: '3px',
                             background: item.tpmPercent > 80 ? '#ef4444' : item.tpmPercent > 60 ? '#f59e0b' : '#22c55e',
                             transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)'
                           }} />
@@ -1793,15 +1841,17 @@ function DashboardContent() {
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                       {item.avgLatency != null && (
                         <span style={{
-                          fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                          fontSize: '10px', padding: '3px 8px', borderRadius: '6px',
                           backgroundColor: item.avgLatency > 3000 ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
                           color: item.avgLatency > 3000 ? '#ef4444' : '#f59e0b',
+                          border: `1px solid ${item.avgLatency > 3000 ? 'rgba(239,68,68,0.2)' : 'rgba(245,158,11,0.2)'}`,
                         }}>⏱ {item.avgLatency}ms</span>
                       )}
                       {item.errorRate > 0 && (
                         <span style={{
-                          fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                          fontSize: '10px', padding: '3px 8px', borderRadius: '6px',
                           backgroundColor: 'rgba(239,68,68,0.12)', color: '#ef4444',
+                          border: '1px solid rgba(239,68,68,0.2)',
                         }}>⚠ {item.errorRate}%</span>
                       )}
                     </div>
@@ -1841,17 +1891,23 @@ function DashboardContent() {
         </>}</div>
 
         {/* ====== 最近请求（全宽） ====== */}
-        <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
+        <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
           {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3,4,5].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              📋 最近请求
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: '26px', height: '26px', borderRadius: '8px',
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+              }}>📋</span>
+              最近请求
               {selectedModel && <span style={{ fontSize: '11px', fontWeight: '400', color: '#6366f1' }}>筛选: {selectedModel}</span>}
             </h2>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               {retryCount > 0 && (
                 <span style={{
-                  fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                  fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
                   backgroundColor: '#f59e0b18', color: '#f59e0b',
                   border: '1px solid #f59e0b30', fontWeight: '600'
                 }}>
@@ -1879,15 +1935,21 @@ function DashboardContent() {
         </div>
 
         {/* ====== 慢请求 TOP 10（全宽） ====== */}
-        <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
+        <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', marginBottom: isMobile ? '14px' : '20px', ...theme.card }}>
           {showSkeleton ? <div style={{ overflow: 'hidden' }}>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              🐢 慢请求 TOP 10
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: '26px', height: '26px', borderRadius: '8px',
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+              }}>🐢</span>
+              慢请求 TOP 10
             </h2>
             {recent?.slowRequests?.length > 0 && (
               <span style={{
-                fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
+                fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
                 backgroundColor: '#f59e0b18', color: '#f59e0b',
                 border: '1px solid #f59e0b30', fontWeight: '600'
               }}>
@@ -1917,11 +1979,17 @@ function DashboardContent() {
         {/* ====== 双列：错误日志 + status 码 ====== */}
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
           {/* 错误日志 */}
-          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
+          <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
             {showSkeleton ? <div>{[1,2,3].map(i => <SkeletonRow key={i} theme={theme} />)}</div> : <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                🚨 错误日志
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '26px', height: '26px', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #ef4444, #f59e0b)',
+                  fontSize: '13px', boxShadow: '0 2px 6px rgba(239,68,68,0.3)',
+                }}>🚨</span>
+                错误日志
               </h2>
               <div style={{ display: 'flex', gap: '6px' }}>
                 {errors?.errorBreakdown && (
@@ -1965,10 +2033,16 @@ function DashboardContent() {
           </>}</div>
 
           {/* HTTP 状态码速查 + Gemini/Redis 状态 */}
-          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                🔗 系统状态
+          <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', ...theme.card }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '26px', height: '26px', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+                }}>🔗</span>
+                系统状态
               </h2>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
@@ -2053,76 +2127,62 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* ====== Cherry 集群状态 ====== */}
-        {cherry && (
-          <div style={{ borderRadius: '16px', padding: isMobile ? '14px' : '20px', ...theme.card, marginBottom: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                🍒 Cherry 集群状态
-              </h2>
+        {/* ====== 运行概览（替代原 Cherry 模拟面板，使用真实统计数据） ====== */}
+        <div style={{ borderRadius: '18px', padding: isMobile ? '14px' : '20px', marginBottom: '20px', ...theme.card }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: `1px solid ${theme.bar.bg}` }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '800', color: theme.text.main, margin: 0, display: 'flex', alignItems: 'center', gap: '9px' }}>
               <span style={{
-                fontSize: '11px', padding: '3px 10px', borderRadius: '20px',
-                backgroundColor: cherry.status === 'healthy' ? '#22c55e18' : '#ef444418',
-                color: cherry.status === 'healthy' ? '#22c55e' : '#ef4444',
-                border: `1px solid ${cherry.status === 'healthy' ? '#22c55e30' : '#ef444430'}`,
-                fontWeight: '600'
-              }}>
-                {cherry.status === 'healthy' ? '集群健康' : '集群异常'} · {cherry.onlineNodes}/{cherry.totalNodes} 节点在线
-              </span>
-            </div>
-            
-            {/* 节点列表 */}
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(280px, 1fr))', gap: isMobile ? '8px' : '12px' }}>
-              {cherry.nodes?.map((node, i) => (
-                <div key={node.id} style={{
-                  padding: '14px', borderRadius: '10px',
-                  backgroundColor: theme.bar.bg,
-                  border: `1px solid ${node.status === 'online' ? '#22c55e30' : '#ef444430'}`
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text.main }}>{node.name}</span>
-                    <span style={{
-                      fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
-                      backgroundColor: node.status === 'online' ? '#22c55e18' : '#ef444418',
-                      color: node.status === 'online' ? '#22c55e' : '#ef4444',
-                      fontWeight: '600'
-                    }}>{node.status}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: theme.text.muted }}>
-                    <span>延迟：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.latency}ms</span></span>
-                    <span>请求：<span style={{ color: theme.text.main, fontWeight: '500' }}>{node.requests.toLocaleString()}</span></span>
-                  </div>
-                </div>
-              ))}
-            </div>
-            
-            {/* 负载均衡信息 */}
-            {cherry.loadBalance && (
-              <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: theme.bar.bg }}>
-                <div style={{ fontSize: '12px', color: theme.text.muted, marginBottom: '8px' }}>
-                  负载均衡：{cherry.loadBalance.algorithm} · 流量分布
-                </div>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  {cherry.loadBalance.distribution?.map(( pct, i) => (
-                    <div key={i} style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: theme.text.muted, marginBottom: '4px' }}>
-                        <span>Node {i + 1}</span>
-                        <span style={{ color: theme.text.main, fontWeight: '600' }}>{pct}%</span>
-                      </div>
-                      <div style={{ height: '6px', backgroundColor: theme.card.border, borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{
-                          width: `${pct}%`,
-                          height: '100%',
-                          background: i === 0 ? 'linear-gradient(90deg, #6366f1, #8b5cf6)' : i === 1 ? 'linear-gradient(90deg, #22c55e, #10b981)' : 'linear-gradient(90deg, #f59e0b, #ef4444)'
-                        }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: '26px', height: '26px', borderRadius: '8px',
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                fontSize: '13px', boxShadow: '0 2px 6px rgba(99,102,241,0.3)',
+              }}>📈</span>
+              运行概览
+            </h2>
+            {quota?.data?.some(m => m.percent > 90) && (
+              <span style={{
+                fontSize: '11px', padding: '4px 10px', borderRadius: '20px',
+                backgroundColor: '#ef444418', color: '#ef4444',
+                border: '1px solid #ef444430', fontWeight: '600',
+                animation: 'pulse-glow 2s ease-in-out infinite',
+              }}>⚠ 有模型接近配额上限</span>
             )}
           </div>
-        )}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: '12px',
+          }}>
+            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
+              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>请求成功率</div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: '#22c55e', fontFamily: 'monospace' }}>
+                {successCount > 0 ? ((successCount / globalRequests) * 100).toFixed(1) : '100'}%
+              </div>
+              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>{successCount.toLocaleString()} / {globalRequests.toLocaleString()} 次</div>
+            </div>
+            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
+              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>活跃模型</div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: '#6366f1', fontFamily: 'monospace' }}>{quota?.data?.length || 0}</div>
+              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>有请求记录的模型数</div>
+            </div>
+            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
+              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>平均延迟</div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: '#f59e0b', fontFamily: 'monospace' }}>
+                {avgLatency ? Math.round(avgLatency) : '—'}<span style={{ fontSize: '12px', fontWeight: '500' }}>ms</span>
+              </div>
+              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>所有模型综合</div>
+            </div>
+            <div style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: theme.bar.bg, border: `1px solid ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)'}` }}>
+              <div style={{ fontSize: '11px', color: theme.text.muted, marginBottom: '6px' }}>最高用量模型</div>
+              <div style={{ fontSize: '16px', fontWeight: '800', color: '#8b5cf6', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {modelDistribution[0]?.label || '—'}
+              </div>
+              <div style={{ fontSize: '10px', color: theme.text.muted, marginTop: '4px' }}>
+                {modelDistribution[0] ? `${(modelDistribution[0].percent || 0).toFixed(0)}% 已用` : '暂无数据'}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* ====== Footer ====== */}
         <footer style={{
