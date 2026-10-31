@@ -76,7 +76,11 @@ export async function GET(req) {
       // TPM 滑动窗口（每分钟输入 token）：清 60s 前 + 求和（member 为 token 数）
       const tpmKey = `tpm:${date}:${modelId}`;
       pipeline.zremrangebyscore(tpmKey, 0, nowForTpm - 60000);
-      pipeline.zrangebyscore(tpmKey, nowForTpm - 60000, nowForTpm, { withScores: true });
+      // ⚠️ @upstash/redis 1.38.0 已移除 pipeline.zrangebyscore（实测 typeof undefined，
+      //    类型声明与运行时实现均无该方法），必须用 zrange + byScore 替代：
+      //    旧 zrangebyscore(min, max, {withScores}) 与新 zrange(min, max, {byScore:true, withScores:true})
+      //    等价（生成的命令都是 ... byscore withscores），返回格式同为 [member, score, ...] 扁平数组。
+      pipeline.zrange(tpmKey, nowForTpm - 60000, nowForTpm, { byScore: true, withScores: true });
     }
     // 批量获取状态码计数
     const statusCodes = [200, 400, 401, 403, 404, 429, 500, 502, 503];
