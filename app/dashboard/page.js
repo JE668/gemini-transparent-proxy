@@ -187,22 +187,22 @@ const getTheme = (dark) => ({
     color: dark ? '#cbd5e1' : '#0f172a',
     backgroundGradient: dark 
       ? 'radial-gradient(ellipse 60% 50% at 15% 10%, rgba(34,211,238,0.10) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 85% 25%, rgba(99,102,241,0.12) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.08) 0%, transparent 55%)'
-      : 'radial-gradient(ellipse 60% 50% at 15% 10%, rgba(34,211,238,0.06) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 85% 25%, rgba(99,102,241,0.07) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.05) 0%, transparent 55%)'
+      : 'radial-gradient(ellipse 60% 50% at 12% 8%, rgba(34,211,238,0.14) 0%, transparent 55%), radial-gradient(ellipse 50% 45% at 88% 22%, rgba(99,102,241,0.16) 0%, transparent 55%), radial-gradient(ellipse 55% 50% at 50% 100%, rgba(139,92,246,0.12) 0%, transparent 55%), radial-gradient(ellipse 40% 30% at 70% 70%, rgba(34,211,238,0.08) 0%, transparent 55%)'
   },
   card: {
-    backgroundColor: dark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.72)',
-    border: dark ? '1px solid rgba(34,211,238,0.14)' : '1px solid rgba(99,102,241,0.12)',
-    boxShadow: dark ? '0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(34,211,238,0.04), inset 0 1px 0 rgba(255,255,255,0.06)' : '0 8px 32px rgba(99,102,241,0.07), inset 0 1px 0 rgba(255,255,255,0.8)',
+    backgroundColor: dark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.78)',
+    border: dark ? '1px solid rgba(34,211,238,0.14)' : '1px solid rgba(99,102,241,0.20)',
+    boxShadow: dark ? '0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(34,211,238,0.04), inset 0 1px 0 rgba(255,255,255,0.06)' : '0 8px 32px rgba(99,102,241,0.12), 0 0 20px rgba(34,211,238,0.06), inset 0 1px 0 rgba(255,255,255,0.9)',
   },
-  text: { main: dark ? '#f1f5f9' : '#0f172a', sub: dark ? '#94a3b8' : '#475569', muted: dark ? '#64748b' : '#94a3b8' },
-  bar: { bg: dark ? 'rgba(30,41,59,0.6)' : '#f1f5f9' },
-  input: { backgroundColor: dark ? 'rgba(2,6,23,0.6)' : 'white', border: dark ? '1px solid rgba(34,211,238,0.2)' : '1px solid #e2e8f0', color: dark ? '#f1f5f9' : '#0f172a' },
-  glow: dark ? '0 0 24px rgba(34,211,238,0.10)' : '0 0 24px rgba(99,102,241,0.07)',
-  neonGlow: dark ? '0 0 8px rgba(34,211,238,0.35), 0 0 20px rgba(99,102,241,0.18)' : '0 0 8px rgba(99,102,241,0.2), 0 0 16px rgba(99,102,241,0.1)',
+  text: { main: dark ? '#f1f5f9' : '#0f172a', sub: dark ? '#94a3b8' : '#475569', muted: dark ? '#64748b' : '#64748b' },
+  bar: { bg: dark ? 'rgba(30,41,59,0.6)' : '#eef2ff' },
+  input: { backgroundColor: dark ? 'rgba(2,6,23,0.6)' : 'white', border: dark ? '1px solid rgba(34,211,238,0.2)' : '1px solid rgba(99,102,241,0.25)', color: dark ? '#f1f5f9' : '#0f172a' },
+  glow: dark ? '0 0 24px rgba(34,211,238,0.10)' : '0 0 28px rgba(99,102,241,0.16), 0 0 12px rgba(34,211,238,0.10)',
+  neonGlow: dark ? '0 0 8px rgba(34,211,238,0.35), 0 0 20px rgba(99,102,241,0.18)' : '0 0 10px rgba(99,102,241,0.30), 0 0 24px rgba(34,211,238,0.16)',
   // BI 大屏强调色：霓虹青 → 靛蓝 → 紫
   accent: dark ? '#22d3ee' : '#6366f1',
   accent2: dark ? '#6366f1' : '#8b5cf6',
-  gridLine: dark ? 'rgba(34,211,238,0.05)' : 'rgba(99,102,241,0.05)',
+  gridLine: dark ? 'rgba(34,211,238,0.05)' : 'rgba(99,102,241,0.10)',
 });
 
 // =============================================================================
@@ -548,13 +548,15 @@ function MetricCard({ icon, label, value, sub, color, onClick, selected, theme, 
           width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: `linear-gradient(135deg, ${color}26, ${color}0d)`,
-          border: `1px solid ${color}40`,
-          boxShadow: `0 0 14px ${color}20`,
+          border: `1px solid ${color}50`,
+          boxShadow: isDark ? `0 0 14px ${color}20` : `0 0 18px ${color}30, 0 2px 8px ${color}20`,
           fontSize: '22px',
         }}>{icon}</span>
         <span style={{
           fontSize: '27px', fontWeight: '800', color, fontFamily: 'monospace', letterSpacing: '-0.03em',
-          textShadow: selected ? `0 0 20px ${color}40` : 'none',
+          textShadow: selected 
+            ? `0 0 24px ${color}60` 
+            : isDark ? `0 0 12px ${color}30` : `0 0 16px ${color}35`,
           transition: 'all 0.3s ease'
         }}>{value}</span>
       </div>
@@ -1267,26 +1269,33 @@ function DashboardContent() {
       <div style={{
         position: 'fixed', top: '-20%', right: '-10%', width: '700px', height: '700px',
         borderRadius: '50%',
-        background: `radial-gradient(circle, ${dark ? 'rgba(34,211,238,0.10)' : 'rgba(34,211,238,0.06)'} 0%, transparent 70%)`,
+        background: `radial-gradient(circle, ${dark ? 'rgba(34,211,238,0.10)' : 'rgba(34,211,238,0.16)'} 0%, transparent 70%)`,
         pointerEvents: 'none', zIndex: 0,
         animation: 'aurora-shift 18s ease-in-out infinite',
       }} />
       <div style={{
         position: 'fixed', bottom: '-30%', left: '-15%', width: '500px', height: '500px',
         borderRadius: '50%',
-        background: `radial-gradient(circle, ${dark ? 'rgba(139,92,246,0.10)' : 'rgba(139,92,246,0.05)'} 0%, transparent 70%)`,
+        background: `radial-gradient(circle, ${dark ? 'rgba(139,92,246,0.10)' : 'rgba(139,92,246,0.14)'} 0%, transparent 70%)`,
         pointerEvents: 'none', zIndex: 0,
         animation: 'aurora-shift 24s ease-in-out infinite reverse',
       }} />
-      {/* 扫描线（暗色模式才显示，增强科技感） */}
-      {dark && (
-        <div style={{
-          position: 'fixed', left: 0, right: 0, top: 0, height: '180px',
-          pointerEvents: 'none', zIndex: 0,
-          background: 'linear-gradient(to bottom, transparent, rgba(34,211,238,0.04), transparent)',
-          animation: 'scanline 9s linear infinite',
-        }} />
-      )}
+      <div style={{
+        position: 'fixed', top: '30%', left: '40%', width: '400px', height: '400px',
+        borderRadius: '50%',
+        background: `radial-gradient(circle, ${dark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.12)'} 0%, transparent 70%)`,
+        pointerEvents: 'none', zIndex: 0,
+        animation: 'aurora-shift 28s ease-in-out infinite 4s',
+      }} />
+      {/* 扫描线（两种模式都显示，亮色模式用更淡的青色） */}
+      <div style={{
+        position: 'fixed', left: 0, right: 0, top: 0, height: '180px',
+        pointerEvents: 'none', zIndex: 0,
+        background: dark
+          ? 'linear-gradient(to bottom, transparent, rgba(34,211,238,0.04), transparent)'
+          : 'linear-gradient(to bottom, transparent, rgba(99,102,241,0.03), transparent)',
+        animation: 'scanline 9s linear infinite',
+      }} />
 
       <div style={{ position: 'relative', zIndex: 1, maxWidth: '1360px', margin: '0 auto', padding: isMobile ? '16px 12px' : '28px 24px' }}>
         {/* ====== 顶部导航 ====== */}
@@ -1766,9 +1775,9 @@ function DashboardContent() {
           borderRadius: '22px',
           background: dark
             ? 'linear-gradient(135deg, rgba(34,211,238,0.10) 0%, rgba(99,102,241,0.06) 40%, rgba(139,92,246,0.10) 100%)'
-            : 'linear-gradient(135deg, rgba(34,211,238,0.06) 0%, rgba(99,102,241,0.04) 40%, rgba(139,92,246,0.06) 100%)',
-          border: `1px solid ${dark ? 'rgba(34,211,238,0.25)' : 'rgba(99,102,241,0.15)'}`,
-          boxShadow: `${theme.glow}, ${dark ? '0 0 40px rgba(34,211,238,0.06), 0 8px 32px rgba(0,0,0,0.3)' : '0 0 30px rgba(99,102,241,0.05)'}`,
+            : 'linear-gradient(135deg, rgba(34,211,238,0.09) 0%, rgba(99,102,241,0.07) 40%, rgba(139,92,246,0.09) 100%)',
+          border: `1px solid ${dark ? 'rgba(34,211,238,0.25)' : 'rgba(99,102,241,0.30)'}`,
+          boxShadow: `${theme.glow}, ${dark ? '0 0 40px rgba(34,211,238,0.06), 0 8px 32px rgba(0,0,0,0.3)' : '0 0 36px rgba(99,102,241,0.14), 0 0 16px rgba(34,211,238,0.08)'}`,
           position: 'relative',
           overflow: 'hidden',
         }}>
