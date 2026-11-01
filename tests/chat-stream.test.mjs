@@ -179,6 +179,40 @@ test('buildChatCompletionChunks: 透传 tool_calls 的 thought_signature（Googl
   assert.equal(tcDelta.tool_calls[0].function.name, 'bash');
 });
 
+test('buildChatCompletionChunks: 透传 tool_calls 的 extra_content.google.thought_signature（Google 实测格式）', () => {
+  // ⚠️ 实测：Google 上游把 thought_signature 放在 tool_calls[].extra_content.google.thought_signature，
+  //    而不是顶层 tool_calls[].thought_signature。必须按此结构透传，客户端回传时才能原样带回。
+  const chunks = buildChatCompletionChunks({
+    id: 'chatcmpl-2',
+    created: 200,
+    model: 'gemini-4-thinking',
+    choices: [{
+      index: 0,
+      finish_reason: 'tool_calls',
+      message: {
+        content: '',
+        tool_calls: [{
+          id: 'call_2',
+          type: 'function',
+          function: { name: 'bash', arguments: '{"cmd":"echo hi"}' },
+          extra_content: { google: { thought_signature: 'sig_extra_google_123' } },
+        }],
+      },
+    }],
+  });
+  const parsed = parseChunks(chunks);
+  const deltas = parsed.map(c => c.delta);
+  const tcDelta = deltas.find(d => d.tool_calls);
+  assert.ok(tcDelta, 'tool_calls 必须出现在 SSE 中');
+  assert.deepEqual(
+    tcDelta.tool_calls[0].extra_content,
+    { google: { thought_signature: 'sig_extra_google_123' } },
+    'extra_content.google.thought_signature 必须按原结构透传',
+  );
+  assert.equal(tcDelta.tool_calls[0].id, 'call_2');
+  assert.equal(tcDelta.tool_calls[0].function.name, 'bash');
+});
+
 test('buildSseError: 错误被包装成 SSE data 帧', () => {
   const sse = buildSseError(503, 'upstream down', 'req-1');
   assert.ok(sse.startsWith('data: '));
