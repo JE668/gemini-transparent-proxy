@@ -15,6 +15,7 @@ import {
   sanitizeOpenAIBody,
   cleanTools,
   cleanMessages,
+  injectThoughtSignature,
   buildTargetUrl,
 } from '../lib/openai-compat.js';
 
@@ -237,4 +238,85 @@ test('cleanMessages: assistant 消息的 tool_calls 无 thought_signature 时保
   ];
   const out = cleanMessages(messages);
   assert.equal(out[0].tool_calls[0].extra_content, undefined, '无 sig 时不应添加 extra_content');
+});
+
+test('injectThoughtSignature: gemma-4-26b-a4b-it 返回模型级固定 sig', () => {
+  // ⚠️ 实测：gemma-4-26b-a4b-it 的 thought_signature 是模型级固定常量
+  //    （解码后为固定 UUID e24830a7-...），与对话内容/会话无关。
+  const sig = injectThoughtSignature('gemma-4-26b-a4b-it');
+  assert.equal(sig, 'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==');
+});
+
+test('injectThoughtSignature: 兼容 models/ 前缀', () => {
+  assert.equal(
+    injectThoughtSignature('models/gemma-4-26b-a4b-it'),
+    'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==',
+  );
+});
+
+test('injectThoughtSignature: 未知模型返回 undefined（不注入）', () => {
+  assert.equal(injectThoughtSignature('gemini-3.6-flash'), undefined);
+  assert.equal(injectThoughtSignature(''), undefined);
+  assert.equal(injectThoughtSignature(undefined), undefined);
+});
+
+test('cleanMessages: 缺失 sig 时自动注入模型级固定 sig（gemma-4-26b）', () => {
+  // ⚠️ 根治方案：客户端合并流式 tool_calls 时可能丢失 sig → 下一轮 Google 报 400
+  //    "Function call is missing a thought_signature"。代理在请求侧自动注入即可根治。
+  const messages = [
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'call_1', type: 'function',
+      function: { name: 'default_api:use_capability', arguments: '{"action":"list"}' },
+    }] },
+  ];
+  const out = cleanMessages(messages, 'gemma-4-26b-a4b-it');
+  assert.equal(
+    out[0].tool_calls[0].extra_content.google.thought_signature,
+    'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==',
+    '缺失 sig 时自动注入模型级固定 sig',
+  );
+  assert.equal(out[0].tool_calls[0].thought_signature, 'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==');
+});
+
+test('cleanMessages: 已有 sig 时优先使用已有值，不覆盖', () => {
+  const messages = [
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'call_1', type: 'function',
+      function: { name: 'default_api:use_capability', arguments: '{"action":"list"}' },
+      thought_signature: 'client_provided_sig',
+    }] },
+  ];
+  const out = cleanMessages(messages, 'gemma-4-26b-a4b-it');
+  assert.equal(out[0].tool_calls[0].extra_content.google.thought_signature, 'client_provided_sig', '已有 sig 不应被覆盖');
+});
+
+test('cleanMessages: 无固定 sig 的模型不注入', () => {
+  const messages = [
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'call_1', type: 'function',
+      function: { name: 'bash', arguments: '{"cmd":"ls"}' },
+    }] },
+  ];
+  const out = cleanMessages(messages, 'gemini-3.6-flash');
+  assert.equal(out[0].tool_calls[0].extra_content, undefined, '无固定 sig 的模型不应注入');
+});
+
+test('sanitizeOpenAIBody: 传入 model 时自动注入固定 sig', () => {
+  const body = JSON.stringify({
+    model: 'gemma-4-26b-a4b-it',
+    messages: [
+      { role: 'user', content: 'run' },
+      { role: 'assistant', content: null, tool_calls: [{
+        id: 'call_1', type: 'function',
+        function: { name: 'default_api:bash', arguments: '{"cmd":"echo hi"}' },
+      }] },
+      { role: 'tool', tool_call_id: 'call_1', content: 'hi' },
+    ],
+  });
+  const out = JSON.parse(sanitizeOpenAIBody(body));
+  assert.equal(
+    out.messages[1].tool_calls[0].extra_content.google.thought_signature,
+    'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==',
+    'sanitizeOpenAIBody 应把 model 传入 cleanMessages 实现自动注入',
+  );
 });
