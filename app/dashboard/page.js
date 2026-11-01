@@ -89,6 +89,30 @@ const getStatusLabel = (code) => {
   if (code >= 400) return { text: '客户端', color: '#fbbf24' };
   return { text: '成功', color: '#4ade80' };
 };
+
+// 把错误信息转成清晰的中文描述（限流类型一目了然）
+// e.message 由 recordRateLimitTelemetry 写入，格式形如：
+//   "rpm_limit_exceeded (60 RPM)"
+//   "tpm_limit_exceeded (16000/min, need 2203)"
+//   "rate_limit_exceeded"
+//   "token_rate_limit_exceeded"
+const describeError = (e) => {
+  const msg = e?.message || '';
+  if (e?.status === 429 || msg.includes('limit_exceeded') || msg.includes('rate_limit')) {
+    if (msg.includes('tpm_limit_exceeded')) {
+      const m = msg.match(/tpm_limit_exceeded\s*\(([^)]+)\)/);
+      return m ? `TPM 限流：每分钟输入 token 超限 (${m[1]})` : 'TPM 限流：每分钟输入 token 超限';
+    }
+    if (msg.includes('rpm_limit_exceeded')) {
+      const m = msg.match(/rpm_limit_exceeded\s*\(([^)]+)\)/);
+      return m ? `RPM 限流：每分钟请求数超限 (${m[1]})` : 'RPM 限流：每分钟请求数超限';
+    }
+    if (msg.includes('token_rate_limit_exceeded')) return 'TPM 限流：每分钟输入 token 超限';
+    if (msg.includes('rate_limit_exceeded')) return 'RPM 限流：每分钟请求数超限';
+  }
+  // 其他错误：透传原始信息（含 429 上游限流等具体原因）
+  return msg;
+};
 const formatDuration = (minutes) => {
   if (minutes == null || !isFinite(minutes)) return '—';
   if (minutes < 1) return '< 1 分钟';
@@ -650,19 +674,26 @@ function MiniBars({ series, color, theme }) {
 }
 
 // 日志行（最近请求 / 慢请求 / 错误）
-function LogRow({ time, badge, badgeColor, label, meta, theme }) {
+function LogRow({ time, badge, badgeColor, label, meta, theme, wrap = false }) {
   return (
     <div className="db-row" style={{
-      display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', marginBottom: 5,
+      display: 'flex', alignItems: wrap ? 'flex-start' : 'center', gap: 10, padding: '9px 11px', marginBottom: 5,
       borderRadius: 9, background: theme.inset.background, border: theme.inset.border, fontSize: 12,
     }}>
-      <span style={{ color: theme.text.muted, fontSize: 11, fontFamily: 'ui-monospace,monospace', minWidth: 62, flexShrink: 0 }}>{time}</span>
+      <span style={{ color: theme.text.muted, fontSize: 11, fontFamily: 'ui-monospace,monospace', minWidth: 62, flexShrink: 0, paddingTop: wrap ? 2 : 0 }}>{time}</span>
       <span style={{
-        padding: '2px 8px', borderRadius: 5, fontSize: 10.5, fontWeight: 700, minWidth: 34, textAlign: 'center', flexShrink: 0,
+        padding: '2px 8px', borderRadius: 5, fontSize: 10.5, fontWeight: 700, minWidth: 34, textAlign: 'center', flexShrink: 0, marginTop: wrap ? 0 : 0,
         fontFamily: 'ui-monospace,monospace', background: badgeColor + '20', color: badgeColor, border: `1px solid ${badgeColor}44`,
       }}>{badge}</span>
-      <span style={{ color: theme.text.main, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{label}</span>
-      {meta && <span className="db-hide-xs" style={{ color: theme.text.muted, fontSize: 11, fontFamily: 'ui-monospace,monospace', flexShrink: 0 }}>{meta}</span>}
+      <span style={{
+        color: theme.text.main, flex: 1, fontWeight: 500,
+        overflow: wrap ? 'visible' : 'hidden',
+        textOverflow: wrap ? 'clip' : 'ellipsis',
+        whiteSpace: wrap ? 'pre-wrap' : 'nowrap',
+        wordBreak: wrap ? 'break-word' : 'normal',
+        lineHeight: wrap ? 1.5 : undefined,
+      }}>{label}</span>
+      {meta && <span className="db-hide-xs" style={{ color: theme.text.muted, fontSize: 11, fontFamily: 'ui-monospace,monospace', flexShrink: 0, paddingTop: wrap ? 2 : 0 }}>{meta}</span>}
     </div>
   );
 }
@@ -1531,10 +1562,12 @@ function DashboardContent() {
                     ) : (
                       errors?.errors?.slice(0, 15).map((e, i) => {
                         const lbl = getStatusLabel(e.status);
+                        const isRateLimit = e.status === 429 || /limit_exceeded|rate_limit/i.test(e.message || '');
                         return (
-                          <LogRow key={i} time={formatTime(e.ts)} badge={e.status || 'Err'} badgeColor={lbl.color}
-                            label={`${shortModel(e.model)}: ${e.message || '未知错误'}`}
-                            meta={e.ip || undefined} theme={theme} />
+                          <LogRow key={i} time={formatTime(e.ts)} badge={e.status || 'Err'}
+                            badgeColor={isRateLimit ? theme.warn : lbl.color}
+                            label={`${shortModel(e.model)}: ${describeError(e)}`}
+                            meta={e.ip || undefined} theme={theme} wrap={true} />
                         );
                       })
                     )}
