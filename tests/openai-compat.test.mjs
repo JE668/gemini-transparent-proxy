@@ -14,6 +14,7 @@ import {
   GOOGLE_OPENAI_BLOCKED,
   sanitizeOpenAIBody,
   cleanTools,
+  cleanMessages,
   buildTargetUrl,
 } from '../lib/openai-compat.js';
 
@@ -142,4 +143,58 @@ test('buildTargetUrl: 保留 query string', () => {
     buildTargetUrl('/v1/chat/completions', '?alt=sse'),
     `${GOOGLE_API_BASE}/v1beta/openai/chat/completions?alt=sse`,
   );
+});
+
+test('cleanMessages: 普通 role 消息原样保留', () => {
+  const messages = [
+    { role: 'system', content: 'You are a bot' },
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'hello', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{}' } }] },
+  ];
+  const out = cleanMessages(messages);
+  assert.deepEqual(out, messages, 'system/user/assistant 消息应保留所有标准字段');
+});
+
+test('cleanMessages: tool role 消息透传 thought_signature', () => {
+  const messages = [
+    { role: 'tool', tool_call_id: 'call_1', content: 'result', thought_signature: 'abc123sig' },
+  ];
+  const out = cleanMessages(messages);
+  assert.deepEqual(out, [{ role: 'tool', tool_call_id: 'call_1', content: 'result', thought_signature: 'abc123sig' }]);
+});
+
+test('cleanMessages: function role 消息透传 thought_signature', () => {
+  const messages = [
+    { role: 'function', name: 'bash', content: 'result', thought_signature: 'def456sig' },
+  ];
+  const out = cleanMessages(messages);
+  assert.deepEqual(out, [{ role: 'function', name: 'bash', content: 'result', thought_signature: 'def456sig' }]);
+});
+
+test('cleanMessages: tool role 无 thought_signature 时不添加', () => {
+  const messages = [
+    { role: 'tool', tool_call_id: 'call_1', content: 'result' },
+  ];
+  const out = cleanMessages(messages);
+  assert.deepEqual(out, [{ role: 'tool', tool_call_id: 'call_1', content: 'result' }]);
+  assert.equal('thought_signature' in out[0], false, '没有 thought_signature 时不应添加该键');
+});
+
+test('sanitizeOpenAIBody: 保留 messages 中 function call 的 thought_signature', () => {
+  const body = JSON.stringify({
+    model: 'gemini-4-thinking',
+    messages: [
+      { role: 'user', content: 'run bash' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }] },
+      { role: 'tool', tool_call_id: 'call_1', content: 'output', thought_signature: 'abc123sig' },
+    ],
+    tools: [{ type: 'function', function: { name: 'bash', description: 'run cmd', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } } }],
+  });
+  const out = JSON.parse(sanitizeOpenAIBody(body));
+  assert.equal(out.messages[2].thought_signature, 'abc123sig', 'tool 消息的 thought_signature 必须透传');
+  assert.deepEqual(out.tools[0].function, {
+    name: 'bash',
+    description: 'run cmd',
+    parameters: { type: 'object', properties: { cmd: { type: 'string' } } },
+  }, 'tools 仍应被 cleanTools 清洗');
 });
