@@ -87,6 +87,57 @@ test('模型目录：每个模型都带 limit 与 description（/v1/models 对�
   }
 });
 
+test('模型目录：每个模型都带能力字段（DSH/Reasonix 客户端读取 max token/读图）', () => {
+  const required = [
+    'context_window', 'max_output_tokens', 'input_token_limit', 'output_token_limit',
+    'supports_vision', 'supports_tts', 'supports_thinking', 'is_agent',
+    'supported_generation_methods', 'display_name',
+  ];
+  for (const m of HIGH_QUOTA_MODELS) {
+    for (const f of required) {
+      assert.ok(m[f] !== undefined, `${m.id} 缺少能力字段 ${f}`);
+    }
+    // context_window / max_output_tokens 必须是正整数（客户端据此设 max_tokens）
+    assert.ok(Number.isInteger(m.context_window) && m.context_window > 0, `${m.id} context_window 无效`);
+    assert.ok(Number.isInteger(m.max_output_tokens) && m.max_output_tokens > 0, `${m.id} max_output_tokens 无效`);
+    // OpenAI 兼容字段与 Google 原生字段一致
+    assert.equal(m.context_window, m.input_token_limit, `${m.id} context_window 与 input_token_limit 不一致`);
+    assert.equal(m.max_output_tokens, m.output_token_limit, `${m.id} max_output_tokens 与 output_token_limit 不一致`);
+    // supported_generation_methods 必须包含 generateContent（文本对话）
+    assert.ok(Array.isArray(m.supported_generation_methods) && m.supported_generation_methods.includes('generateContent'),
+      `${m.id} 缺少 generateContent 支持`);
+  }
+});
+
+test('模型目录：能力字段语义正确（读图/TTS/思考/Agent 分类）', () => {
+  // Flash 系列（非 TTS）应支持读图 + 思考
+  for (const id of ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']) {
+    const m = HIGH_QUOTA_MODELS.find(x => x.id === id);
+    assert.ok(m, `${id} 不在目录中`);
+    assert.equal(m.supports_vision, true, `${id} 应支持读图`);
+    assert.equal(m.supports_tts, false, `${id} 不是 TTS`);
+  }
+  // Gemma 4：能读图但不支持思考（轻量模型）
+  for (const id of ['gemma-4-31b-it', 'gemma-4-26b-a4b-it']) {
+    const m = HIGH_QUOTA_MODELS.find(x => x.id === id);
+    assert.equal(m.supports_vision, true, `${id} 应支持读图`);
+    assert.equal(m.supports_thinking, false, `${id} 不支持思考`);
+    assert.equal(m.context_window, 262144, `${id} 上下文应为 256K`);
+  }
+  // TTS 模型：不支持读图，专用于语音合成
+  const ttsIds = HIGH_QUOTA_MODELS.filter(m => m.supports_tts).map(m => m.id);
+  assert.ok(ttsIds.length >= 4, '应有至少 4 个 TTS 模型');
+  for (const id of ttsIds) {
+    const m = HIGH_QUOTA_MODELS.find(x => x.id === id);
+    assert.equal(m.supports_vision, false, `${id} TTS 不支持读图`);
+    assert.equal(m.context_window, 8192, `${id} TTS 上下文应为 8K`);
+  }
+  // Agent 模型：Antigravity 走 Interactions API
+  const agent = HIGH_QUOTA_MODELS.find(m => m.id === 'antigravity-preview-05-2026');
+  assert.equal(agent.is_agent, true, 'Antigravity 是 Agent 模型');
+  assert.equal(agent.supports_vision, true, 'Antigravity 支持读图');
+});
+
 test('TPM_LIMITS：目录里的每个模型都有对应额度（漏配会让限流静默失效）', () => {
   for (const m of HIGH_QUOTA_MODELS) {
     assert.ok(TPM_LIMITS[m.id] > 0, `模型 ${m.id} 未在 TPM_LIMITS 中配置`);
