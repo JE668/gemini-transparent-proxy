@@ -433,7 +433,7 @@ function StatusBar({ counts, theme }) {
 // 数据来自 /api/heat（由 telemetry.js 写入 heat:{dim}:{date}:h{hour} Hash）
 // =============================================================================
 function HeatMatrix({ dim, data, theme }) {
-  // dim: 'status' | 'latency' | 'models'
+  // dim: 'status' | 'latency' | 'models' | 'clients' | 'tokens'
   const matrix = data?.[dim];
   if (!matrix || !matrix.rows || matrix.rows.length === 0) return null;
   const rows = matrix.rows;
@@ -442,7 +442,8 @@ function HeatMatrix({ dim, data, theme }) {
   const maxVal = Math.max(...rows.flatMap(r => r.values), 1);
   const cellSize = 13;
 
-  // 维度配色：状态用红/黄/绿语义色，延迟用蓝/紫梯度，模型用模型色
+  // 维度配色：状态用红/黄/绿语义色，延迟用蓝/紫梯度，模型用模型色，
+  // 来源用分类色（curl/Python/Node/Postman/浏览器/其他），token 用分桶梯度色
   const rowColor = (row) => {
     if (dim === 'status') {
       const code = Number(row.id);
@@ -454,13 +455,26 @@ function HeatMatrix({ dim, data, theme }) {
     if (dim === 'latency') {
       return row.id === 'critical' ? theme.err : row.id === 'slow' ? theme.warn : row.id === 'mid' ? theme.accent : theme.accent2;
     }
+    if (dim === 'clients') {
+      const map = {
+        curl: '#22d3ee', python: '#fbbf24', node: '#4ade80',
+        postman: '#fb923c', browser: '#818cf8', other: '#94a3b8',
+      };
+      return map[row.id] || theme.text.muted;
+    }
+    if (dim === 'tokens') {
+      const map = {
+        none: '#94a3b8', tiny: '#22d3ee', small: '#38bdf8',
+        medium: '#a78bfa', large: '#f87171',
+      };
+      return map[row.id] || theme.text.muted;
+    }
     return getModelColor(row.id);
   };
 
   const rowLabel = (row) => {
-    if (dim === 'status') return row.label || row.id;
-    if (dim === 'latency') return row.label || row.id;
-    return shortModel(row.label || row.id);
+    if (dim === 'models') return shortModel(row.label || row.id);
+    return row.label || row.id;
   };
 
   return (
@@ -1459,7 +1473,7 @@ function DashboardContent() {
               {/* 错误分析 */}
               <Panel id="errors" icon="🚨" title="错误日志与时序分布" meta={`今日错误数: ${errorCount}`} theme={theme} accent={theme.err}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {/* 多维热力图：状态 / 延迟 / 模型 × 24 小时 */}
+                  {/* 多维热力图：状态 / 延迟 / 模型 / 来源 / token × 24 小时 */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div>
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>状态码 × 小时热力图 (24h)</div>
@@ -1474,6 +1488,16 @@ function DashboardContent() {
                     <div>
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>模型 × 小时热力图 (24h)</div>
                       <HeatMatrix dim="models" data={heat} theme={theme} />
+                      <HeatHourAxis data={heat} theme={theme} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>调用来源 × 小时热力图 (24h)</div>
+                      <HeatMatrix dim="clients" data={heat} theme={theme} />
+                      <HeatHourAxis data={heat} theme={theme} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>输入 Token × 小时热力图 (24h)</div>
+                      <HeatMatrix dim="tokens" data={heat} theme={theme} />
                       <HeatHourAxis data={heat} theme={theme} />
                     </div>
                   </div>

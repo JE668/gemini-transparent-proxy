@@ -22,6 +22,10 @@ import {
   TELEMETRY_OPS,
   LATENCY_BUCKETS,
   latencyToBucket,
+  CLIENT_TYPES,
+  TOKEN_BUCKETS,
+  uaToClientType,
+  tokensToBucket,
 } from '../lib/telemetry.js';
 
 const BASE = {
@@ -259,4 +263,53 @@ test('telemetryEventsToRedisPromises: HINCRBY 翻译成 redis.hincrby', () => {
   const hincr = calls.find(c => c[0] === 'hincrby' && c[1] === 'heat:status:2026-10-30:h9');
   assert.ok(hincr, 'redis.hincrby 必须被调用');
   assert.deepEqual([hincr[2], hincr[3]], ['200', 1]);
+});
+
+test('uaToClientType: User-Agent 分类正确', () => {
+  assert.equal(uaToClientType('curl/8.0'), 'curl');
+  assert.equal(uaToClientType('python-requests/2.31'), 'python');
+  assert.equal(uaToClientType('python-httpx/0.27'), 'python');
+  assert.equal(uaToClientType('node-fetch/3.0'), 'node');
+  assert.equal(uaToClientType('PostmanRuntime/7.32'), 'postman');
+  assert.equal(uaToClientType('Mozilla/5.0 (Macintosh) Chrome/120'), 'browser');
+  assert.equal(uaToClientType('Mozilla/5.0 (Windows NT 10.0) Firefox/121'), 'browser');
+  assert.equal(uaToClientType('some-custom-sdk'), 'other');
+  assert.equal(uaToClientType(''), 'other');
+  assert.equal(uaToClientType('unknown'), 'other');
+});
+
+test('tokensToBucket: 输入 token 分桶边界正确', () => {
+  assert.equal(tokensToBucket(0), 'none');
+  assert.equal(tokensToBucket(500), 'tiny');
+  assert.equal(tokensToBucket(501), 'small');
+  assert.equal(tokensToBucket(2000), 'small');
+  assert.equal(tokensToBucket(2001), 'medium');
+  assert.equal(tokensToBucket(8000), 'medium');
+  assert.equal(tokensToBucket(8001), 'large');
+  assert.equal(tokensToBucket(999999), 'large');
+  assert.equal(tokensToBucket(-5), 'none');
+});
+
+test('CLIENT_TYPES/TOKEN_BUCKETS: 定义稳定且完整（读取端点依赖此顺序）', () => {
+  assert.deepEqual(CLIENT_TYPES.map(c => c.id), ['curl', 'python', 'node', 'postman', 'browser', 'other']);
+  assert.deepEqual(TOKEN_BUCKETS.map(b => b.id), ['none', 'tiny', 'small', 'medium', 'large']);
+  assert.deepEqual(TOKEN_BUCKETS.map(b => b.label), ['0', '1–500', '501–2k', '2k–8k', '>8k']);
+});
+
+test('buildTelemetryEvents: 来源与 token 交叉计数写入正确', () => {
+  const events = buildTelemetryEvents({ ...BASE, ua: 'curl/8.0', inputTokens: 1200 });
+  const clientHeat = findEvent(events, TELEMETRY_OPS.HINCRBY, 'heat:client:2026-10-30:h9');
+  assert.ok(clientHeat, '必须写 client×hour 交叉计数');
+  assert.deepEqual(clientHeat.args, ['curl', 1]);
+  const tokenHeat = findEvent(events, TELEMETRY_OPS.HINCRBY, 'heat:token:2026-10-30:h9');
+  assert.ok(tokenHeat, '必须写 token×hour 交叉计数');
+  // 1200 token → small 桶（501–2k）
+  assert.deepEqual(tokenHeat.args, ['small', 1]);
+});
+
+test('buildTelemetryEvents: 无 inputTokens 时 token 分桶记为 0（none）', () => {
+  const events = buildTelemetryEvents({ ...BASE, inputTokens: 0 });
+  const tokenHeat = findEvent(events, TELEMETRY_OPS.HINCRBY, 'heat:token:2026-10-30:h9');
+  assert.ok(tokenHeat, '必须写 token×hour 交叉计数');
+  assert.deepEqual(tokenHeat.args, ['none', 1]);
 });

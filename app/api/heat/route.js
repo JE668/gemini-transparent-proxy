@@ -11,7 +11,7 @@ import { isDashboardAuthed, unauthorizedResponse } from '../../../lib/auth';
 // 端点输出固定行（状态码 / 延迟桶），模型行为动态发现（按出现次数排序取前 N）。
 import { getQuotaDate } from '../../../lib/utils';
 import getRedis from '../../../lib/redis';
-import { LATENCY_BUCKETS, HEAT_STATUS_CODES } from '../../../lib/telemetry';
+import { LATENCY_BUCKETS, HEAT_STATUS_CODES, CLIENT_TYPES, TOKEN_BUCKETS } from '../../../lib/telemetry';
 
 export async function GET(req) {
   if (!isDashboardAuthed(req)) return unauthorizedResponse();
@@ -24,17 +24,21 @@ export async function GET(req) {
         status: { rows: [], hours: [] },
         latency: { rows: [], hours: [] },
         models: { rows: [], hours: [] },
+        clients: { rows: [], hours: [] },
+        tokens: { rows: [], hours: [] },
       });
     }
 
     const date = getQuotaDate();
 
-    // 并行拉取 24 小时 × 3 个维度的 Hash
+    // 并行拉取 24 小时 × 5 个维度的 Hash
     const pipeline = redis.pipeline();
     for (let h = 0; h < 24; h++) {
       pipeline.hgetall(`heat:status:${date}:h${h}`);
       pipeline.hgetall(`heat:latency:${date}:h${h}`);
       pipeline.hgetall(`heat:model:${date}:h${h}`);
+      pipeline.hgetall(`heat:client:${date}:h${h}`);
+      pipeline.hgetall(`heat:token:${date}:h${h}`);
     }
     const results = await pipeline.exec();
 
@@ -42,11 +46,15 @@ export async function GET(req) {
     const statusBuckets = new Map(); // field → 24 长度数组
     const latencyBuckets = new Map();
     const modelBuckets = new Map();
+    const clientBuckets = new Map();
+    const tokenBuckets = new Map();
 
     for (let h = 0; h < 24; h++) {
-      const statusHash = results[h * 3] || {};
-      const latencyHash = results[h * 3 + 1] || {};
-      const modelHash = results[h * 3 + 2] || {};
+      const statusHash = results[h * 5] || {};
+      const latencyHash = results[h * 5 + 1] || {};
+      const modelHash = results[h * 5 + 2] || {};
+      const clientHash = results[h * 5 + 3] || {};
+      const tokenHash = results[h * 5 + 4] || {};
 
       for (const [field, count] of Object.entries(statusHash)) {
         if (!statusBuckets.has(field)) statusBuckets.set(field, new Array(24).fill(0));
@@ -59,6 +67,14 @@ export async function GET(req) {
       for (const [field, count] of Object.entries(modelHash)) {
         if (!modelBuckets.has(field)) modelBuckets.set(field, new Array(24).fill(0));
         modelBuckets.get(field)[h] = Number(count) || 0;
+      }
+      for (const [field, count] of Object.entries(clientHash)) {
+        if (!clientBuckets.has(field)) clientBuckets.set(field, new Array(24).fill(0));
+        clientBuckets.get(field)[h] = Number(count) || 0;
+      }
+      for (const [field, count] of Object.entries(tokenHash)) {
+        if (!tokenBuckets.has(field)) tokenBuckets.set(field, new Array(24).fill(0));
+        tokenBuckets.get(field)[h] = Number(count) || 0;
       }
     }
 
@@ -92,12 +108,32 @@ export async function GET(req) {
       .slice(0, 8)
       .map(({ id, label, values }) => ({ id, label, values }));
 
+    // 客户端来源行：按 CLIENT_TYPES 定义顺序输出（缺失补 0，只保留有数据的）
+    const clientRows = CLIENT_TYPES
+      .filter(c => clientBuckets.has(c.id))
+      .map(c => ({
+        id: c.id,
+        label: c.label,
+        values: clientBuckets.get(c.id),
+      }));
+
+    // token 行：按 TOKEN_BUCKETS 定义顺序输出（缺失补 0，只保留有数据的）
+    const tokenRows = TOKEN_BUCKETS
+      .filter(b => tokenBuckets.has(b.id))
+      .map(b => ({
+        id: b.id,
+        label: b.label,
+        values: tokenBuckets.get(b.id),
+      }));
+
     return Response.json({
       date,
       redisEnabled: true,
       status: { rows: statusRows, hours },
       latency: { rows: latencyRows, hours },
       models: { rows: modelRows, hours },
+      clients: { rows: clientRows, hours },
+      tokens: { rows: tokenRows, hours },
     });
   } catch (err) {
     console.error('Heat API Error:', err);
