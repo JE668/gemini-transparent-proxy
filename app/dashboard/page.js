@@ -344,7 +344,7 @@ function TimeSeriesChart({ data, height = 210, theme }) {
             <g key={i}>
               <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={theme.grid} strokeWidth="1" strokeDasharray={i === yTicks ? '0' : '3 4'} />
               <text x={padL - 9} y={y + 3.5} textAnchor="end" fill={theme.text.muted} fontSize="10" fontFamily="ui-monospace,monospace">
-                {fmtCompact(v)}
+                {fmtK(v)}
               </text>
             </g>
           );
