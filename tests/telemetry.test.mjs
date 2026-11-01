@@ -26,6 +26,7 @@ import {
   TOKEN_BUCKETS,
   uaToClientType,
   tokensToBucket,
+  defaultErrorTypeFor,
 } from '../lib/telemetry.js';
 
 const BASE = {
@@ -325,4 +326,47 @@ test('buildTelemetryEvents: 错误状态码×小时只在失败时写入（错�
   const ok = buildTelemetryEvents(BASE);
   const okHeat = findEvent(ok, TELEMETRY_OPS.HINCRBY, 'heat:error:2026-10-30:h9');
   assert.equal(okHeat, undefined, '成功请求不写 error×hour 交叉计数');
+});
+
+test('defaultErrorTypeFor: 状态码自动归类错误类型', () => {
+  assert.equal(defaultErrorTypeFor(429), 'rate_limit_exceeded');
+  assert.equal(defaultErrorTypeFor(401), 'auth_failed');
+  assert.equal(defaultErrorTypeFor(403), 'auth_failed');
+  assert.equal(defaultErrorTypeFor(500), 'upstream_error');
+  assert.equal(defaultErrorTypeFor(502), 'upstream_error');
+  assert.equal(defaultErrorTypeFor(503), 'upstream_error');
+  assert.equal(defaultErrorTypeFor(400), 'invalid_request_error');
+  assert.equal(defaultErrorTypeFor(404), 'invalid_request_error');
+  assert.equal(defaultErrorTypeFor(200), '');
+});
+
+test('buildTelemetryEvents: 错误条目写入 type 字段（限流类型结构化落库）', () => {
+  // 限流：buildRateLimitTelemetryEvents 传 errorType = reason
+  const rl = buildRateLimitTelemetryEvents({
+    date: '2026-10-30', hour: 9, status: 429, model: 'gemma-4-31b-it',
+    reason: 'rpm_limit_exceeded (60 RPM)',
+  });
+  const rlErr = rl.find(ev => ev.op === TELEMETRY_OPS.LPUSH && ev.key === 'errors:2026-10-30');
+  assert.ok(rlErr, '限流必须写错误日志');
+  const rlEntry = JSON.parse(rlErr.args[0]);
+  assert.equal(rlEntry.type, 'rpm_limit_exceeded (60 RPM)', '限流 reason 写入 type');
+  assert.equal(rlEntry.message, 'rpm_limit_exceeded (60 RPM)');
+
+  // 普通 5xx：defaultErrorTypeFor 兜底 → upstream_error
+  const bad5xx = buildTelemetryEvents({ ...BASE, status: 502, errorMessage: 'Upstream returned HTTP 502' });
+  const err5xx = bad5xx.find(ev => ev.op === TELEMETRY_OPS.LPUSH && ev.key === 'errors:2026-10-30');
+  const entry5xx = JSON.parse(err5xx.args[0]);
+  assert.equal(entry5xx.type, 'upstream_error', '5xx 自动归类为 upstream_error');
+
+  // 普通 400：→ invalid_request_error
+  const bad400 = buildTelemetryEvents({ ...BASE, status: 400, errorMessage: 'Bad request' });
+  const err400 = bad400.find(ev => ev.op === TELEMETRY_OPS.LPUSH && ev.key === 'errors:2026-10-30');
+  const entry400 = JSON.parse(err400.args[0]);
+  assert.equal(entry400.type, 'invalid_request_error', '4xx 自动归类为 invalid_request_error');
+
+  // 显式 errorType 优先于默认归类
+  const explicit = buildTelemetryEvents({ ...BASE, status: 502, errorMessage: 'Proxy failed', errorType: 'proxy_error' });
+  const errEx = explicit.find(ev => ev.op === TELEMETRY_OPS.LPUSH && ev.key === 'errors:2026-10-30');
+  const entryEx = JSON.parse(errEx.args[0]);
+  assert.equal(entryEx.type, 'proxy_error', '显式 errorType 优先');
 });

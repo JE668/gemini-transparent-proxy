@@ -90,14 +90,45 @@ const getStatusLabel = (code) => {
   return { text: '成功', color: '#4ade80' };
 };
 
-// 把错误信息转成清晰的中文描述（限流类型一目了然）
-// e.message 由 recordRateLimitTelemetry 写入，格式形如：
+// 把错误信息转成清晰的中文描述（错误类型一目了然）
+// 优先用结构化 e.type（telemetry.js 落库），旧记录无 type 时回退解析 message。
+// e.type 取值（defaultErrorTypeFor + 两端写入）：
+//   rate_limit_exceeded / token_rate_limit_exceeded / upstream_error /
+//   proxy_error / invalid_request_error / auth_failed
+// e.message 格式形如：
 //   "rpm_limit_exceeded (60 RPM)"
 //   "tpm_limit_exceeded (16000/min, need 2203)"
-//   "rate_limit_exceeded"
-//   "token_rate_limit_exceeded"
+const ERROR_TYPE_LABELS = {
+  rate_limit_exceeded: 'RPM 限流：每分钟请求数超限',
+  token_rate_limit_exceeded: 'TPM 限流：每分钟输入 token 超限',
+  rpm_limit_exceeded: 'RPM 限流：每分钟请求数超限',
+  tpm_limit_exceeded: 'TPM 限流：每分钟输入 token 超限',
+  upstream_error: '上游错误：Google API 返回错误',
+  upstream_429: '上游限流：Google 返回 429（免费层额度不足）',
+  proxy_error: '代理错误：转发请求失败（代理层异常）',
+  invalid_request_error: '请求无效：参数或格式不合法',
+  auth_failed: '认证失败：API 密钥无效或无权限',
+  model_not_found: '模型不存在：模型名不识别',
+};
+
 const describeError = (e) => {
   const msg = e?.message || '';
+  const type = e?.type || '';
+
+  // 1) 优先按结构化 type 映射（含限流类型带限额细节）
+  if (type) {
+    // type 可能带限额细节，如 "rpm_limit_exceeded (60 RPM)" —— 提取基础类型再查表
+    const baseType = type.match(/^([a-z_]+)/)?.[1] || type;
+    const label = ERROR_TYPE_LABELS[baseType] || ERROR_TYPE_LABELS[type];
+    // 限流类型：附上限额细节（message/type 里已带 "(60 RPM)" 等）
+    const detailMatch = msg.match(/^[a-z_]+\((.+)\)$/) || type.match(/^[a-z_]+\((.+)\)$/);
+    if (label && /limit_exceeded|rate_limit/i.test(baseType) && detailMatch) {
+      return `${label} (${detailMatch[1]})`;
+    }
+    if (label) return label;
+  }
+
+  // 2) 回退：解析 message 字符串（旧记录无 type 字段）
   if (e?.status === 429 || msg.includes('limit_exceeded') || msg.includes('rate_limit')) {
     if (msg.includes('tpm_limit_exceeded')) {
       const m = msg.match(/tpm_limit_exceeded\s*\(([^)]+)\)/);
@@ -110,7 +141,7 @@ const describeError = (e) => {
     if (msg.includes('token_rate_limit_exceeded')) return 'TPM 限流：每分钟输入 token 超限';
     if (msg.includes('rate_limit_exceeded')) return 'RPM 限流：每分钟请求数超限';
   }
-  // 其他错误：透传原始信息（含 429 上游限流等具体原因）
+  // 3) 其他错误：透传原始信息（含上游 400 原文等具体原因）
   return msg;
 };
 const formatDuration = (minutes) => {

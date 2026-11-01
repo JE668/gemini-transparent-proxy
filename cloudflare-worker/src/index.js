@@ -882,6 +882,8 @@ export default {
           model: 'proxy-error',
           latency: Date.now() - startTime,
           message: error.message,
+          // 代理层异常（非上游返回）单独标记
+          type: 'proxy_error',
           ua: request.headers.get('user-agent') || 'unknown',
           ip: clientIP,
         })],
