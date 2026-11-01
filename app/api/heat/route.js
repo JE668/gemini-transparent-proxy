@@ -26,12 +26,13 @@ export async function GET(req) {
         models: { rows: [], hours: [] },
         clients: { rows: [], hours: [] },
         tokens: { rows: [], hours: [] },
+        errors: { rows: [], hours: [] },
       });
     }
 
     const date = getQuotaDate();
 
-    // 并行拉取 24 小时 × 5 个维度的 Hash
+    // 并行拉取 24 小时 × 6 个维度的 Hash
     const pipeline = redis.pipeline();
     for (let h = 0; h < 24; h++) {
       pipeline.hgetall(`heat:status:${date}:h${h}`);
@@ -39,6 +40,7 @@ export async function GET(req) {
       pipeline.hgetall(`heat:model:${date}:h${h}`);
       pipeline.hgetall(`heat:client:${date}:h${h}`);
       pipeline.hgetall(`heat:token:${date}:h${h}`);
+      pipeline.hgetall(`heat:error:${date}:h${h}`);
     }
     const results = await pipeline.exec();
 
@@ -48,13 +50,15 @@ export async function GET(req) {
     const modelBuckets = new Map();
     const clientBuckets = new Map();
     const tokenBuckets = new Map();
+    const errorBuckets = new Map();
 
     for (let h = 0; h < 24; h++) {
-      const statusHash = results[h * 5] || {};
-      const latencyHash = results[h * 5 + 1] || {};
-      const modelHash = results[h * 5 + 2] || {};
-      const clientHash = results[h * 5 + 3] || {};
-      const tokenHash = results[h * 5 + 4] || {};
+      const statusHash = results[h * 6] || {};
+      const latencyHash = results[h * 6 + 1] || {};
+      const modelHash = results[h * 6 + 2] || {};
+      const clientHash = results[h * 6 + 3] || {};
+      const tokenHash = results[h * 6 + 4] || {};
+      const errorHash = results[h * 6 + 5] || {};
 
       for (const [field, count] of Object.entries(statusHash)) {
         if (!statusBuckets.has(field)) statusBuckets.set(field, new Array(24).fill(0));
@@ -75,6 +79,10 @@ export async function GET(req) {
       for (const [field, count] of Object.entries(tokenHash)) {
         if (!tokenBuckets.has(field)) tokenBuckets.set(field, new Array(24).fill(0));
         tokenBuckets.get(field)[h] = Number(count) || 0;
+      }
+      for (const [field, count] of Object.entries(errorHash)) {
+        if (!errorBuckets.has(field)) errorBuckets.set(field, new Array(24).fill(0));
+        errorBuckets.get(field)[h] = Number(count) || 0;
       }
     }
 
@@ -126,6 +134,15 @@ export async function GET(req) {
         values: tokenBuckets.get(b.id),
       }));
 
+    // 错误状态码行：只含失败请求（4xx/5xx），供错误板块专用热力图
+    const errorRows = HEAT_STATUS_CODES
+      .filter(code => errorBuckets.has(String(code)))
+      .map(code => ({
+        id: String(code),
+        label: String(code),
+        values: errorBuckets.get(String(code)),
+      }));
+
     return Response.json({
       date,
       redisEnabled: true,
@@ -134,6 +151,7 @@ export async function GET(req) {
       models: { rows: modelRows, hours },
       clients: { rows: clientRows, hours },
       tokens: { rows: tokenRows, hours },
+      errors: { rows: errorRows, hours },
     });
   } catch (err) {
     console.error('Heat API Error:', err);

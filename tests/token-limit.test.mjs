@@ -99,6 +99,35 @@ test('estimateInputTokens: Chat Completions 的 tool_calls 参数被计入', () 
   assert.ok(n > 0, 'tool_calls.arguments 必须被计入');
 });
 
+test('estimateInputTokens: 顶层 tools 数组被计入（Agent 场景关键，防上游 429）', () => {
+  const withTools = estimateInputTokens({
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'default_api:bash',
+        description: '执行 shell 命令。'.repeat(5),
+        parameters: { type: 'object', properties: { cmd: { type: 'string', description: '命令' } }, required: ['cmd'] },
+      },
+    }],
+  });
+  const withoutTools = estimateInputTokens({ messages: [{ role: 'user', content: 'hi' }] });
+  assert.ok(withTools > withoutTools, '顶层 tools 定义必须被计入（否则低估→放行→上游 429）');
+  // 大量工具定义（Reasonix/DSH 典型负载）应显著高于基础消息
+  const manyTools = estimateInputTokens({
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: Array.from({ length: 30 }, (_, i) => ({
+      type: 'function',
+      function: {
+        name: `default_api:tool_${i}`,
+        description: '工具描述，用于向模型解释用途。'.repeat(3),
+        parameters: { type: 'object', properties: { cmd: { type: 'string' } }, required: ['cmd'] },
+      },
+    })),
+  });
+  assert.ok(manyTools > 1000, `30 个工具定义应贡献 >1000 token，实际 ${manyTools}`);
+});
+
 test('estimateInputTokens: 空 body 返回 0', () => {
   assert.equal(estimateInputTokens({}), 0);
   assert.equal(estimateInputTokens({ messages: [] }), 0);

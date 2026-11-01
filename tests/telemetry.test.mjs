@@ -313,3 +313,16 @@ test('buildTelemetryEvents: 无 inputTokens 时 token 分桶记为 0（none）',
   assert.ok(tokenHeat, '必须写 token×hour 交叉计数');
   assert.deepEqual(tokenHeat.args, ['none', 1]);
 });
+
+test('buildTelemetryEvents: 错误状态码×小时只在失败时写入（错误板块专用）', () => {
+  // 失败请求：必须写 heat:error
+  const bad = buildTelemetryEvents({ ...BASE, status: 429 });
+  const badHeat = findEvent(bad, TELEMETRY_OPS.HINCRBY, 'heat:error:2026-10-30:h9');
+  assert.ok(badHeat, '失败请求必须写 error×hour 交叉计数');
+  assert.deepEqual(badHeat.args, ['429', 1]);
+
+  // 成功请求：不写 heat:error
+  const ok = buildTelemetryEvents(BASE);
+  const okHeat = findEvent(ok, TELEMETRY_OPS.HINCRBY, 'heat:error:2026-10-30:h9');
+  assert.equal(okHeat, undefined, '成功请求不写 error×hour 交叉计数');
+});

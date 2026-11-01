@@ -433,7 +433,7 @@ function StatusBar({ counts, theme }) {
 // 数据来自 /api/heat（由 telemetry.js 写入 heat:{dim}:{date}:h{hour} Hash）
 // =============================================================================
 function HeatMatrix({ dim, data, theme }) {
-  // dim: 'status' | 'latency' | 'models' | 'clients' | 'tokens'
+  // dim: 'status' | 'latency' | 'models' | 'clients' | 'tokens' | 'errors'
   const matrix = data?.[dim];
   if (!matrix || !matrix.rows || matrix.rows.length === 0) return null;
   const rows = matrix.rows;
@@ -443,9 +443,10 @@ function HeatMatrix({ dim, data, theme }) {
   const cellSize = 13;
 
   // 维度配色：状态用红/黄/绿语义色，延迟用蓝/紫梯度，模型用模型色，
-  // 来源用分类色（curl/Python/Node/Postman/浏览器/其他），token 用分桶梯度色
+  // 来源用分类色（curl/Python/Node/Postman/浏览器/其他），token 用分桶梯度色，
+  // errors（仅失败请求）用 warn/err 语义色
   const rowColor = (row) => {
-    if (dim === 'status') {
+    if (dim === 'status' || dim === 'errors') {
       const code = Number(row.id);
       if (!code) return theme.text.muted;
       if (code >= 500) return theme.err;
@@ -513,7 +514,7 @@ function HeatMatrix({ dim, data, theme }) {
 
 // 热力图底部小时刻度
 function HeatHourAxis({ data, theme }) {
-  const matrix = data?.status || data?.latency || data?.models;
+  const matrix = data?.status || data?.latency || data?.models || data?.clients || data?.tokens || data?.errors;
   const hours = matrix?.hours || Array.from({ length: 24 }, (_, i) => i);
   return (
     <div style={{ display: 'flex', gap: 2.5, marginTop: 4, paddingLeft: 54 }}>
@@ -1466,6 +1467,50 @@ function DashboardContent() {
             </div>
           </div>
 
+          {/* ============ 流量热力图（非错误维度独立板块）============ */}
+          <div style={{ marginTop: 22 }} id="sec-heat" style={{ scrollMarginTop: 78 }}>
+            <div className="db-split" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+              
+              {/* 流量热力图（延迟/模型/来源/token/全量状态码） */}
+              <Panel id="heat-flow" icon="📊" title="流量热力图" meta="24h × 维度分布" theme={theme} accent={theme.accent2}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>状态码 × 小时热力图 (24h)</div>
+                    <HeatMatrix dim="status" data={heat} theme={theme} />
+                    <HeatHourAxis data={heat} theme={theme} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>延迟 × 小时热力图 (24h)</div>
+                    <HeatMatrix dim="latency" data={heat} theme={theme} />
+                    <HeatHourAxis data={heat} theme={theme} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>模型 × 小时热力图 (24h)</div>
+                    <HeatMatrix dim="models" data={heat} theme={theme} />
+                    <HeatHourAxis data={heat} theme={theme} />
+                  </div>
+                </div>
+              </Panel>
+
+              {/* 流量热力图（来源/token） */}
+              <Panel id="heat-flow2" icon="🧭" title="流量特征热力图" meta="来源 / token 分布" theme={theme} accent={theme.accent3}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>调用来源 × 小时热力图 (24h)</div>
+                    <HeatMatrix dim="clients" data={heat} theme={theme} />
+                    <HeatHourAxis data={heat} theme={theme} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>输入 Token × 小时热力图 (24h)</div>
+                    <HeatMatrix dim="tokens" data={heat} theme={theme} />
+                    <HeatHourAxis data={heat} theme={theme} />
+                  </div>
+                </div>
+              </Panel>
+
+            </div>
+          </div>
+
           {/* 错误分析 + 系统状态 */}
           <div style={{ marginTop: 22 }} id="sec-errors" style={{ scrollMarginTop: 78 }}>
             <div className="db-split" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
@@ -1473,33 +1518,11 @@ function DashboardContent() {
               {/* 错误分析 */}
               <Panel id="errors" icon="🚨" title="错误日志与时序分布" meta={`今日错误数: ${errorCount}`} theme={theme} accent={theme.err}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {/* 多维热力图：状态 / 延迟 / 模型 / 来源 / token × 24 小时 */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>状态码 × 小时热力图 (24h)</div>
-                      <HeatMatrix dim="status" data={heat} theme={theme} />
-                      <HeatHourAxis data={heat} theme={theme} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>延迟 × 小时热力图 (24h)</div>
-                      <HeatMatrix dim="latency" data={heat} theme={theme} />
-                      <HeatHourAxis data={heat} theme={theme} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>模型 × 小时热力图 (24h)</div>
-                      <HeatMatrix dim="models" data={heat} theme={theme} />
-                      <HeatHourAxis data={heat} theme={theme} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>调用来源 × 小时热力图 (24h)</div>
-                      <HeatMatrix dim="clients" data={heat} theme={theme} />
-                      <HeatHourAxis data={heat} theme={theme} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>输入 Token × 小时热力图 (24h)</div>
-                      <HeatMatrix dim="tokens" data={heat} theme={theme} />
-                      <HeatHourAxis data={heat} theme={theme} />
-                    </div>
+                  {/* 错误状态码热力图（仅失败请求，错误板块专用）*/}
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>错误状态码 × 小时热力图 (24h)</div>
+                    <HeatMatrix dim="errors" data={heat} theme={theme} />
+                    <HeatHourAxis data={heat} theme={theme} />
                   </div>
                   {/* 原始单条错误列表 */}
                   <div style={{ maxHeight: 240, overflowY: 'auto', paddingRight: 4 }} className="db-scroll">

@@ -247,6 +247,13 @@ test('injectThoughtSignature: gemma-4-26b-a4b-it 返回模型级固定 sig', () 
   assert.equal(sig, 'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==');
 });
 
+test('injectThoughtSignature: gemma-4-31b-it 也返回同一模型家族固定 sig（修复 400）', () => {
+  // ⚠️ 实测：gemma-4-31b-it 的 thought_signature 与 gemma-4-26b-a4b-it 完全相同
+  //    （同一模型家族）。此前不在注入表 → DSH/Reasonix 调用时缺 sig → Google 400。
+  const sig = injectThoughtSignature('gemma-4-31b-it');
+  assert.equal(sig, 'EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==');
+});
+
 test('injectThoughtSignature: 兼容 models/ 前缀', () => {
   assert.equal(
     injectThoughtSignature('models/gemma-4-26b-a4b-it'),
