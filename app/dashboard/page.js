@@ -40,7 +40,6 @@ const ANIM_CSS = `
 .db-qcard { transition: transform .2s cubic-bezier(.4,0,.2,1), border-color .2s ease, box-shadow .2s ease; }
 .db-qcard:hover { transform: translateY(-3px); }
 @media (max-width: 1080px) {
-  .db-sidebar { display: none !important; }
   .db-main { margin-left: 0 !important; }
 }
 @media (max-width: 768px) {
@@ -75,15 +74,6 @@ const MODEL_COLORS = {
   'default': '#818cf8',
 };
 const getModelColor = (id) => MODEL_COLORS[id] || MODEL_COLORS.default;
-
-const SECTIONS = [
-  { id: 'overview', label: '实时监控', icon: '📈', desc: '核心指标与流量趋势' },
-  { id: 'quota', label: '模型配额', icon: '⚡', desc: '用量 · 限额 · 耗尽预测' },
-  { id: 'traffic', label: '流量分析', icon: '🧬', desc: '模型分布与状态构成' },
-  { id: 'logs', label: '请求日志', icon: '📋', desc: '最近请求与慢请求' },
-  { id: 'errors', label: '错误分析', icon: '🚨', desc: '错误明细与时序分布' },
-  { id: 'system', label: '系统状态', icon: '🔗', desc: '上游与缓存健康度' },
-];
 
 // =============================================================================
 // 工具函数
@@ -185,8 +175,6 @@ function buildTheme(dark) {
         boxShadow: '0 10px 30px rgba(2,6,23,.5), inset 0 1px 0 rgba(255,255,255,.045)',
       },
       inset: { background: 'rgba(2,6,23,.5)', border: '1px solid rgba(148,163,184,.09)' },
-      navActive: { background: 'linear-gradient(90deg,rgba(129,140,248,.22),rgba(129,140,248,.03))', color: '#e0e7ff' },
-      navIdle: { color: '#7c8aa5' },
       text: { hi: '#f1f5f9', main: '#dbe3ef', sub: '#94a3b8', muted: '#64748b' },
       grid: 'rgba(148,163,184,.1)',
       axis: 'rgba(148,163,184,.22)',
@@ -210,8 +198,6 @@ function buildTheme(dark) {
       boxShadow: '0 6px 22px rgba(79,70,229,.08), 0 1px 2px rgba(15,23,42,.04)',
     },
     inset: { background: '#f7f9ff', border: '1px solid rgba(99,102,241,.1)' },
-    navActive: { background: 'linear-gradient(90deg,rgba(99,102,241,.14),rgba(99,102,241,.02))', color: '#4338ca' },
-    navIdle: { color: '#64748b' },
     text: { hi: '#0f172a', main: '#1e293b', sub: '#475569', muted: '#94a3b8' },
     grid: 'rgba(99,102,241,.11)',
     axis: 'rgba(99,102,241,.24)',
@@ -237,28 +223,6 @@ function useResponsive() {
     return () => mq.removeEventListener('change', handler);
   }, []);
   return isMobile;
-}
-
-// 滚动位置决定当前分区（左侧导航高亮）
-const SECTION_IDS = SECTIONS.map(s => s.id);
-function useActiveSection(ready) {
-  const [active, setActive] = useState(SECTION_IDS[0]);
-  useEffect(() => {
-    if (!ready) return;
-    const onScroll = () => {
-      const probe = window.innerHeight * 0.34;
-      let current = SECTION_IDS[0];
-      for (const id of SECTION_IDS) {
-        const el = document.getElementById(`sec-${id}`);
-        if (el && el.getBoundingClientRect().top <= probe) current = id;
-      }
-      setActive(prev => (prev === current ? prev : current));
-    };
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [ready]);
-  return active;
 }
 
 // =============================================================================
@@ -464,25 +428,87 @@ function StatusBar({ counts, theme }) {
   );
 }
 
-// 24 小时 × 状态 热力图（从错误/时间线数据推导）
-function HeatStrip({ series, theme }) {
-  if (!series || series.length === 0) return null;
-  const max = Math.max(...series.map(s => s.value), 1);
+// =============================================================================
+// 多维热力图：行（状态码/延迟桶/模型）× 24 小时矩阵
+// 数据来自 /api/heat（由 telemetry.js 写入 heat:{dim}:{date}:h{hour} Hash）
+// =============================================================================
+function HeatMatrix({ dim, data, theme }) {
+  // dim: 'status' | 'latency' | 'models'
+  const matrix = data?.[dim];
+  if (!matrix || !matrix.rows || matrix.rows.length === 0) return null;
+  const rows = matrix.rows;
+  const hours = matrix.hours || Array.from({ length: 24 }, (_, i) => i);
+  // 全局最大值（用于归一化颜色深度）
+  const maxVal = Math.max(...rows.flatMap(r => r.values), 1);
+  const cellSize = 13;
+
+  // 维度配色：状态用红/黄/绿语义色，延迟用蓝/紫梯度，模型用模型色
+  const rowColor = (row) => {
+    if (dim === 'status') {
+      const code = Number(row.id);
+      if (!code) return theme.text.muted;
+      if (code >= 500) return theme.err;
+      if (code >= 400) return theme.warn;
+      return theme.ok;
+    }
+    if (dim === 'latency') {
+      return row.id === 'critical' ? theme.err : row.id === 'slow' ? theme.warn : row.id === 'mid' ? theme.accent : theme.accent2;
+    }
+    return getModelColor(row.id);
+  };
+
+  const rowLabel = (row) => {
+    if (dim === 'status') return row.label || row.id;
+    if (dim === 'latency') return row.label || row.id;
+    return shortModel(row.label || row.id);
+  };
+
   return (
-    <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end' }}>
-      {series.map((s, i) => {
-        const t = s.value / max;
-        const bg = s.value === 0 ? theme.heatOff
-          : s.bad
-            ? `rgba(248,113,113,${0.25 + t * 0.65})`
-            : `rgba(129,140,248,${0.18 + t * 0.72})`;
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {rows.map(row => {
+        const color = rowColor(row);
+        const total = row.values.reduce((s, v) => s + (v || 0), 0);
         return (
-          <div key={i} title={`${String(s.hour).padStart(2, '0')}:00 · ${s.value}`}
-            style={{ flex: 1, height: 30, borderRadius: 3, background: bg, cursor: 'default', transition: 'transform .14s ease' }}
-            onMouseEnter={e => { e.currentTarget.style.transform = 'scaleY(1.16)'; }}
-            onMouseLeave={e => { e.currentTarget.style.transform = 'scaleY(1)'; }} />
+          <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              width: 46, flexShrink: 0, fontSize: 10.5, color: theme.text.sub,
+              textAlign: 'right', fontFamily: 'ui-monospace,monospace', whiteSpace: 'nowrap',
+              overflow: 'hidden', textOverflow: 'ellipsis',
+            }} title={rowLabel(row)}>{rowLabel(row)}</span>
+            <div style={{ display: 'flex', gap: 2.5, flex: 1 }}>
+              {hours.map((h, i) => {
+                const v = row.values[i] || 0;
+                const t = v / maxVal;
+                const alphaHex = Math.round((0.22 + t * 0.72) * 255).toString(16).padStart(2, '0');
+                const bg = v === 0 ? theme.heatOff : `${color}${alphaHex}`;
+                return (
+                  <div key={h} title={`${rowLabel(row)} · ${String(h).padStart(2, '0')}:00 · ${v} 次`}
+                    style={{ width: cellSize, height: cellSize, borderRadius: 3, background: bg, cursor: 'default', flexShrink: 0 }} />
+                );
+              })}
+            </div>
+            <span style={{ width: 34, flexShrink: 0, fontSize: 10, color: theme.text.muted, textAlign: 'right', fontFamily: 'ui-monospace,monospace' }}>
+              {fmtK(total)}
+            </span>
+          </div>
         );
       })}
+    </div>
+  );
+}
+
+// 热力图底部小时刻度
+function HeatHourAxis({ data, theme }) {
+  const matrix = data?.status || data?.latency || data?.models;
+  const hours = matrix?.hours || Array.from({ length: 24 }, (_, i) => i);
+  return (
+    <div style={{ display: 'flex', gap: 2.5, marginTop: 4, paddingLeft: 54 }}>
+      {hours.map((h, i) => (
+        <span key={h} style={{
+          flex: 1, flexShrink: 0, textAlign: 'center', fontSize: 8.5, color: theme.text.muted,
+          fontFamily: 'ui-monospace,monospace',
+        }}>{i % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>
+      ))}
     </div>
   );
 }
@@ -704,6 +730,7 @@ function DashboardContent() {
   const [errors, setErrors] = useState(null);
   const [timeline, setTimeline] = useState(null);
   const [recent, setRecent] = useState(null);
+  const [heat, setHeat] = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
   const [authError, setAuthError] = useState('');
   const [countdown, setCountdown] = useState(getTimeUntilReset());
@@ -786,15 +813,16 @@ function DashboardContent() {
     setRefreshing(true);
     setLastRefreshTime(new Date());
     try {
-      const [q, h, e, t, r] = await Promise.all([
+      const [q, h, e, t, r, hm] = await Promise.all([
         authFetch('/api/quota').then(res => res?.json()),
         authFetch('/api/health').then(res => res?.json()).catch(() => null),
         authFetch('/api/errors').then(res => res?.json()).catch(() => null),
         authFetch('/api/timeline').then(res => res?.json()).catch(() => null),
         authFetch('/api/recent').then(res => res?.json()).catch(() => null),
+        authFetch('/api/heat').then(res => res?.json()).catch(() => null),
       ]);
-      if (!q && !h && !e && !t && !r) return;
-      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setRecent(r);
+      if (!q && !h && !e && !t && !r && !hm) return;
+      setQuota(q); setHealth(h); setErrors(e); setTimeline(t); setRecent(r); setHeat(hm);
     } catch (err) {
       console.error('刷新数据失败:', err);
     } finally {
@@ -846,8 +874,6 @@ function DashboardContent() {
       document.head.appendChild(el);
     }
   }, []);
-
-  const activeSection = useActiveSection(authed && !loading);
 
   const goTo = useCallback((id) => {
     const el = document.getElementById(`sec-${id}`);
@@ -949,20 +975,6 @@ function DashboardContent() {
     }
     return counts;
   }, [recent, quota, errors]);
-
-  // 错误按小时分布（热力条）
-  const errorHeat = useMemo(() => {
-    const buckets = new Array(24).fill(0);
-    (errors?.errors || []).forEach(e => {
-      const h = new Date(e.ts).getHours();
-      if (!isNaN(h)) buckets[h]++;
-    });
-    return buckets.map((value, hour) => ({ hour, value, bad: true }));
-  }, [errors]);
-
-  const requestHeat = useMemo(() => {
-    return (timeline?.timeline || []).map(d => ({ hour: d.hour, value: d.today || 0, bad: false }));
-  }, [timeline]);
 
   const hourlySpark = useMemo(() => (timeline?.timeline || []).map(d => ({ h: d.hour, v: d.today || 0 })), [timeline]);
 
@@ -1181,74 +1193,8 @@ function DashboardContent() {
         </div>
       </header>
 
-      {/* ============ 左侧导航 ============ */}
-      <nav className="db-sidebar" style={{
-        position: 'fixed', top: 58, bottom: 0, left: 0, width: 214, zIndex: 50,
-        ...theme.sidebar, backdropFilter: 'blur(14px)', padding: '18px 12px',
-        display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto',
-      }}>
-        <div className="db-hide-xs" style={{ fontSize: 10, fontWeight: 700, color: theme.text.muted, letterSpacing: '0.1em', padding: '0 10px 9px' }}>
-          MONITORING
-        </div>
-        {SECTIONS.map(s => {
-          const isActive = activeSection === s.id;
-          return (
-            <button key={s.id} className="db-nav" onClick={() => goTo(s.id)} style={{
-              display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 11px',
-              borderRadius: 9, border: 'none', cursor: 'pointer', textAlign: 'left',
-              background: isActive ? theme.navActive.background : 'transparent',
-              color: isActive ? theme.navActive.color : theme.navIdle.color,
-              position: 'relative',
-            }}>
-              <span style={{
-                position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)',
-                width: 2.5, height: isActive ? 18 : 0, borderRadius: 2,
-                background: theme.accent, boxShadow: `0 0 8px ${theme.accent}`, transition: 'height .22s ease',
-              }} />
-              <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{s.icon}</span>
-              <span style={{ minWidth: 0 }}>
-                <span style={{ display: 'block', fontSize: 12.5, fontWeight: isActive ? 700 : 600 }}>{s.label}</span>
-              </span>
-              {s.id === 'errors' && errorCount > 0 && (
-                <span style={{
-                  marginLeft: 'auto', minWidth: 18, height: 17, padding: '0 5px', borderRadius: 9,
-                  background: theme.err, color: '#fff', fontSize: 9.5, fontWeight: 700,
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                }}>{errorCount > 99 ? '99+' : errorCount}</span>
-              )}
-              {s.id === 'quota' && nearLimit.length > 0 && (
-                <span style={{
-                  marginLeft: 'auto', fontSize: 9.5, fontWeight: 700, color: theme.warn,
-                  animation: 'db-pulse 2s ease-in-out infinite',
-                }}>⚠</span>
-              )}
-            </button>
-          );
-        })}
-
-        <div style={{ marginTop: 'auto', paddingTop: 14, borderTop: `1px solid ${theme.grid}` }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: theme.text.muted, letterSpacing: '0.1em', padding: '0 10px 8px' }}>HEALTH</div>
-          {[
-            { k: 'Gemini', s: health?.gemini?.status },
-            { k: 'Redis', s: health?.redis?.status },
-            { k: 'Console', s: health?.status },
-          ].map(h => {
-            const c = h.s === 'ok' ? theme.ok : h.s === 'warn' || h.s === 'degraded' ? theme.warn : h.s ? theme.err : theme.text.muted;
-            return (
-              <div key={h.k} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px', fontSize: 11.5 }}>
-                <span style={{ color: theme.text.sub }}>{h.k}</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: c, fontFamily: 'ui-monospace,monospace', fontWeight: 600 }}>
-                  <span style={{ width: 5.5, height: 5.5, borderRadius: '50%', background: c, boxShadow: `0 0 6px ${c}` }} />
-                  {h.s === 'ok' ? 'OK' : h.s === 'warn' ? 'WARN' : h.s === 'degraded' ? 'DEGR' : h.s === 'error' ? 'DOWN' : '···'}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </nav>
-
       {/* ============ 主内容区 ============ */}
-      <main className="db-main" style={{ marginLeft: 214, paddingTop: 58, position: 'relative', zIndex: 1, padding: '74px 22px 48px' }}>
+      <main className="db-main" style={{ marginLeft: 0, paddingTop: 58, position: 'relative', zIndex: 1, padding: '74px 22px 48px' }}>
         <div style={{ maxWidth: 1420, margin: '0 auto' }}>
 
           {/* 告警条 */}
@@ -1513,13 +1459,28 @@ function DashboardContent() {
               {/* 错误分析 */}
               <Panel id="errors" icon="🚨" title="错误日志与时序分布" meta={`今日错误数: ${errorCount}`} theme={theme} accent={theme.err}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div>
-                    <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>错误时序热力 (24h)</div>
-                    <HeatStrip series={errorHeat} theme={theme} />
+                  {/* 多维热力图：状态 / 延迟 / 模型 × 24 小时 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>状态码 × 小时热力图 (24h)</div>
+                      <HeatMatrix dim="status" data={heat} theme={theme} />
+                      <HeatHourAxis data={heat} theme={theme} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>延迟 × 小时热力图 (24h)</div>
+                      <HeatMatrix dim="latency" data={heat} theme={theme} />
+                      <HeatHourAxis data={heat} theme={theme} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.text.sub, marginBottom: 6 }}>模型 × 小时热力图 (24h)</div>
+                      <HeatMatrix dim="models" data={heat} theme={theme} />
+                      <HeatHourAxis data={heat} theme={theme} />
+                    </div>
                   </div>
-                  <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }} className="db-scroll">
+                  {/* 原始单条错误列表 */}
+                  <div style={{ maxHeight: 240, overflowY: 'auto', paddingRight: 4 }} className="db-scroll">
                     {errors?.errors?.length === 0 ? (
-                      <EmptyHint icon="✨" text="今日零错误，系统运行稳健" sub="任何 API 拦截或 upstream 4xx/5xx 会实时记录在此" theme={theme} height={130} />
+                      <EmptyHint icon="✨" text="今日零错误，系统运行稳健" sub="任何 API 拦截或 upstream 4xx/5xx 会实时记录在此" theme={theme} height={110} />
                     ) : (
                       errors?.errors?.slice(0, 15).map((e, i) => {
                         const lbl = getStatusLabel(e.status);

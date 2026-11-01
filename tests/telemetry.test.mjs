@@ -20,6 +20,8 @@ import {
   telemetryEventsToRedisPromises,
   telemetryEventsToUpstashCommands,
   TELEMETRY_OPS,
+  LATENCY_BUCKETS,
+  latencyToBucket,
 } from '../lib/telemetry.js';
 
 const BASE = {
@@ -202,4 +204,59 @@ test('两端翻译产出的 key 集合完全一致（防止口径分叉）', () 
 test('buildTelemetryEvents: 未知模型统一记为 unknown-model', () => {
   const events = buildTelemetryEvents({ ...BASE, model: '' });
   assert.ok(findEvent(events, TELEMETRY_OPS.INCR, 'quota:2026-10-30:unknown-model'));
+});
+
+test('buildTelemetryEvents: 多维热力图写入小时×维度交叉计数', () => {
+  const events = buildTelemetryEvents({ ...BASE, status: 429, latency: 1234 });
+  // 状态×小时
+  const statusHeat = findEvent(events, TELEMETRY_OPS.HINCRBY, 'heat:status:2026-10-30:h9');
+  assert.ok(statusHeat, '必须写 status×hour 交叉计数');
+  assert.deepEqual(statusHeat.args, ['429', 1]);
+  // 延迟×小时：1234ms → mid 桶（0.5–2s）
+  const latencyHeat = findEvent(events, TELEMETRY_OPS.HINCRBY, 'heat:latency:2026-10-30:h9');
+  assert.ok(latencyHeat, '必须写 latency×hour 交叉计数');
+  assert.deepEqual(latencyHeat.args, ['mid', 1]);
+  // 模型×小时
+  const modelHeat = findEvent(events, TELEMETRY_OPS.HINCRBY, 'heat:model:2026-10-30:h9');
+  assert.ok(modelHeat, '必须写 model×hour 交叉计数');
+  assert.deepEqual(modelHeat.args, ['gemini-3.8-flash', 1]);
+});
+
+test('latencyToBucket: 延迟分桶边界正确', () => {
+  assert.equal(latencyToBucket(0), 'fast');
+  assert.equal(latencyToBucket(499), 'fast');
+  assert.equal(latencyToBucket(500), 'mid');
+  assert.equal(latencyToBucket(1999), 'mid');
+  assert.equal(latencyToBucket(2000), 'slow');
+  assert.equal(latencyToBucket(4999), 'slow');
+  assert.equal(latencyToBucket(5000), 'critical');
+  assert.equal(latencyToBucket(99999), 'critical');
+  assert.equal(latencyToBucket(0), 'fast');
+});
+
+test('LATENCY_BUCKETS: 桶定义稳定且完整（读取端点依赖此顺序）', () => {
+  assert.deepEqual(LATENCY_BUCKETS.map(b => b.id), ['fast', 'mid', 'slow', 'critical']);
+  assert.deepEqual(LATENCY_BUCKETS.map(b => b.label), ['<0.5s', '0.5–2s', '2–5s', '>5s']);
+});
+
+test('telemetryEventsToUpstashCommands: HINCRBY 翻译正确', () => {
+  const events = buildTelemetryEvents({ ...BASE, status: 500, latency: 6000 });
+  const cmds = telemetryEventsToUpstashCommands(events);
+  const hincr = cmds.find(c => c[0] === 'HINCRBY' && c[1] === 'heat:status:2026-10-30:h9');
+  assert.ok(hincr, 'HINCRBY 必须出现在命令数组');
+  assert.deepEqual(hincr, ['HINCRBY', 'heat:status:2026-10-30:h9', '500', '1']);
+});
+
+test('telemetryEventsToRedisPromises: HINCRBY 翻译成 redis.hincrby', () => {
+  const calls = [];
+  const fakeRedis = new Proxy({}, {
+    get(_t, prop) {
+      return (...args) => { calls.push([prop, ...args]); return Promise.resolve(1); };
+    },
+  });
+  const events = buildTelemetryEvents(BASE);
+  telemetryEventsToRedisPromises(fakeRedis, events);
+  const hincr = calls.find(c => c[0] === 'hincrby' && c[1] === 'heat:status:2026-10-30:h9');
+  assert.ok(hincr, 'redis.hincrby 必须被调用');
+  assert.deepEqual([hincr[2], hincr[3]], ['200', 1]);
 });
