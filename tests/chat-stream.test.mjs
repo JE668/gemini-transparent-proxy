@@ -281,3 +281,34 @@ test('transformUpstreamSSE: 流结束时有未闭合的 thought → flush 为 re
   assert.ok(text.includes('未闭合'), '未闭合的思考内容应被 flush 出来');
   assert.ok(!text.includes('<thought>'), '不应残留未解析的标签');
 });
+
+test('transformUpstreamSSE: tool_calls 的 extra_content.google.thought_signature 同步到顶层（防御客户端丢失）', async () => {
+  // ⚠️ 实测：Google 上游把 thought_signature 放在 tool_calls[].extra_content.google.thought_signature，
+  //    该字段非 OpenAI 标准，客户端合并流式 chunk 时可能丢弃。防御：同步到顶层。
+  const sseLines = [
+    'data: ' + JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{
+      id: 'call_9', type: 'function',
+      function: { name: 'bash', arguments: '{"cmd":"echo hi"}' },
+      extra_content: { google: { thought_signature: 'sig_extra_google_9' } },
+    }] } }] }),
+    'data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+    '',
+  ].join('\n');
+
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(sseLines));
+      controller.close();
+    },
+  });
+
+  const out = [];
+  for await (const piece of transformUpstreamSSE(body, { reqId: 'r' })) out.push(piece);
+  const text = out.join('');
+
+  const m = text.match(/"tool_calls":\[\{[^\]]*\}\]/);
+  assert.ok(m, 'tool_calls 必须出现在 SSE 中');
+  const tc = JSON.parse('{' + m[0].replace(/"tool_calls":(\[.*\])/, '"tool_calls":$1') + '}').tool_calls[0];
+  assert.equal(tc.thought_signature, 'sig_extra_google_9', '顶层 thought_signature 必须与 extra_content.google 同步');
+  assert.deepEqual(tc.extra_content, { google: { thought_signature: 'sig_extra_google_9' } }, 'extra_content.google 必须保留');
+});

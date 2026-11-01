@@ -198,3 +198,43 @@ test('sanitizeOpenAIBody: 保留 messages 中 function call 的 thought_signatur
     parameters: { type: 'object', properties: { cmd: { type: 'string' } } },
   }, 'tools 仍应被 cleanTools 清洗');
 });
+
+test('cleanMessages: assistant 消息的 tool_calls 归一化 thought_signature 到 Google 要求位置', () => {
+  // ⚠️ 客户端回传时可能把 sig 放在顶层 tool_calls[].thought_signature（非 Google 要求位置），
+  //    必须归一化到 tool_calls[].extra_content.google.thought_signature（Google 实测要求的位置）。
+  const messages = [
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'call_1', type: 'function',
+      function: { name: 'bash', arguments: '{"cmd":"ls"}' },
+      thought_signature: 'top_sig_123',
+    }] },
+  ];
+  const out = cleanMessages(messages);
+  assert.equal(out[0].tool_calls[0].extra_content.google.thought_signature, 'top_sig_123', '顶层 sig 必须归一化到 extra_content.google');
+  assert.equal(out[0].tool_calls[0].thought_signature, 'top_sig_123', '顶层 sig 应保留一份');
+});
+
+test('cleanMessages: assistant 消息的 tool_calls 已带 extra_content.google.thought_signature 时保持', () => {
+  // Google 正确位置，不应被破坏
+  const messages = [
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'call_2', type: 'function',
+      function: { name: 'browser_open', arguments: '{"url":"https://example.com"}' },
+      extra_content: { google: { thought_signature: 'ec_sig_456' } },
+    }] },
+  ];
+  const out = cleanMessages(messages);
+  assert.deepEqual(out[0].tool_calls[0].extra_content, { google: { thought_signature: 'ec_sig_456' } }, '已有 extra_content 不应被破坏');
+  assert.equal(out[0].tool_calls[0].thought_signature, 'ec_sig_456', '应同步一份到顶层');
+});
+
+test('cleanMessages: assistant 消息的 tool_calls 无 thought_signature 时保持不变', () => {
+  const messages = [
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'call_3', type: 'function',
+      function: { name: 'bash', arguments: '{"cmd":"ls"}' },
+    }] },
+  ];
+  const out = cleanMessages(messages);
+  assert.equal(out[0].tool_calls[0].extra_content, undefined, '无 sig 时不应添加 extra_content');
+});
