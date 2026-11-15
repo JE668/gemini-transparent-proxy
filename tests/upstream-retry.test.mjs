@@ -51,10 +51,10 @@ const FALLBACK = { 'gemini-3.8-flash': 'gemini-3.5-flash-lite' };
 
 // ── 状态码判定 ──
 
-test('isRetryableStatus：只把 429/500/503/524 当作可重试', () => {
-  assert.deepEqual([...RETRYABLE_STATUSES].sort(), [429, 500, 503, 524]);
-  for (const s of [429, 500, 503, 524]) assert.equal(isRetryableStatus(s), true, `${s} 应可重试`);
-  for (const s of [200, 201, 400, 401, 404, 422, 502, 505, 528]) {
+test('isRetryableStatus：只把 429/500/502/503/524 当作可重试', () => {
+  assert.deepEqual([...RETRYABLE_STATUSES].sort(), [429, 500, 502, 503, 524]);
+  for (const s of [429, 500, 502, 503, 524]) assert.equal(isRetryableStatus(s), true, `${s} 应可重试`);
+  for (const s of [200, 201, 400, 401, 404, 422, 505, 528]) {
     assert.equal(isRetryableStatus(s), false, `${s} 不应可重试`);
   }
 });
@@ -322,4 +322,116 @@ test('默认降级表来自 lib/model-fallbacks.js（不传 fallbacks 也能降�
   });
   assert.equal(res.fellBack, true);
   assert.equal(res.modelId, MODEL_FALLBACKS['gemini-3.8-flash']);
+});
+
+// ── 上游「挂死/超时」与网络错误的降级（本改进的核心） ──
+
+/** fetchFn 抛网络错误（连接被拒 / DNS 失败等） */
+function makeNetworkErrorFetch() {
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, init, body: JSON.parse(init.body) });
+    throw new TypeError('fetch failed: connection refused');
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('上游挂死（超时）→ 降级模型成功：返回降级响应', async () => {
+  // 首次请求挂死（触发超时 → 524 → 降级），降级目标正常返回 200
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    calls.push(JSON.parse(init.body).model);
+    if (calls.length === 1) {
+      // 挂死但尊重 signal（真实 fetch 被 abort 时 reject）
+      return new Promise((resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          if (signal.aborted) return reject(new DOMException('The operation was aborted', 'AbortError'));
+          signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted', 'AbortError')));
+        }
+      });
+    }
+    return makeResponse(200, '{"ok":true,"model":"gemini-3.5-flash-lite"}');
+  };
+  const res = await fetchWithModelFallback({
+    fetchFn, url: 'https://x', headers: {}, body: BASE_BODY,
+    modelId: BASE_BODY.model, fallbacks: FALLBACK,
+    sleep: makeSleep(), requestTimeoutMs: 50,
+  });
+  assert.equal(res.fellBack, true);
+  assert.equal(res.modelId, 'gemini-3.5-flash-lite');
+  assert.equal(res.response.status, 200);
+  assert.equal(res.retries, 1);
+  assert.deepEqual(calls, ['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+});
+
+test('上游网络错误：转换为 502 并降级到备用模型', async () => {
+  const fetchFn = makeNetworkErrorFetch();
+  const res = await fetchWithModelFallback({
+    fetchFn, url: 'https://x', headers: {}, body: BASE_BODY,
+    modelId: BASE_BODY.model, fallbacks: FALLBACK,
+    sleep: makeSleep(), requestTimeoutMs: 50,
+  });
+  // 网络错误 → 502 → 降级；降级目标也抛网络错误 → 返回最初失败（502）
+  assert.equal(res.response.status, 502);
+  assert.equal(res.fellBack, false);
+});
+
+test('上游网络错误 → 降级模型成功：返回降级响应', async () => {
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    calls.push(JSON.parse(init.body).model);
+    if (calls.length === 1) throw new TypeError('fetch failed');
+    return makeResponse(200, '{"ok":true}');
+  };
+  const res = await fetchWithModelFallback({
+    fetchFn, url: 'https://x', headers: {}, body: BASE_BODY,
+    modelId: BASE_BODY.model, fallbacks: FALLBACK,
+    sleep: makeSleep(), requestTimeoutMs: 50,
+  });
+  assert.equal(res.fellBack, true);
+  assert.equal(res.modelId, 'gemini-3.5-flash-lite');
+  assert.equal(res.response.status, 200);
+  assert.equal(res.retries, 1);
+  assert.deepEqual(calls, ['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+});
+
+test('requestTimeoutMs<=0 时关闭超时（退化为裸 fetch，旧行为）', async () => {
+  // 正常响应，即使 timeoutMs=0 也应直接返回
+  const fetchFn = makeFetch([makeResponse(200, '{"ok":true}')]);
+  const res = await fetchWithModelFallback({
+    fetchFn, url: 'https://x', headers: {}, body: BASE_BODY,
+    modelId: BASE_BODY.model, fallbacks: FALLBACK,
+    sleep: makeSleep(), requestTimeoutMs: 0,
+  });
+  assert.equal(res.response.status, 200);
+  assert.equal(res.fellBack, false);
+  assert.equal(fetchFn.calls.length, 1);
+});
+
+test('onTimeout 回调在超时时被调用', async () => {
+  const timeouts = [];
+  const fetchFn = async (url, init) => {
+    if (timeouts.length === 0) {
+      // 首次挂死但尊重 signal
+      return new Promise((resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          if (signal.aborted) return reject(new DOMException('The operation was aborted', 'AbortError'));
+          signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted', 'AbortError')));
+        }
+      });
+    }
+    return makeResponse(200, '{"ok":true}');
+  };
+  const res = await fetchWithModelFallback({
+    fetchFn, url: 'https://x', headers: {}, body: BASE_BODY,
+    modelId: BASE_BODY.model, fallbacks: FALLBACK,
+    sleep: makeSleep(), requestTimeoutMs: 30,
+    onTimeout: (ms) => timeouts.push(ms),
+  });
+  assert.equal(res.fellBack, true);
+  assert.ok(timeouts.length >= 1, 'onTimeout 应至少被调用一次');
+  assert.equal(timeouts[0], 30);
 });

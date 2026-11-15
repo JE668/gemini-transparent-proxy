@@ -667,21 +667,44 @@ export default {
         } catch {}
       }
 
-      let response = await fetchWithRetry(targetUrl, {
-        method: request.method,
-        headers,
-        body: fetchBody,
-        cache: 'no-store',
-      }, startTime);
-      // 累计本次请求发生的重试次数（主请求 + 可能的降级请求），用于 Dashboard 「重试」统计
-      let totalRetries = Number(response.retries) || 0;
+      // ⚠️ 上游「挂死 / 网络错误」时 fetchWithRetry 会在重试耗尽后 throw（而非返回状态码）。
+      //    旧代码没有 catch，异常直接冒泡到外层 → 502，**模型降级永远不触发**。
+      //    这里 catch 住，构造一个可识别的失败响应，让下方降级逻辑能统一处理。
+      let response;
+      let totalRetries = 0;
+      try {
+        response = await fetchWithRetry(targetUrl, {
+          method: request.method,
+          headers,
+          body: fetchBody,
+          cache: 'no-store',
+        }, startTime);
+        // 累计本次请求发生的重试次数（主请求 + 可能的降级请求），用于 Dashboard 「重试」统计
+        totalRetries = Number(response.retries) || 0;
+      } catch (upstreamErr) {
+        // 上游挂死/网络错误（fetchWithRetry 重试耗尽后 throw）→ 归一化成 502/524 响应
+        const errName = upstreamErr?.name || '';
+        const isAbort = errName === 'AbortError' || /abort|timeout/i.test(String(upstreamErr?.message || ''));
+        const errStatus = isAbort ? 524 : 502;
+        console.warn(`[${reqId}] 上游${isAbort ? '超时' : '网络错误'}（重试耗尽）: ${upstreamErr?.message || errName}，尝试模型降级`);
+        response = new Response(JSON.stringify({
+          error: {
+            message: `上游${isAbort ? '超时' : '网络错误'}: ${upstreamErr?.message || errName || 'unknown'}`,
+            type: isAbort ? 'upstream_timeout' : 'upstream_network_error',
+            code: errStatus,
+          },
+        }), { status: errStatus, headers: { 'Content-Type': 'application/json' } });
+        totalRetries = 0;
+      }
 
-      // === 模型降级：Google 429 token 配额 / 503 high demand / 524 源站超时 → 自动切换模型 ===
-      if ((response.status === 429 || response.status === 500 || response.status === 503 || response.status === 524) && isOpenAICompat && requestBodyText) {
+      // === 模型降级：Google 429 token 配额 / 503 high demand / 524 源站超时 / 502 网络错误 / 挂死 → 自动切换模型 ===
+      // ⚠️ 502/524 现在也进入降级：上游挂死或网络错误时，同模型重试已无意义（fetchWithRetry
+      //    已经重试耗尽），直接切到更大额度的备用模型，而不是硬失败。
+      if ((response.status === 429 || response.status === 500 || response.status === 502 || response.status === 503 || response.status === 524) && isOpenAICompat && requestBodyText) {
         let shouldFallback = false;
         if (response.status === 429) {
           shouldFallback = true; // token 配额 429 直接降级到更大额度模型（同模型重试已在 fetchWithRetry 完成）
-        } else if (response.status === 524 || response.status === 500 || isHighDemand503(await response.clone().text())) {
+        } else if (response.status === 524 || response.status === 500 || response.status === 502 || isHighDemand503(await response.clone().text().catch(() => ''))) {
           shouldFallback = true;
         }
         if (shouldFallback) {
@@ -690,22 +713,31 @@ export default {
           if (fallbackModel) {
             const newBody = JSON.parse(fetchBody);
             newBody.model = fallbackModel;
-            const fallbackResp = await fetchWithRetry(targetUrl, {
-              method: request.method,
-              headers,
-              body: JSON.stringify(newBody),
-              cache: 'no-store',
-            }, startTime);
-            totalRetries += Number(fallbackResp.retries) || 0;
-            logRequest(reqId, request.method, pathname, fallbackResp.status, Date.now() - startTime,
-              `fallback ${originalModel} → ${fallbackModel}`);
-            if (fallbackResp.status !== 500 && fallbackResp.status !== 503 && fallbackResp.status !== 524 && fallbackResp.status !== 429) {
-              response = fallbackResp;
-              modelId = fallbackModel;
-            } else {
-              // 降级也失败，重建原响应
-              const origHeaders = buildResponseHeaders(response);
-              response = new Response('', { status: response.status, statusText: response.statusText, headers: origHeaders });
+            let fallbackResp;
+            try {
+              fallbackResp = await fetchWithRetry(targetUrl, {
+                method: request.method,
+                headers,
+                body: JSON.stringify(newBody),
+                cache: 'no-store',
+              }, startTime);
+              totalRetries += Number(fallbackResp.retries) || 0;
+            } catch (fallbackErr) {
+              // 降级请求也挂死/网络错误 → 保持原失败响应（原始那次）
+              console.warn(`[${reqId}] 降级请求 ${originalModel} → ${fallbackModel} 也失败: ${fallbackErr?.message || fallbackErr}`);
+              fallbackResp = null;
+            }
+            if (fallbackResp) {
+              logRequest(reqId, request.method, pathname, fallbackResp.status, Date.now() - startTime,
+                `fallback ${originalModel} → ${fallbackModel}`);
+              if (fallbackResp.status !== 500 && fallbackResp.status !== 502 && fallbackResp.status !== 503 && fallbackResp.status !== 524 && fallbackResp.status !== 429) {
+                response = fallbackResp;
+                modelId = fallbackModel;
+              } else {
+                // 降级也失败，重建原响应
+                const origHeaders = buildResponseHeaders(response);
+                response = new Response('', { status: response.status, statusText: response.statusText, headers: origHeaders });
+              }
             }
           }
         }

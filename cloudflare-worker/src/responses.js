@@ -339,6 +339,9 @@ async function handleResponsesNonStream(env, inBody, chatBody, apiKey) {
     onFallback: (from, to, status) => {
       console.log(`[Responses] Model fallback: ${from} → ${to} (${status})`);
     },
+    onTimeout: (ms) => {
+      console.warn(`[Responses] 上游请求超时（${ms}ms），尝试模型降级`);
+    },
   });
 
   if (!upstreamResp.ok) {
